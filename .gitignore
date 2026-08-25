@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+*seed*
+*secret*
+*private*
+*.key
+credentials*
+local-state/
+runtime/
+logs/
+__pycache__/
+.pytest_cache/
+.venv/
+dist/
+build/
