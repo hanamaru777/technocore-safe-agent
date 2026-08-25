@@ -188,10 +188,11 @@ def doctor() -> dict:
         result = subprocess.run([uv, "--version"], text=True, capture_output=True, check=False)
         uv_version = result.stdout.strip() if result.returncode == 0 else None
     activity_valid, activity_count = verify_activity_log()
+    project_copy_mode = 'link-mode = "copy"' in (ROOT / "pyproject.toml").read_text("utf-8")
     checks = {
         "windows": os.name == "nt",
         "uv_found": uv is not None,
-        "uv_copy_mode": os.name != "nt" or os.environ.get("UV_LINK_MODE", "copy") == "copy",
+        "uv_copy_mode": os.name != "nt" or project_copy_mode or os.environ.get("UV_LINK_MODE") == "copy",
         "official_signer_present": (ROOT / "scripts" / "sign.py").is_file(),
         "official_signer_matches_pinned": signer_sha256() == SIGNER_SHA256,
         "activity_log_valid": activity_valid,
