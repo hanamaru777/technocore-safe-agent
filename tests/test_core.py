@@ -95,3 +95,53 @@ def test_sync_official_does_not_confuse_raw_line_endings_with_blob_change(monkey
     responses = iter((Response({"sha": "d" * 40}), Response({"sha": core.SIGNER_BLOB_SHA})))
     monkeypatch.setattr(core.httpx, "get", lambda *args, **kwargs: next(responses))
     assert core.sync_official()["upstream_signer_changed"] is False
+
+
+def test_proof_plan_uses_existing_did_and_sharded_profile(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkExisting")
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
+    plan = core.create_proof_plan("https://example.com/contribution")
+    shard, key, fingerprint = core.did_note_location("did:key:z6MkExisting")
+    assert plan["did"] == "did:key:z6MkExisting"
+    assert plan["mailbox"].startswith("mb-p-")
+    assert plan["shard"] == shard and plan["key"] == key and plan["fingerprint"] == fingerprint
+    assert (tmp_path / "proof-plans" / f"{plan['plan_id']}.json").exists()
+
+
+def test_proof_bundle_needs_confirmation_before_any_write(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    with pytest.raises(RuntimeError, match="確認"):
+        core.create_proof_bundle("a" * 16, False)
+
+
+def test_proof_bundle_records_public_evidence_without_network_in_test(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkExisting")
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
+    plan = core.create_proof_plan("https://example.com/contribution", "lobby")
+    written_notes, actions = [], []
+    def fake_post(room, text, confirm, **kwargs):
+        actions.append(kwargs["action"])
+        return {"permalink": f"https://technocore.chat/humans#r/{room}/9", "seq": 9}
+    def fake_note(namespace, key, value, confirm, **kwargs):
+        written_notes.append((namespace, key, value, kwargs["action"]))
+        return {}
+    monkeypatch.setattr(core, "post_signed", fake_post)
+    monkeypatch.setattr(core, "write_note", fake_note)
+    monkeypatch.setattr(core, "export_public_proof", lambda proof: "local-state/public-proofs/proof.json")
+    proof = core.create_proof_bundle(plan["plan_id"], True)
+    assert actions == ["signed_mailbox", "signed_join_proof", "contribution_signed_proof"]
+    assert written_notes[0][0] == f"did-{plan['shard']}"
+    assert written_notes[1][0] == f"contribution-{plan['shard']}"
+    assert proof["contribution_note_url"] == core.note_url(f"contribution-{plan['shard']}", plan["key"])
+    assert proof["git_commit_sha"] == "a" * 40
+    assert proof["notice"] == core.CONTRIBUTION_NOTICE
+
+
+def test_note_write_failure_is_not_logged(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: (_ for _ in ()).throw(core.httpx.ConnectError("offline")))
+    with pytest.raises(core.httpx.ConnectError):
+        core.write_note("did-aa", "bbbbbbbbbbbbbb", "did: example", True, did="did:key:z6MkA", action="did_profile")
+    assert not (tmp_path / "activities.jsonl").exists()

@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $rootPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$needsSeed = $Command -in @('show-did', 'post-signed')
+$needsSeed = $Command -in @('show-did', 'post-signed', 'contribution-proof')
 $bstr = [IntPtr]::Zero
 $previousPythonPath = $env:PYTHONPATH
 $previousUvLinkMode = $env:UV_LINK_MODE
@@ -37,6 +37,16 @@ try {
         Write-Host "本文: $text"
         if ((Read-Host 'Technocoreへ送信しますか? (yes/no)') -cne 'yes') { throw '送信を中止しました' }
         & $uv run --project $rootPath python -m flop_agent.cli post-signed $Room --text $text --confirm
+    } elseif ($Command -eq 'contribution-proof') {
+        $contributionUrl = Read-Host '公開 Contribution URL（https://...）'
+        $proofRoom = if ($Room) { $Room } else { 'lobby' }
+        $planJson = & $uv run --project $rootPath python -m flop_agent.cli proof-plan --contribution-url $contributionUrl --room $proofRoom
+        if ($LASTEXITCODE -ne 0) { throw 'proof plan の作成に失敗しました' }
+        $plan = $planJson | ConvertFrom-Json
+        Write-Host '以下の Proof を1回だけ作成します。TechnocoreのNoteは公開・world-writableです。'
+        $plan | ConvertTo-Json -Depth 5
+        if ((Read-Host 'この内容で Technocore へ書き込みますか? (yes/no)') -cne 'yes') { throw '書き込みを中止しました' }
+        & $uv run --project $rootPath python -m flop_agent.cli create-proof --plan-id $plan.plan_id --confirm
     } elseif ($Command -in @('read-room', 'read-new')) {
         if (-not $Room) { throw 'room を指定してください' }
         & $uv run --project $rootPath python -m flop_agent.cli $Command $Room

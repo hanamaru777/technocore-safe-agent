@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,7 @@ UPSTREAM_COMMIT = "53079408c1581f46eff6acbf6e2eada289d4332c"
 SIGNER_SHA256 = "d093e89c16671a5ada8d392133e34d4433155545bade7e23f4036a1da0da4f7f"
 SIGNER_BLOB_SHA = "81202baa03bff62204fa9ac34ce1f9fd969ddf67"
 INVISIBLE_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Zl", "Zp"}
+CONTRIBUTION_NOTICE = "Community convention only; not a FLOP official airdrop registry."
 
 
 def clean_text(text: str, limit: int = 4096) -> str:
@@ -34,6 +36,14 @@ def clean_text(text: str, limit: int = 4096) -> str:
 def did_note_location(did: str) -> tuple[str, str, str]:
     fingerprint = hashlib.sha256(did.encode("utf-8")).hexdigest()[:16]
     return fingerprint[:2], fingerprint[2:], fingerprint
+
+
+def note_url(namespace: str, key: str) -> str:
+    return f"{BASE_URL}/kv/{quote(namespace, safe='')}/{quote(key, safe='')}"
+
+
+def human_permalink(room: str, seq: int) -> str:
+    return f"{BASE_URL}/humans#r/{room}/{seq}"
 
 
 def signer_sha256() -> str:
@@ -102,6 +112,18 @@ def cursor_path(room: str) -> Path:
     return STATE / f"cursor-{room}.json"
 
 
+def validate_room(room: str) -> str:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", room):
+        raise ValueError("無効な room 名です")
+    return room
+
+
+def validate_contribution_url(url: str) -> str:
+    if not re.fullmatch(r"https://[^\s]{1,4000}", url):
+        raise ValueError("Contribution URL は https:// で始まる公開 URL にしてください")
+    return url
+
+
 def read_new(room: str) -> dict:
     path = cursor_path(room)
     since = json.loads(path.read_text("utf-8")).get("seq", 0) if path.exists() else 0
@@ -150,11 +172,12 @@ def verify_activity_log() -> tuple[bool, int]:
     return True, count
 
 
-def post_signed(room: str, text: str, confirm: bool) -> dict:
+def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, action: str = "signed_post") -> dict:
     if not confirm:
         raise RuntimeError("送信はユーザー確認なしでは実行しません")
+    validate_room(room)
     cleaned = clean_text(text)
-    did = current_did()
+    did = did or current_did()
     nonce = make_nonce(room, did)
     signed = invoke_signer("say", room, nonce, cleaned)
     if len(signed) != 2 or signed[0] != did:
@@ -168,7 +191,85 @@ def post_signed(room: str, text: str, confirm: bool) -> dict:
     if not matches:
         raise RuntimeError("送信後の投稿を確認できないため、活動記録は追加しませんでした")
     matched = matches[-1]
-    return append_activity({"did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, "permalink": f"{BASE_URL}/humans#r/{room}/{matched['seq']}", "git_commit_sha": git_commit_sha(), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT})
+    return append_activity({"action": action, "did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, "permalink": human_permalink(room, matched["seq"]), "git_commit_sha": git_commit_sha(), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT})
+
+
+def read_note(namespace: str, key: str) -> str:
+    response = httpx.get(note_url(namespace, key), timeout=20)
+    response.raise_for_status()
+    return response.text.strip()
+
+
+def write_note(namespace: str, key: str, value: str, confirm: bool, *, did: str, action: str) -> dict:
+    """Write and re-read a normal (world-writable) note; it is not a signed note."""
+    if not confirm:
+        raise RuntimeError("Note 書込みはユーザー確認なしでは実行しません")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", namespace) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", key):
+        raise ValueError("無効な Note namespace または key です")
+    cleaned = clean_text(value, 8192)
+    response = httpx.post(note_url(namespace, key), json={"value": cleaned}, timeout=20)
+    response.raise_for_status()
+    if read_note(namespace, key) != cleaned:
+        raise RuntimeError("書込み後の Note を確認できないため、活動記録は追加しませんでした")
+    return append_activity({"action": action, "did": did, "note_namespace": namespace, "note_key": key, "note_url": note_url(namespace, key), "git_commit_sha": git_commit_sha(), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT})
+
+
+def proof_plan_path(plan_id: str) -> Path:
+    if not re.fullmatch(r"[a-f0-9]{16}", plan_id):
+        raise ValueError("無効な proof plan ID です")
+    path = STATE / "proof-plans"
+    path.mkdir(parents=True, exist_ok=True)
+    return path / f"{plan_id}.json"
+
+
+def create_proof_plan(contribution_url: str, room: str = "lobby") -> dict:
+    """Create a local, no-network-write plan for one useful-contribution proof bundle."""
+    validate_room(room)
+    contribution_url = validate_contribution_url(contribution_url)
+    did = current_did()
+    shard, key, fingerprint = did_note_location(did)
+    plan = {"plan_id": secrets.token_hex(8), "did": did, "fingerprint": fingerprint, "shard": shard, "key": key, "room": room, "mailbox": f"mb-p-{secrets.token_hex(16)}", "contribution_url": contribution_url, "git_commit_sha": git_commit_sha(), "created_at": datetime.now(UTC).isoformat(), "notice": CONTRIBUTION_NOTICE}
+    proof_plan_path(plan["plan_id"]).write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    return plan
+
+
+def load_proof_plan(plan_id: str) -> dict:
+    path = proof_plan_path(plan_id)
+    if not path.exists():
+        raise RuntimeError("proof plan が見つかりません")
+    return json.loads(path.read_text("utf-8"))
+
+
+def export_public_proof(proof: dict) -> str:
+    exports = STATE / "public-proofs"
+    exports.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    path = exports / f"proof-{proof['fingerprint']}-{timestamp}.json"
+    path.write_text(json.dumps(proof, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return str(path)
+
+
+def create_proof_bundle(plan_id: str, confirm: bool) -> dict:
+    """Perform one deliberately confirmed proof bundle; no retries or background posting."""
+    if not confirm:
+        raise RuntimeError("公開 Proof 作成はユーザー確認なしでは実行しません")
+    plan = load_proof_plan(plan_id)
+    did = current_did()
+    if did != plan["did"] or git_commit_sha() != plan["git_commit_sha"]:
+        raise RuntimeError("DID または Git commit が plan と異なります。新しい proof plan を作成してください")
+    mailbox_record = post_signed(plan["mailbox"], f"mailbox-init v1 did={did}", True, did=did, action="signed_mailbox")
+    join_record = post_signed(plan["room"], f"signed-join-proof v1 did={did} fingerprint={plan['fingerprint']} git_commit={plan['git_commit_sha']}", True, did=did, action="signed_join_proof")
+    profile_url = note_url(f"did-{plan['shard']}", plan["key"])
+    profile_value = f"did: {did} mailbox: {plan['mailbox']} join-proof: {join_record['permalink']}"
+    write_note(f"did-{plan['shard']}", plan["key"], profile_value, True, did=did, action="did_profile")
+    contribution_namespace = f"contribution-{plan['shard']}"
+    contribution_url = note_url(contribution_namespace, plan["key"])
+    contribution_value = json.dumps({"schema": "technocore-contribution-v1", "did": did, "fingerprint": plan["fingerprint"], "contribution_url": plan["contribution_url"], "did_profile_url": profile_url, "signed_join_proof": join_record["permalink"], "git_commit_sha": plan["git_commit_sha"], "notice": CONTRIBUTION_NOTICE}, ensure_ascii=False, separators=(",", ":"))
+    write_note(contribution_namespace, plan["key"], contribution_value, True, did=did, action="contribution_note")
+    proof_record = post_signed(plan["room"], f"contribution-signed-proof v1 did={did} contribution={plan['contribution_url']} note={contribution_url} git_commit={plan['git_commit_sha']}", True, did=did, action="contribution_signed_proof")
+    proof = {"did": did, "fingerprint": plan["fingerprint"], "did_profile_url": profile_url, "contribution_url": plan["contribution_url"], "contribution_note_url": contribution_url, "signed_join_proof_permalink": join_record["permalink"], "signed_proof_permalink": proof_record["permalink"], "room": plan["room"], "seq": proof_record["seq"], "mailbox": plan["mailbox"], "git_commit_sha": plan["git_commit_sha"], "executed_at": datetime.now(UTC).isoformat(), "notice": CONTRIBUTION_NOTICE}
+    proof["export_path"] = export_public_proof(proof)
+    return proof
 
 
 def sync_official() -> dict:

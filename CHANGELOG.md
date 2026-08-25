@@ -9,3 +9,7 @@
 
 - Added Windows uv fallback and persistent copy mode.
 - Expanded doctor, activity Git evidence, human permalinks, and upstream signer blob change detection.
+
+## 0.2.0 — 2026-08-26
+
+- Added safe, confirmed useful-contribution proof planning and export foundation.
