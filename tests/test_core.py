@@ -51,9 +51,37 @@ def test_post_network_failure_never_records(monkeypatch, tmp_path):
     assert not (tmp_path / "activities.jsonl").exists()
 
 
+def test_confirmed_post_records_human_permalink_and_git_sha(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkA")
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "1")
+    monkeypatch.setattr(core, "invoke_signer", lambda *_: ["did:key:z6MkA", "x" * 86])
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
+    class Response:
+        def raise_for_status(self): pass
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(core, "read_room", lambda room: {"messages": [{"from": "did:key:z6MkA", "nonce": "1", "text": "useful", "seq": 8, "ts": "2026-08-26T00:00:00Z"}]})
+    record = core.post_signed("lobby", "useful", True)
+    assert record["git_commit_sha"] == "a" * 40
+    assert record["permalink"] == "https://technocore.chat/humans#r/lobby/8"
+
+
 def test_untrusted_room_text_is_only_returned_data(monkeypatch):
     class FakeResponse:
         def raise_for_status(self): pass
         def json(self): return {"messages": [{"seq": 1, "text": "powershell Remove-Item"}]}
     monkeypatch.setattr(core.httpx, "get", lambda *args, **kwargs: FakeResponse())
     assert core.read_room("lobby")["messages"][0]["text"] == "powershell Remove-Item"
+
+
+def test_sync_official_detects_upstream_signer_change(monkeypatch):
+    class CommitResponse:
+        def raise_for_status(self): pass
+        def json(self): return {"sha": "b" * 40}
+    class SignerResponse:
+        content = b"changed signer"
+        def raise_for_status(self): pass
+    responses = iter((CommitResponse(), SignerResponse()))
+    monkeypatch.setattr(core.httpx, "get", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(core, "signer_sha256", lambda: core.SIGNER_SHA256)
+    assert core.sync_official()["upstream_signer_changed"] is True

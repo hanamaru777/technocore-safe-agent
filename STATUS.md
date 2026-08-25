@@ -12,3 +12,5 @@ Use `./flop.ps1 doctor`, inspect official changes with `./flop.ps1 sync-official
 ## Blockers
 
 No FLOP Testnet specification has been implemented. It must remain a stub until official documentation is published.
+
+Technocore upstream and its official signer changed on 2026-08-26. `sync-official` detects this; the bundled signer is intentionally not auto-updated.

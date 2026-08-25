@@ -16,6 +16,8 @@ Windows ノートPC上で、FLOP Network に関する将来の正当な参加機
 
 Python 3.12 以上と `uv` が必要です。初回は `uv sync --group dev` を実行します。
 
+Windows ではプロジェクト設定により `uv` の package install を copy mode で行います。`uv` が PATH にない場合も、`flop.ps1` は `$HOME\\.local\\bin\\uv.exe` を自動利用します。
+
 ## 使い方
 
 ```powershell
@@ -30,5 +32,7 @@ Python 3.12 以上と `uv` が必要です。初回は `uv sync --group dev` を
 ```
 
 `show-did` と `post-signed` は seed を SecureString で尋ねます。`post-signed` は明示確認があるまでネットワーク送信しません。活動成功時だけ `local-state/activities.jsonl` に hash chain 付きで追記します（Git 対象外）。
+
+活動記録の permalink は公式の人間向け UI 形式 `https://technocore.chat/humans#r/<room>/<seq>` です。
 
 公式仕様・確認事項と戦略は [AIRDROP_RULES.md](AIRDROP_RULES.md) に分離しています。活動証拠はローカルの活動ログと Git のコミットに保持し、Technocore を永続保存先にしません。

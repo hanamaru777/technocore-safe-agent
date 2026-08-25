@@ -39,17 +39,22 @@ def signer_sha256() -> str:
     return hashlib.sha256((ROOT / "scripts" / "sign.py").read_bytes()).hexdigest()
 
 
+def find_uv() -> str | None:
+    """Find uv even when its Windows installer directory is not on PATH."""
+    return shutil.which("uv") or next(
+        (str(path) for path in (Path.home() / ".local" / "bin" / "uv.exe",) if path.is_file()), None
+    )
+
+
 def invoke_signer(*args: str) -> list[str]:
     """Call the unmodified official signer. Seed arrives only through SIGN_SEED."""
-    uv = shutil.which("uv")
-    if uv is None:
-        candidate = Path(os.environ.get("USERPROFILE", "")) / ".local" / "bin" / "uv.exe"
-        uv = str(candidate) if candidate.is_file() else None
+    uv = find_uv()
     if uv is None:
         raise RuntimeError("uv が PATH または ~/.local/bin に見つかりません")
-    result = subprocess.run(
-        [uv, "run", "scripts/sign.py", *args], cwd=ROOT, text=True, capture_output=True, check=False
-    )
+    environment = os.environ.copy()
+    if os.name == "nt":
+        environment["UV_LINK_MODE"] = "copy"
+    result = subprocess.run([uv, "run", "scripts/sign.py", *args], cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
     if result.returncode:
         raise RuntimeError("公式 signer の実行に失敗しました: " + result.stderr.strip())
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -120,6 +125,13 @@ def append_activity(record: dict) -> dict:
     return record
 
 
+def git_commit_sha() -> str:
+    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True, check=False)
+    if result.returncode:
+        raise RuntimeError("活動証拠に記録する Git commit SHA を取得できませんでした")
+    return result.stdout.strip()
+
+
 def verify_activity_log() -> tuple[bool, int]:
     path = STATE / "activities.jsonl"
     previous, count = "", 0
@@ -155,14 +167,37 @@ def post_signed(room: str, text: str, confirm: bool) -> dict:
     if not matches:
         raise RuntimeError("送信後の投稿を確認できないため、活動記録は追加しませんでした")
     matched = matches[-1]
-    return append_activity({"did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, "permalink": f"{BASE_URL}/r/{room}?since={int(matched['seq']) - 1}", "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT})
+    return append_activity({"did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, "permalink": f"{BASE_URL}/humans#r/{room}/{matched['seq']}", "git_commit_sha": git_commit_sha(), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT})
 
 
 def sync_official() -> dict:
     url = "https://api.github.com/repos/flop-labs/technocore-chat/commits/HEAD"
     response = httpx.get(url, timeout=20, headers={"Accept": "application/vnd.github+json"})
     response.raise_for_status()
-    return {"pinned_commit": UPSTREAM_COMMIT, "latest_commit": response.json()["sha"], "signer_sha256": signer_sha256(), "signer_matches": signer_sha256() == SIGNER_SHA256}
+    latest_commit = response.json()["sha"]
+    signer_response = httpx.get(f"https://raw.githubusercontent.com/flop-labs/technocore-chat/{latest_commit}/scripts/sign.py", timeout=20)
+    signer_response.raise_for_status()
+    latest_signer_hash = hashlib.sha256(signer_response.content).hexdigest()
+    return {"pinned_commit": UPSTREAM_COMMIT, "latest_commit": latest_commit, "upstream_commit_changed": latest_commit != UPSTREAM_COMMIT, "pinned_signer_sha256": SIGNER_SHA256, "local_signer_sha256": signer_sha256(), "latest_upstream_signer_sha256": latest_signer_hash, "local_signer_matches_pinned": signer_sha256() == SIGNER_SHA256, "upstream_signer_changed": latest_signer_hash != SIGNER_SHA256}
+
+
+def doctor() -> dict:
+    uv = find_uv()
+    uv_version = None
+    if uv:
+        result = subprocess.run([uv, "--version"], text=True, capture_output=True, check=False)
+        uv_version = result.stdout.strip() if result.returncode == 0 else None
+    activity_valid, activity_count = verify_activity_log()
+    checks = {
+        "windows": os.name == "nt",
+        "uv_found": uv is not None,
+        "uv_copy_mode": os.name != "nt" or os.environ.get("UV_LINK_MODE", "copy") == "copy",
+        "official_signer_present": (ROOT / "scripts" / "sign.py").is_file(),
+        "official_signer_matches_pinned": signer_sha256() == SIGNER_SHA256,
+        "activity_log_valid": activity_valid,
+        "git_commit_available": bool(git_commit_sha()),
+    }
+    return {"ok": all(checks.values()), "checks": checks, "uv_path": uv, "uv_version": uv_version, "uv_link_mode": "copy" if os.name == "nt" else "platform-default", "python": sys.version.split()[0], "activity_count": activity_count}
 
 
 def secret_scan() -> list[str]:
@@ -175,7 +210,7 @@ def secret_scan() -> list[str]:
             continue  # dependency integrity hashes are not credential material
         if path.is_file() and path.suffix not in {".pyc", ".png", ".jpg"}:
             for number, line in enumerate(path.read_text("utf-8", errors="replace").splitlines(), 1):
-                is_documented_hash = (name == "SOURCES.md" and "SHA-256:" in line) or "SIGNER_SHA256 =" in line
+                is_documented_hash = (name == "SOURCES.md" and "SHA-256" in line) or "SIGNER_SHA256 =" in line
                 is_required_seed_handling = "SIGN_SEED" in line and (
                     "os.environ" in line or "env:SIGN_SEED" in line or "Remove-Item Env:SIGN_SEED" in line
                 )

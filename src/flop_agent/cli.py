@@ -25,6 +25,7 @@ def main() -> None:
         elif args.command == "post-signed": output = core.post_signed(args.room, args.text, args.confirm)
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
+        elif args.command == "doctor": output = core.doctor()
         else:
             hits = core.secret_scan(); output = {"ok": not hits, "secret_scan_hits": hits, "signer_hash": core.signer_sha256(), "pinned_signer_hash": core.SIGNER_SHA256}
         print(json.dumps(output, ensure_ascii=False, indent=2))

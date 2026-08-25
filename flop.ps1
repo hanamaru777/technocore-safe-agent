@@ -9,7 +9,19 @@ $rootPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $needsSeed = $Command -in @('show-did', 'post-signed')
 $bstr = [IntPtr]::Zero
 $previousPythonPath = $env:PYTHONPATH
+$previousUvLinkMode = $env:UV_LINK_MODE
 $env:PYTHONPATH = Join-Path $rootPath 'src'
+$env:UV_LINK_MODE = 'copy'
+
+function Resolve-Uv {
+    $fromPath = Get-Command uv -ErrorAction SilentlyContinue
+    if ($fromPath) { return $fromPath.Source }
+    $fallback = Join-Path $HOME '.local\bin\uv.exe'
+    if (Test-Path -LiteralPath $fallback -PathType Leaf) { return $fallback }
+    throw 'uv が PATH または $HOME\.local\bin\uv.exe に見つかりません'
+}
+
+$uv = Resolve-Uv
 
 try {
     if ($needsSeed) {
@@ -21,18 +33,19 @@ try {
         if (-not $Room) { throw 'room を指定してください: .\flop.ps1 post-signed lobby' }
         $text = Read-Host '投稿本文'
         Write-Host "Room: $Room"
-        & uv run --project $rootPath python -m flop_agent.cli show-did
+        & $uv run --project $rootPath python -m flop_agent.cli show-did
         Write-Host "本文: $text"
         if ((Read-Host 'Technocoreへ送信しますか? (yes/no)') -cne 'yes') { throw '送信を中止しました' }
-        & uv run --project $rootPath python -m flop_agent.cli post-signed $Room --text $text --confirm
+        & $uv run --project $rootPath python -m flop_agent.cli post-signed $Room --text $text --confirm
     } elseif ($Command -in @('read-room', 'read-new')) {
         if (-not $Room) { throw 'room を指定してください' }
-        & uv run --project $rootPath python -m flop_agent.cli $Command $Room
+        & $uv run --project $rootPath python -m flop_agent.cli $Command $Room
     } else {
-        & uv run --project $rootPath python -m flop_agent.cli $Command
+        & $uv run --project $rootPath python -m flop_agent.cli $Command
     }
 } finally {
     Remove-Item Env:SIGN_SEED -ErrorAction SilentlyContinue
     if ($null -eq $previousPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $previousPythonPath }
+    if ($null -eq $previousUvLinkMode) { Remove-Item Env:UV_LINK_MODE -ErrorAction SilentlyContinue } else { $env:UV_LINK_MODE = $previousUvLinkMode }
     if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
