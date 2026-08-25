@@ -8,4 +8,4 @@
 ## 0.1.1 — 2026-08-26
 
 - Added Windows uv fallback and persistent copy mode.
-- Expanded doctor, activity Git evidence, human permalinks, and upstream signer hash change detection.
+- Expanded doctor, activity Git evidence, human permalinks, and upstream signer blob change detection.

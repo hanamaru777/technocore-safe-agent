@@ -79,9 +79,19 @@ def test_sync_official_detects_upstream_signer_change(monkeypatch):
         def raise_for_status(self): pass
         def json(self): return {"sha": "b" * 40}
     class SignerResponse:
-        content = b"changed signer"
+        def json(self): return {"sha": "c" * 40}
         def raise_for_status(self): pass
     responses = iter((CommitResponse(), SignerResponse()))
     monkeypatch.setattr(core.httpx, "get", lambda *args, **kwargs: next(responses))
     monkeypatch.setattr(core, "signer_sha256", lambda: core.SIGNER_SHA256)
     assert core.sync_official()["upstream_signer_changed"] is True
+
+
+def test_sync_official_does_not_confuse_raw_line_endings_with_blob_change(monkeypatch):
+    class Response:
+        def __init__(self, payload): self.payload = payload
+        def raise_for_status(self): pass
+        def json(self): return self.payload
+    responses = iter((Response({"sha": "d" * 40}), Response({"sha": core.SIGNER_BLOB_SHA})))
+    monkeypatch.setattr(core.httpx, "get", lambda *args, **kwargs: next(responses))
+    assert core.sync_official()["upstream_signer_changed"] is False

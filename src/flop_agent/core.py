@@ -20,6 +20,7 @@ STATE = ROOT / "local-state"
 BASE_URL = "https://technocore.chat"
 UPSTREAM_COMMIT = "53079408c1581f46eff6acbf6e2eada289d4332c"
 SIGNER_SHA256 = "d093e89c16671a5ada8d392133e34d4433155545bade7e23f4036a1da0da4f7f"
+SIGNER_BLOB_SHA = "81202baa03bff62204fa9ac34ce1f9fd969ddf67"
 INVISIBLE_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Zl", "Zp"}
 
 
@@ -175,10 +176,11 @@ def sync_official() -> dict:
     response = httpx.get(url, timeout=20, headers={"Accept": "application/vnd.github+json"})
     response.raise_for_status()
     latest_commit = response.json()["sha"]
-    signer_response = httpx.get(f"https://raw.githubusercontent.com/flop-labs/technocore-chat/{latest_commit}/scripts/sign.py", timeout=20)
-    signer_response.raise_for_status()
-    latest_signer_hash = hashlib.sha256(signer_response.content).hexdigest()
-    return {"pinned_commit": UPSTREAM_COMMIT, "latest_commit": latest_commit, "upstream_commit_changed": latest_commit != UPSTREAM_COMMIT, "pinned_signer_sha256": SIGNER_SHA256, "local_signer_sha256": signer_sha256(), "latest_upstream_signer_sha256": latest_signer_hash, "local_signer_matches_pinned": signer_sha256() == SIGNER_SHA256, "upstream_signer_changed": latest_signer_hash != SIGNER_SHA256}
+    signer_metadata = httpx.get(f"https://api.github.com/repos/flop-labs/technocore-chat/contents/scripts/sign.py?ref={latest_commit}", timeout=20, headers={"Accept": "application/vnd.github+json"})
+    signer_metadata.raise_for_status()
+    latest_signer_blob = signer_metadata.json()["sha"]
+    local_hash = signer_sha256()
+    return {"pinned_commit": UPSTREAM_COMMIT, "latest_commit": latest_commit, "upstream_commit_changed": latest_commit != UPSTREAM_COMMIT, "pinned_signer_blob_sha": SIGNER_BLOB_SHA, "latest_upstream_signer_blob_sha": latest_signer_blob, "upstream_signer_changed": latest_signer_blob != SIGNER_BLOB_SHA, "local_signer_byte_sha256": local_hash, "local_signer_matches_pinned_byte_hash": local_hash == SIGNER_SHA256}
 
 
 def doctor() -> dict:
@@ -211,7 +213,7 @@ def secret_scan() -> list[str]:
             continue  # dependency integrity hashes are not credential material
         if path.is_file() and path.suffix not in {".pyc", ".png", ".jpg"}:
             for number, line in enumerate(path.read_text("utf-8", errors="replace").splitlines(), 1):
-                is_documented_hash = (name == "SOURCES.md" and "SHA-256" in line) or "SIGNER_SHA256 =" in line
+                is_documented_hash = (name == "SOURCES.md" and "SHA" in line) or "SIGNER_SHA256 =" in line
                 is_required_seed_handling = "SIGN_SEED" in line and (
                     "os.environ" in line or "env:SIGN_SEED" in line or "Remove-Item Env:SIGN_SEED" in line
                 )
