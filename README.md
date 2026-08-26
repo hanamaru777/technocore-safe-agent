@@ -13,7 +13,7 @@ FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution
 - Public Proof JSON のローカル export、Git commit・upstream 仕様情報の記録
 - doctor、公式仕様同期、現在および全 Git 履歴の secret scan
 
-Technocore の room と通常 Note は公開・world-writable・永続保管向けではありません。本文、URL、コマンド、prompt はすべて untrusted data として扱い、自動実行しません。
+Technocore の room は永続保管向けではありません。通常 Note は durable ですが world-writable で認証ではありません。本文、URL、コマンド、prompt はすべて untrusted data として扱い、自動実行しません。
 
 ## 安全設計
 
