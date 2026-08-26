@@ -277,6 +277,59 @@ def test_partial_recovery_requires_anchor_to_be_current_head_ancestor(monkeypatc
         core.resume_proof_bundle(plan["plan_id"], True)
 
 
+def test_resume_accepts_complete_did_profile_without_rereading_or_rewriting(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    plan = partial_recovery_plan(tmp_path)
+    plan["checkpoints"]["did_profile"] = {"state": "complete", "record": {"action": "did_profile"}}
+    core.save_proof_plan(plan)
+    monkeypatch.setattr(core, "current_did", lambda: plan["did"])
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "b" * 40)
+    monkeypatch.setattr(core, "git_is_ancestor", lambda *_: True)
+    monkeypatch.setattr(core, "proof_preflight", lambda _: {"latest_commit": "c" * 40, "latest_upstream_signer_blob_sha": "d" * 40})
+    monkeypatch.setattr(core, "read_note_optional", lambda *_: pytest.fail("complete DID Profile must not be read or rewritten"))
+    monkeypatch.setattr(core, "finish_proof_bundle", lambda *args: {"continued": True})
+    assert core.resume_proof_bundle(plan["plan_id"], True) == {"continued": True}
+    assert core.load_proof_plan(plan["plan_id"])["checkpoints"]["did_profile"] == plan["checkpoints"]["did_profile"]
+
+
+def test_resume_never_replays_any_completed_proof_step(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    plan = partial_recovery_plan(tmp_path)
+    for step in ("did_profile", "contribution_note", "contribution_pointer"):
+        plan["checkpoints"][step] = {"state": "complete", "record": {"action": step}}
+    plan["checkpoints"]["contribution_proof"] = {"state": "complete", "record": {"permalink": "https://technocore.chat/humans#r/lobby/3", "seq": 3}}
+    core.save_proof_plan(plan)
+    monkeypatch.setattr(core, "current_did", lambda: plan["did"])
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "b" * 40)
+    monkeypatch.setattr(core, "git_is_ancestor", lambda *_: True)
+    monkeypatch.setattr(core, "proof_preflight", lambda _: {"latest_commit": "c" * 40, "latest_upstream_signer_blob_sha": "d" * 40})
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: pytest.fail("complete checkpoints must never post"))
+    monkeypatch.setattr(core, "read_note_optional", lambda *args: pytest.fail("complete checkpoints must not re-read Notes"))
+    monkeypatch.setattr(core, "export_public_proof", lambda proof: "proof.json")
+    result = core.resume_proof_bundle(plan["plan_id"], True)
+    assert result["signed_proof_permalink"].endswith("/3")
+
+
+@pytest.mark.parametrize("checkpoint", [None, {"state": "unknown"}, {"state": "complete"}, {"state": "in_flight"}])
+def test_resume_rejects_missing_unknown_or_malformed_did_profile_checkpoint(monkeypatch, tmp_path, checkpoint):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    plan = partial_recovery_plan(tmp_path)
+    if checkpoint is None:
+        del plan["checkpoints"]["did_profile"]
+    else:
+        plan["checkpoints"]["did_profile"] = checkpoint
+    core.save_proof_plan(plan)
+    monkeypatch.setattr(core, "current_did", lambda: plan["did"])
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "b" * 40)
+    monkeypatch.setattr(core, "git_is_ancestor", lambda *_: True)
+    monkeypatch.setattr(core, "proof_preflight", lambda *_: pytest.fail("malformed checkpoint must stop before preflight"))
+    with pytest.raises(RuntimeError, match="missing|malformed|unknown"):
+        core.resume_proof_bundle(plan["plan_id"], True)
+
+
 def test_public_contribution_url_preflight_rejects_nonpublic_response(monkeypatch):
     class Response:
         status_code = 401

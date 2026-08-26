@@ -480,11 +480,20 @@ def resume_proof_bundle(plan_id: str, confirm: bool) -> dict:
     mailbox_record = completed_checkpoint(plan, "mailbox")
     join_record = completed_checkpoint(plan, "join")
     did_checkpoint = plan.get("checkpoints", {}).get("did_profile")
-    if not did_checkpoint or did_checkpoint.get("state") != "in_flight" or not isinstance(did_checkpoint.get("value"), str):
-        raise RuntimeError("did_profile is not an in-flight checkpoint; refusing unsafe recovery")
+    if not did_checkpoint:
+        raise RuntimeError("did_profile checkpoint is missing; refusing unsafe recovery")
+    did_profile_in_flight = did_checkpoint.get("state") == "in_flight"
+    if did_profile_in_flight and not isinstance(did_checkpoint.get("value"), str):
+        raise RuntimeError("did_profile in-flight checkpoint is malformed; refusing unsafe recovery")
+    if did_checkpoint.get("state") == "complete":
+        if not isinstance(did_checkpoint.get("record"), dict):
+            raise RuntimeError("did_profile complete checkpoint is malformed; refusing unsafe recovery")
+    elif not did_profile_in_flight:
+        raise RuntimeError("did_profile checkpoint state is unknown; refusing unsafe recovery")
     observed = proof_preflight(plan)
     commit_context = {"anchor_git_commit_sha": plan["git_commit_sha"], "runtime_git_commit_sha": runtime_commit}
-    run_if_absent_note_step(plan, "did_profile", f"did-{plan['shard']}", plan["key"], did_checkpoint["value"], "did_profile", observed, commit_context)
+    if did_profile_in_flight:
+        run_if_absent_note_step(plan, "did_profile", f"did-{plan['shard']}", plan["key"], did_checkpoint["value"], "did_profile", observed, commit_context)
     return finish_proof_bundle(plan, did, observed, mailbox_record, join_record, commit_context)
 
 
