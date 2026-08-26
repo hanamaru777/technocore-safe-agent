@@ -121,14 +121,16 @@ def test_proof_bundle_records_public_evidence_without_network_in_test(monkeypatc
     monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
     plan = core.create_proof_plan("https://example.com/contribution", "lobby")
     written_notes, actions = [], []
-    def fake_post(room, text, confirm, **kwargs):
-        actions.append(kwargs["action"])
+    def fake_post(plan, step, room, text, action, observed):
+        actions.append(action)
         return {"permalink": f"https://technocore.chat/humans#r/{room}/9", "seq": 9}
-    def fake_note(namespace, key, value, confirm, **kwargs):
-        written_notes.append((namespace, key, value, kwargs["action"]))
+    def fake_note(plan, step, namespace, key, value, action, observed):
+        written_notes.append((namespace, key, value, action))
         return {}
-    monkeypatch.setattr(core, "post_signed", fake_post)
-    monkeypatch.setattr(core, "write_note", fake_note)
+    observed = {"latest_commit": "b" * 40, "latest_upstream_signer_blob_sha": core.SIGNER_BLOB_SHA}
+    monkeypatch.setattr(core, "proof_preflight", lambda plan: observed)
+    monkeypatch.setattr(core, "run_signed_step", fake_post)
+    monkeypatch.setattr(core, "run_if_absent_note_step", fake_note)
     monkeypatch.setattr(core, "export_public_proof", lambda proof: "local-state/public-proofs/proof.json")
     proof = core.create_proof_bundle(plan["plan_id"], True)
     assert actions == ["signed_mailbox", "signed_join_proof", "contribution_signed_proof"]
@@ -137,6 +139,7 @@ def test_proof_bundle_records_public_evidence_without_network_in_test(monkeypatc
     assert proof["contribution_note_url"] == core.note_url(f"contribution-{plan['shard']}", plan["key"])
     assert proof["git_commit_sha"] == "a" * 40
     assert proof["notice"] == core.CONTRIBUTION_NOTICE
+    assert proof["observed_signer_blob_sha"] == core.SIGNER_BLOB_SHA
 
 
 def test_note_write_failure_is_not_logged(monkeypatch, tmp_path):
@@ -145,3 +148,45 @@ def test_note_write_failure_is_not_logged(monkeypatch, tmp_path):
     with pytest.raises(core.httpx.ConnectError):
         core.write_note("did-aa", "bbbbbbbbbbbbbb", "did: example", True, did="did:key:z6MkA", action="did_profile")
     assert not (tmp_path / "activities.jsonl").exists()
+
+
+def test_signed_step_resumes_observed_in_flight_message_without_reposting(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
+    plan = {"plan_id": "a" * 16, "did": "did:key:z6MkExisting", "checkpoints": {}}
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "42")
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: (_ for _ in ()).throw(core.httpx.ConnectError("offline")))
+    monkeypatch.setattr(core, "matching_signed_message", lambda *args: None)
+    with pytest.raises(core.httpx.ConnectError):
+        core.run_signed_step(plan, "join", "lobby", "hello", "signed_join_proof", {"latest_commit": "b" * 40, "latest_upstream_signer_blob_sha": "c" * 40})
+    assert plan["checkpoints"]["join"]["state"] == "in_flight"
+    monkeypatch.setattr(core, "matching_signed_message", lambda *args: {"seq": 4, "ts": "2026-08-26T00:00:00Z"})
+    record = core.run_signed_step(plan, "join", "lobby", "hello", "signed_join_proof", {"latest_commit": "b" * 40, "latest_upstream_signer_blob_sha": "c" * 40})
+    assert record["resumed_from_observed_message"] is True
+
+
+def test_if_absent_note_accepts_identical_existing_value(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
+    plan = {"plan_id": "b" * 16, "did": "did:key:z6MkExisting", "checkpoints": {}}
+    monkeypatch.setattr(core, "read_note_optional", lambda *args: "same value")
+    record = core.run_if_absent_note_step(plan, "did_profile", "did-aa", "bbbbbbbbbbbbbb", "same value", "did_profile", {"latest_commit": "b" * 40, "latest_upstream_signer_blob_sha": "c" * 40})
+    assert record["observed_existing_note"] is True
+    assert plan["checkpoints"]["did_profile"]["state"] == "complete"
+
+
+def test_if_absent_note_conflict_stops_without_overwrite(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    plan = {"plan_id": "c" * 16, "did": "did:key:z6MkExisting", "checkpoints": {}}
+    monkeypatch.setattr(core, "read_note_optional", lambda *args: "different")
+    with pytest.raises(RuntimeError, match="上書きせず停止"):
+        core.run_if_absent_note_step(plan, "did_profile", "did-aa", "bbbbbbbbbbbbbb", "expected", "did_profile", {"latest_commit": "b" * 40, "latest_upstream_signer_blob_sha": "c" * 40})
+
+
+def test_public_contribution_url_preflight_rejects_nonpublic_response(monkeypatch):
+    class Response:
+        status_code = 401
+        headers = {"www-authenticate": "Basic"}
+    monkeypatch.setattr(core.httpx, "get", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="公開アクセス"):
+        core.public_contribution_url_preflight("https://example.com/private")

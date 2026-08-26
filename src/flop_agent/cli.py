@@ -10,7 +10,7 @@ from . import core
 def main() -> None:
     parser = argparse.ArgumentParser(prog="flop")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("status", "show-did", "activity-log", "sync-official", "doctor"):
+    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "history-secret-scan"):
         sub.add_parser(command)
     room = sub.add_parser("read-room"); room.add_argument("room")
     new = sub.add_parser("read-new"); new.add_argument("room")
@@ -30,6 +30,8 @@ def main() -> None:
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()
+        elif args.command == "history-secret-scan":
+            hits = core.history_secret_scan(); output = {"ok": not hits, "history_secret_scan_hits": hits}
         else:
             hits = core.secret_scan(); output = {"ok": not hits, "secret_scan_hits": hits, "signer_hash": core.signer_sha256(), "pinned_signer_hash": core.SIGNER_SHA256}
         print(json.dumps(output, ensure_ascii=False, indent=2))

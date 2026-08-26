@@ -28,6 +28,7 @@ Windows ではプロジェクト設定により `uv` の package install を cop
 .\flop.ps1 activity-log
 .\flop.ps1 sync-official
 .\flop.ps1 doctor
+.\flop.ps1 history-secret-scan
 .\flop.ps1 post-signed lobby
 .\flop.ps1 contribution-proof lobby
 ```
@@ -40,6 +41,8 @@ Windows ではプロジェクト設定により `uv` の package install を cop
 
 `contribution-proof` は、既存 DID のみを使い、ユーザー確認後に一度だけ Signed Join Proof、`mb-p-...` の Signed Mailbox、最新 sharded DID Profile、Contribution Note、Contribution Signed Proof を作成します。各成功操作は hash-chain 活動ログへ追加され、Public Proof JSON を `local-state/public-proofs/` に export します。
 
-Contribution Note はコミュニティの慣習であり、FLOP 公式のエアドロップ Registry ではありません。DID Profile と Contribution Note は public / world-writable で、署名済みメッセージだけが DID の鍵保有を示します。Mailbox 名も Profile に掲載されるため、秘密情報の送信先として扱わないでください。
+実行 plan は step ごとに checkpoint を保存します。途中失敗時は確認できた成功 step だけを再利用し、送信結果が曖昧な signed 投稿は重複防止のため再送せず停止します。DID Profile と canonical Contribution Note は `if_absent` でのみ作成し、既存値が異なる場合は上書きしません。
+
+Canonical Contribution Note は sharded namespace `contribution-<shard>/<key>` を使います。互換用の短い pointer を `/kv/contrib/<fingerprint>` に一度だけ置きますが、いずれもコミュニティの慣習であり、FLOP 公式のエアドロップ Registry ではありません。DID Profile と Contribution Note は public / world-writable で、署名済みメッセージだけが DID の鍵保有を示します。Mailbox 名も Profile に掲載されるため、秘密情報の送信先として扱わないでください。
 
 公式仕様・確認事項と戦略は [AIRDROP_RULES.md](AIRDROP_RULES.md) に分離しています。活動証拠はローカルの活動ログと Git のコミットに保持し、Technocore を永続保存先にしません。

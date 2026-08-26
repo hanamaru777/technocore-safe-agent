@@ -4,7 +4,7 @@
 
 - Phase 0 project governance, security policy, source tracking, CLI, tests, and secret scan.
 - Phase 1 safe existing-DID adapter, signed-post confirmation flow, nonce/state handling, DID-note path calculation, and evidence log.
-- Phase 2 useful-contribution proof foundation: signed join/mailbox/contribution proofs, sharded DID Profile, Contribution Note, local public-proof export, and activity evidence.
+- Phase 2 useful-contribution proof foundation: resumable checkpoints, signed join/mailbox/contribution proofs, if-absent sharded DID Profile and Contribution Note, community pointer, local public-proof export, and activity evidence.
 
 ## Next
 

@@ -9,6 +9,10 @@ def test_no_tracked_secret_material():
     assert core.secret_scan() == []
 
 
+def test_no_secret_material_in_reachable_git_history():
+    assert core.history_secret_scan() == []
+
+
 def test_doctor_reports_required_checks(monkeypatch):
     monkeypatch.setattr(core, "find_uv", lambda: "uv")
     class Result:

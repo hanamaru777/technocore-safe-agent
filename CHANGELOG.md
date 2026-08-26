@@ -13,3 +13,4 @@
 ## 0.2.0 — 2026-08-26
 
 - Added safe, confirmed useful-contribution proof planning and export foundation.
+- Added resumable proof checkpoints, if-absent Notes, contribution pointer, preflight, and full-history secret scan.
