@@ -76,11 +76,13 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 
 ## Resident Observer (Phase 3A)
 
-`observe-once` は `events`、`lobby`、設定済み watch rooms、利用できる場合は現在 DID の既存 Mailbox を一度だけ read します。`observe` は同じ処理を long-poll を使って継続します。どちらも seed を尋ねず、POST、Note 書込み、URL の自動アクセス、shell／command 実行、GitHub 変更を行いません。
+`observe-once` は `events`、`lobby`、設定済み watch rooms、利用できる場合は現在 DID の既存 Mailbox を一度だけ snapshot read します（long-poll なし）。`observe` は room ごとの独立 async worker と共有 read budget で継続します。idle room の long-poll が hot lobby を止めず、429 の `Retry-After`、通信エラーの backoff、room 別 cadence を守ります。どちらも seed を尋ねず、POST、Note 書込み、URL の自動アクセス、shell／command 実行、GitHub 変更を行いません。
 
-初回の `observe-once` は `local-state/observer/observer-config.json` を作成します。この ignored local-only 設定で `watch_rooms`、`mailbox`、poll 間隔、long-poll、memory retention、log 上限を変更できます。state・cursor・agent memory・ローテーションされる log もすべて同じ `local-state/observer/` にあり、既存の activity/proof/nonce/verified-DID state には触れません。壊れた observer state は fail-safe で停止します。
+初回の `observe-once` は `local-state/observer/observer-config.json` を作成します。この ignored local-only 設定で `watch_rooms`、`mailbox`、room cadence、read budget、long-poll、repeat 間隔、discovery sample 上限、memory retention、log 上限を変更できます。state・cursor・agent memory・ローテーションされる log もすべて同じ `local-state/observer/` にあり、既存の activity/proof/nonce/verified-DID state には触れません。壊れた observer state は fail-safe で停止します。
 
-Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。投稿量を quality score に使わず、new/repeat DID、質問、協業、Contribution、inbound Mailbox をイベントと metrics にします。
+各 room の初回取得は「過去全履歴」ではなく bootstrap tail として記録します。その後 `since` 以降の返却列に gap（公式上限 200 により起こり得る）があれば、missing range と推定件数を `message_gap` event に保存し、silent に cursor を進めません。`events` の discovery は、明示的に server-written と示された厳密な `created <room>` だけを queue に入れ、設定上限まで一度だけ sample します。private room の推測・探索はしません。
+
+Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。own DID と短時間の連投を external/returning DID に数えず、repeat 間隔を超えた再会だけを returning DID として数えます。投稿量を quality score に使いません。
 
 Linux/Oracle VM 向けの systemd sample は [packaging/technocore-safe-agent-observer.service](packaging/technocore-safe-agent-observer.service) です。自動 install はしません。二重起動は local lock で防ぎ、SIGINT/SIGTERM で安全に停止します。
 

@@ -1,10 +1,12 @@
-"""Read-only, restart-safe Technocore observer.
+"""Read-only, async, restart-safe Technocore observer.
 
-This module deliberately has no signing, POST, subprocess, URL-following, or command
-execution paths.  Every string received from Technocore remains untrusted data.
+No signing, POST, shell, command execution, or URL-following code is present here.
+All network strings stay bounded untrusted data.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import os
 import re
@@ -14,349 +16,316 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
-from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from . import core
 
-SCHEMA_VERSION = 1
-CONFIG_NAME = "observer-config.json"
-STATE_NAME = "observer-state.json"
-LOCK_NAME = "observer.lock"
-LOG_NAME = "observer.log"
-DEFAULT_CONFIG = {
-    "schema_version": SCHEMA_VERSION,
-    "watch_rooms": [],
-    "mailbox": None,
-    "poll_interval_seconds": 15,
-    "long_poll_seconds": 10,
-    "memory_retention": 50,
-    "log_max_bytes": 262144,
-    "log_rotations": 2,
-}
-URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.IGNORECASE)
-QUESTION_RE = re.compile(r"[?？]|\b(help|how|question|please)\b", re.IGNORECASE)
-COLLAB_RE = re.compile(r"\b(collab|collaboration|together|looking for|partner)\b", re.IGNORECASE)
-CONTRIBUTION_RE = re.compile(r"\b(contribution|contribute|build|project|feedback|share)\b", re.IGNORECASE)
+SCHEMA_VERSION = 2
+CONFIG_NAME, STATE_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer.lock", "observer.log"
+DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 50, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5}
+URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.I)
+QUESTION_RE = re.compile(r"[?？]|\b(how|question|please)\b", re.I)
+HELP_RE = re.compile(r"\b(help|assist|stuck)\b", re.I)
+COLLAB_RE = re.compile(r"\b(collab|collaboration|together|looking for|partner)\b", re.I)
+CONTRIBUTION_RE = re.compile(r"\b(contribution|contribute|build|project|feedback|share)\b", re.I)
+CREATED_ROOM_RE = re.compile(r"^created ([a-z0-9][a-z0-9_-]{0,47})$")
 
 
-def now() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-def observer_dir() -> Path:
-    core.STATE.mkdir(exist_ok=True)
-    return core.STATE / "observer"
+def now() -> str: return datetime.now(UTC).isoformat()
+def observer_dir() -> Path: core.STATE.mkdir(exist_ok=True); return core.STATE / "observer"
+def config_path() -> Path: return observer_dir() / CONFIG_NAME
+def state_path() -> Path: return observer_dir() / STATE_NAME
 
 
 def atomic_json_write(path: Path, value: dict) -> None:
-    """Atomically replace observer-only state, never touching Phase 1/2 files."""
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False)
     try:
         with handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
         os.replace(handle.name, path)
     finally:
-        if os.path.exists(handle.name):
-            os.unlink(handle.name)
+        if os.path.exists(handle.name): os.unlink(handle.name)
 
 
 def default_state() -> dict:
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "created_at": now(),
-        "updated_at": now(),
-        "cursors": {},
-        "agents": {},
-        "rooms": {},
-        "opportunities": [],
-        "metrics": {"unique_dids_discovered": 0, "repeat_did": 0, "rooms_observed": 0, "questions_detected": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0},
-        "last_error": None,
-    }
+    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0}}
 
 
 def read_json(path: Path, *, default: dict | None = None) -> dict:
     if not path.exists():
-        if default is None:
-            raise RuntimeError(f"observer file is missing: {path.name}")
+        if default is None: raise RuntimeError(f"observer file is missing: {path.name}")
         return default
-    try:
-        value = json.loads(path.read_text("utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"observer state is corrupt; refusing to continue: {path.name}") from error
-    if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
-        raise RuntimeError(f"observer state schema is invalid; refusing to continue: {path.name}")
+    try: value = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as error: raise RuntimeError(f"observer state is corrupt; refusing to continue: {path.name}") from error
+    if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION: raise RuntimeError(f"observer state schema is invalid; refusing to continue: {path.name}")
     return value
 
 
-def config_path() -> Path:
-    return observer_dir() / CONFIG_NAME
-
-
-def state_path() -> Path:
-    return observer_dir() / STATE_NAME
-
-
 def load_config() -> dict:
-    path = config_path()
-    if not path.exists():
-        atomic_json_write(path, DEFAULT_CONFIG)
-    config = read_json(path)
-    rooms = config.get("watch_rooms")
-    if not isinstance(rooms, list) or not all(isinstance(room, str) and core.validate_room(room) == room for room in rooms):
-        raise RuntimeError("observer config watch_rooms is invalid")
-    mailbox = config.get("mailbox")
-    if mailbox is not None and (not isinstance(mailbox, str) or core.validate_room(mailbox) != mailbox):
-        raise RuntimeError("observer config mailbox is invalid")
-    for key, minimum, maximum in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10)):
-        value = config.get(key)
-        if not isinstance(value, int) or not minimum <= value <= maximum:
-            raise RuntimeError(f"observer config {key} is invalid")
+    if not config_path().exists(): atomic_json_write(config_path(), DEFAULT_CONFIG)
+    config = read_json(config_path())
+    try:
+        rooms_ok = isinstance(config["watch_rooms"], list) and all(core.validate_room(room) == room for room in config["watch_rooms"])
+        mailbox_ok = config["mailbox"] is None or core.validate_room(config["mailbox"]) == config["mailbox"]
+    except (KeyError, TypeError, ValueError) as error: raise RuntimeError("observer config room settings are invalid") from error
+    if not rooms_ok or not mailbox_ok: raise RuntimeError("observer config room settings are invalid")
+    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50)):
+        if not isinstance(config.get(key), int) or not low <= config[key] <= high: raise RuntimeError(f"observer config {key} is invalid")
+    intervals = config.get("room_intervals_seconds")
+    if not isinstance(intervals, dict) or set(intervals) != {"lobby", "events", "mailbox", "watch"} or not all(isinstance(v, int) and 1 <= v <= 3600 for v in intervals.values()): raise RuntimeError("observer config room_intervals_seconds is invalid")
     return config
 
 
-def load_state() -> dict:
-    return read_json(state_path(), default=default_state())
-
-
-def save_state(state: dict) -> None:
-    state["updated_at"] = now()
-    atomic_json_write(state_path(), state)
+def load_state() -> dict: return read_json(state_path(), default=default_state())
+def save_state(state: dict) -> None: state["updated_at"] = now(); atomic_json_write(state_path(), state)
 
 
 def verified_did() -> str | None:
     path = core.STATE / "verified-did.json"
-    if not path.exists():
-        return None
-    try:
-        did = json.loads(path.read_text("utf-8")).get("did")
-    except (OSError, json.JSONDecodeError):
-        return None
+    try: did = json.loads(path.read_text("utf-8")).get("did") if path.exists() else None
+    except (OSError, json.JSONDecodeError): did = None
     return did if isinstance(did, str) and did.startswith("did:key:") else None
 
 
 def discovered_mailbox(did: str | None) -> str | None:
-    """Read public local plan metadata only; no signer and no network access."""
-    if not did:
-        return None
+    """Select only newest completed plan metadata for the verified public DID."""
     plans = core.STATE / "proof-plans"
-    if not plans.is_dir():
-        return None
-    for path in sorted(plans.glob("*.json"), reverse=True):
-        try:
-            plan = json.loads(path.read_text("utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        mailbox = plan.get("mailbox") if plan.get("did") == did else None
-        if isinstance(mailbox, str) and re.fullmatch(r"mb-p-[a-f0-9]{32}", mailbox):
-            return mailbox
-    return None
+    if not did or not plans.is_dir(): return None
+    candidates = []
+    for path in plans.glob("*.json"):
+        try: plan = json.loads(path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError): continue
+        mailbox, checkpoint = plan.get("mailbox"), plan.get("checkpoints", {}).get("mailbox", {})
+        if plan.get("did") == did and checkpoint.get("state") == "complete" and isinstance(mailbox, str) and re.fullmatch(r"mb-p-[a-f0-9]{32}", mailbox): candidates.append((str(plan.get("created_at", "")), mailbox))
+    return max(candidates)[1] if candidates else None
 
 
+def selected_mailbox(config: dict) -> str | None: return config["mailbox"] or discovered_mailbox(verified_did())
 def observed_rooms(config: dict) -> list[str]:
-    mailbox = config["mailbox"] or discovered_mailbox(verified_did())
-    return list(dict.fromkeys(["events", "lobby", *( [mailbox] if mailbox else []), *config["watch_rooms"]]))
+    mailbox = selected_mailbox(config); return list(dict.fromkeys(["events", "lobby", *([mailbox] if mailbox else []), *config["watch_rooms"]]))
 
 
 class ObserverLock:
-    def __init__(self) -> None:
-        self.path = observer_dir() / LOCK_NAME
-        self.acquired = False
-
+    """OS-level advisory lock; crashes release it automatically on Windows/Linux."""
+    def __init__(self) -> None: self.path, self.handle = observer_dir() / LOCK_NAME, None
     def __enter__(self) -> "ObserverLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True); self.handle = self.path.open("a+", encoding="utf-8")
         try:
-            with self.path.open("x", encoding="utf-8") as handle:
-                json.dump({"pid": os.getpid(), "started_at": now()}, handle)
-        except FileExistsError as error:
-            raise RuntimeError("observer is already running or has an unverified stale lock") from error
-        self.acquired = True
+            if os.name == "nt":
+                import msvcrt
+                self.handle.seek(0)
+                if not self.handle.read(1): self.handle.write(" "); self.handle.flush()
+                self.handle.seek(0); msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as error:
+            self.handle.close(); self.handle = None; raise RuntimeError("observer is already running") from error
+        self.handle.seek(0); self.handle.truncate(); json.dump({"pid": os.getpid(), "started_at": now()}, self.handle); self.handle.flush()
         return self
-
     def __exit__(self, *_: object) -> None:
-        if self.acquired:
-            try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
+        if not self.handle: return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.handle.seek(0); msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally: self.handle.close(); self.handle = None
 
 
-def append_log(config: dict, event: dict) -> None:
-    path = observer_dir() / LOG_NAME
-    limit, rotations = config["log_max_bytes"], config["log_rotations"]
+def append_log(config: dict, record: dict) -> None:
+    path, limit, rotations = observer_dir() / LOG_NAME, config["log_max_bytes"], config["log_rotations"]
     if path.exists() and path.stat().st_size >= limit:
         for index in range(rotations, 0, -1):
-            source = path.with_suffix(path.suffix + f".{index}")
-            destination = path.with_suffix(path.suffix + f".{index + 1}")
-            if source.exists():
-                if index == rotations:
-                    source.unlink()
-                else:
-                    os.replace(source, destination)
-        if rotations:
-            os.replace(path, path.with_suffix(path.suffix + ".1"))
-        else:
-            path.unlink()
-    with path.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+            source, dest = path.with_suffix(path.suffix + f".{index}"), path.with_suffix(path.suffix + f".{index + 1}")
+            if source.exists(): source.unlink() if index == rotations else os.replace(source, dest)
+        os.replace(path, path.with_suffix(path.suffix + ".1")) if rotations else path.unlink()
+    with path.open("a", encoding="utf-8", newline="\n") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def excerpt(text: str) -> str: return " ".join(text.split())[:280]
 def message_did(message: dict) -> str | None:
-    sender = message.get("from")
-    return sender if isinstance(sender, str) and sender.startswith("did:key:") else None
+    sender = message.get("from"); return sender if isinstance(sender, str) and sender.startswith("did:key:") else None
+def event_id(kind: str, room: str, seq: int | None, did: str | None, extra: dict | None = None) -> str: return hashlib.sha256(f"{kind}|{room}|{seq}|{did}|{json.dumps(extra or {}, sort_keys=True)}".encode()).hexdigest()[:32]
 
 
-def event(state: dict, config: dict, kind: str, room: str, message: dict, did: str | None = None) -> None:
-    record = {"kind": kind, "room": room, "seq": message.get("seq"), "ts": message.get("ts"), "did": did, "observed_at": now(), "untrusted": True}
-    state["opportunities"].append(record)
-    del state["opportunities"][:-500]
-    append_log(config, record)
+def emit_event(state: dict, kind: str, room: str, message: dict, did: str | None = None, *, extra: dict | None = None) -> bool:
+    seq = message.get("seq") if isinstance(message.get("seq"), int) else None; identifier = event_id(kind, room, seq, did, extra)
+    if identifier in state["event_ids"]: return False
+    record = {"event_id": identifier, "kind": kind, "room": room, "seq": seq, "ts": message.get("ts"), "did": did, "text_excerpt": excerpt(message.get("text", "")), "untrusted": True, "observed_at": now(), **(extra or {})}
+    state["event_ids"].append(identifier); del state["event_ids"][:-2000]; state["opportunities"].append(record); del state["opportunities"][:-500]
+    return True
+def metric_event(state: dict, metric: str, kind: str, room: str, message: dict, did: str | None = None, *, extra: dict | None = None) -> None:
+    if emit_event(state, kind, room, message, did, extra=extra): state["metrics"][metric] += 1
+def set_error(state: dict, room: str, kind: str, detail: str = "") -> None:
+    record = {"room": room, "kind": kind, "at": now(), "detail": detail[:120]}; state["error_history"].append(record); del state["error_history"][:-100]; state["health"]["current"] = "degraded"; state["health"]["rooms"][room] = {"status": "error", **record}
+def set_success(state: dict, room: str) -> None:
+    state["health"]["rooms"][room] = {"status": "ok", "at": now()}; state["health"]["current"] = "degraded" if any(v.get("status") == "error" for v in state["health"]["rooms"].values()) else "ok"
+
+
+def queue_discovered_room(state: dict, message: dict) -> None:
+    if not (message.get("server_written") is True or message.get("system") is True): return
+    match = CREATED_ROOM_RE.fullmatch(message.get("text", ""))
+    if not match: return
+    room = match.group(1)
+    try: core.validate_room(room)
+    except ValueError: return
+    if room not in {item["room"] for item in state["discovery_queue"]}:
+        state["discovery_queue"].append({"room": room, "event_seq": message.get("seq"), "enqueued_at": now()}); emit_event(state, "new_room", "events", message, extra={"discovered_room": room})
+
+
+def parse_time(value: str | None) -> datetime | None:
+    try: return datetime.fromisoformat(value) if value else None
+    except (TypeError, ValueError): return None
 
 
 def process_message(state: dict, config: dict, room: str, message: dict, own_did: str | None, mailbox: str | None) -> None:
-    if not isinstance(message, dict) or not isinstance(message.get("seq"), int) or not isinstance(message.get("text"), str):
-        return
-    did = message_did(message)
-    text = message["text"]  # Data only: this is never parsed as a command or fetched as a URL.
+    if not isinstance(message.get("seq"), int) or not isinstance(message.get("text"), str): return
+    did, text = message_did(message), message["text"]
+    if room == "events": queue_discovered_room(state, message)
     if room not in state["rooms"]:
-        state["rooms"][room] = {"first_seen": now(), "last_seen": now(), "message_count": 0, "signed_count": 0, "unsigned_count": 0}
-        state["metrics"]["rooms_observed"] += 1
-        event(state, config, "new_room", room, message)
-    room_state = state["rooms"][room]
-    room_state["last_seen"] = now()
-    room_state["message_count"] += 1
-    room_state["signed_count" if did else "unsigned_count"] += 1
-    if did:
-        fingerprint = core.did_note_location(did)[2]
-        existing = state["agents"].get(fingerprint)
-        if existing is None:
-            existing = {"did": did, "fingerprint": fingerprint, "facts": {"first_seen": now(), "last_seen": now(), "seen_count": 0, "rooms": [], "message_refs": [], "recent_messages": [], "signed_count": 0, "unsigned_count": 0, "interaction_with_us": False}, "inferences": {"contribution_url_candidates": [], "role_candidates": [], "repeat_seen": False}}
-            state["agents"][fingerprint] = existing
-            state["metrics"]["unique_dids_discovered"] += 1
-            event(state, config, "new_did", room, message, did)
-        else:
-            existing["inferences"]["repeat_seen"] = True
-            state["metrics"]["repeat_did"] += 1
-            event(state, config, "repeat_did", room, message, did)
-        facts = existing["facts"]
-        facts["last_seen"] = now()
-        facts["seen_count"] += 1
-        if room not in facts["rooms"]:
-            facts["rooms"].append(room)
-        reference = {"room": room, "seq": message["seq"], "ts": message.get("ts")}
-        if reference not in facts["message_refs"]:
-            facts["message_refs"].append(reference)
-            facts["recent_messages"].append({**reference, "text": text, "signed": True, "untrusted": True})
-        facts["signed_count"] += 1
-        if room == mailbox and did != own_did:
-            facts["interaction_with_us"] = True
-            state["metrics"]["inbound_mailbox_messages"] += 1
-            event(state, config, "inbound_mailbox_message", room, message, did)
-        inference = existing["inferences"]
-        urls = URL_RE.findall(text)
-        for url in urls:
-            if url not in inference["contribution_url_candidates"]:
-                inference["contribution_url_candidates"].append(url)
-        if urls or CONTRIBUTION_RE.search(text):
-            state["metrics"]["contribution_candidates"] += 1
-            event(state, config, "contribution_candidate", room, message, did)
-        if COLLAB_RE.search(text):
-            state["metrics"]["collab_candidates"] += 1
-            event(state, config, "collaboration_candidate", room, message, did)
-        if QUESTION_RE.search(text):
-            state["metrics"]["questions_detected"] += 1
-            event(state, config, "question_candidate", room, message, did)
-        for role in ("developer", "researcher", "writer", "designer", "operator"):
-            if re.search(rf"\b{role}\b", text, re.IGNORECASE) and role not in inference["role_candidates"]:
-                inference["role_candidates"].append(role)
-        for field in ("message_refs", "recent_messages"):
-            del facts[field][:-config["memory_retention"]]
+        state["rooms"][room] = {"first_seen": now(), "last_seen": now(), "message_count": 0, "signed_count": 0, "unsigned_count": 0}; metric_event(state, "rooms_observed", "new_room", room, message)
+    room_state = state["rooms"][room]; room_state["last_seen"] = now(); room_state["message_count"] += 1; room_state["signed_count" if did else "unsigned_count"] += 1
+    if not did: room_state["last_unsigned_seen"] = {"seq": message["seq"], "ts": message.get("ts"), "untrusted": True}; return
+    if did == own_did: state["metrics"]["self_messages"] += 1; return
+    fingerprint = core.did_note_location(did)[2]; agent = state["agents"].get(fingerprint)
+    if agent is None:
+        agent = {"did": did, "fingerprint": fingerprint, "facts": {"first_seen": now(), "last_seen": now(), "last_encounter_at": now(), "seen_count": 0, "rooms": [], "message_refs": [], "recent_messages": [], "signed_count": 0, "unsigned_count": 0, "interaction_with_us": False}, "inferences": {"contribution_url_candidates": [], "role_candidates": [], "repeat_seen": False}}; state["agents"][fingerprint] = agent; metric_event(state, "unique_dids_discovered", "new_did", room, message, did)
     else:
-        # Keep unsigned messages out of per-DID identity memory, but retain their room signal.
-        state["rooms"][room]["last_unsigned_seen"] = {"seq": message["seq"], "ts": message.get("ts"), "untrusted": True}
+        previous = parse_time(agent["facts"].get("last_encounter_at"))
+        if previous and (datetime.now(UTC) - previous).total_seconds() >= config["repeat_after_seconds"]:
+            agent["inferences"]["repeat_seen"] = True; metric_event(state, "returning_did_encounters", "returning_did", room, message, did)
+            if fingerprint not in state["returning_dids"]: state["returning_dids"].append(fingerprint); state["metrics"]["unique_returning_dids"] += 1
+        agent["facts"]["last_encounter_at"] = now()
+    facts, inference = agent["facts"], agent["inferences"]; facts["last_seen"] = now(); facts["seen_count"] += 1; facts["signed_count"] += 1
+    if room not in facts["rooms"]: facts["rooms"].append(room)
+    ref = {"room": room, "seq": message["seq"], "ts": message.get("ts")}
+    if ref not in facts["message_refs"]: facts["message_refs"].append(ref); facts["recent_messages"].append({**ref, "text": text, "signed": True, "untrusted": True})
+    if room == mailbox: facts["interaction_with_us"] = True; metric_event(state, "inbound_mailbox_messages", "inbound_mailbox_message", room, message, did)
+    for url in URL_RE.findall(text):
+        if url not in inference["contribution_url_candidates"]: inference["contribution_url_candidates"].append(url)
+    if URL_RE.search(text) or CONTRIBUTION_RE.search(text): metric_event(state, "contribution_candidates", "contribution_candidate", room, message, did)
+    if COLLAB_RE.search(text): metric_event(state, "collab_candidates", "collaboration_candidate", room, message, did)
+    if HELP_RE.search(text): metric_event(state, "help_candidates", "help_candidate", room, message, did)
+    if QUESTION_RE.search(text): metric_event(state, "questions_detected", "question_candidate", room, message, did)
+    for role in ("developer", "researcher", "writer", "designer", "operator"):
+        if re.search(rf"\b{role}\b", text, re.I) and role not in inference["role_candidates"]: inference["role_candidates"].append(role)
+    for field in ("message_refs", "recent_messages"): del facts[field][:-config["memory_retention"]]
 
 
-def observe_cycle(config: dict, state: dict) -> dict:
-    own_did = verified_did()
-    mailbox = config["mailbox"] or discovered_mailbox(own_did)
-    for room in observed_rooms(config):
-        since = state["cursors"].get(room, 0)
-        try:
-            payload = core.read_room(room, since=since, wait=config["long_poll_seconds"], limit=200)
-        except httpx.HTTPError as error:
-            state["last_error"] = {"room": room, "at": now(), "kind": type(error).__name__}
-            continue
-        messages = payload.get("messages", payload if isinstance(payload, list) else [])
-        if not isinstance(messages, list):
-            state["last_error"] = {"room": room, "at": now(), "kind": "invalid_response"}
-            continue
-        highest, seen = since, set()
-        for message in sorted(messages, key=lambda item: item.get("seq", -1) if isinstance(item, dict) else -1):
-            seq = message.get("seq") if isinstance(message, dict) else None
-            if not isinstance(seq, int) or seq <= since or seq in seen:
-                continue
-            seen.add(seq)
-            process_message(state, config, room, message, own_did, mailbox)
-            highest = max(highest, seq)
-        if highest > since:
-            state["cursors"][room] = highest
-    return state
+def process_payload(state: dict, config: dict, room: str, payload: dict | list, own_did: str | None, mailbox: str | None, *, bootstrap: bool) -> None:
+    messages = payload.get("messages", payload if isinstance(payload, list) else [])
+    if not isinstance(messages, list): set_error(state, room, "invalid_response"); return
+    since, valid = state["cursors"].get(room, 0), sorted((m for m in messages if isinstance(m, dict) and isinstance(m.get("seq"), int)), key=lambda m: m["seq"])
+    if bootstrap and room not in state["bootstrap_tails"]: state["bootstrap_tails"][room] = {"from_seq": valid[0]["seq"] if valid else None, "to_seq": valid[-1]["seq"] if valid else None, "returned_count": len(valid), "is_tail_only": True, "recorded_at": now()}
+    previous, highest, seen = since, since, set()
+    for message in valid:
+        seq = message["seq"]
+        if seq <= since or seq in seen: continue
+        seen.add(seq)
+        if not bootstrap and seq > previous + 1:
+            missing = seq - previous - 1; metric_event(state, "message_gaps", "message_gap", room, message, extra={"missing_from": previous + 1, "missing_to": seq - 1, "estimated_missing": missing}); state["metrics"]["estimated_missing_messages"] += missing
+        process_message(state, config, room, message, own_did, mailbox); previous, highest = seq, max(highest, seq)
+    if highest > since: state["cursors"][room] = highest
 
 
-def observe_once() -> dict:
+class ReadBudget:
+    def __init__(self, per_minute: int) -> None: self.interval, self.next_at, self.lock = 60 / per_minute, 0.0, asyncio.Lock()
+    async def acquire(self) -> None:
+        async with self.lock:
+            delay = self.next_at - time.monotonic()
+            if delay > 0: await asyncio.sleep(delay)
+            self.next_at = time.monotonic() + self.interval
+
+
+async def read_room(client: httpx.AsyncClient, room: str, since: int, wait: int) -> tuple[dict | list | None, float | None, str | None]:
+    try:
+        response = await client.get(f"{core.BASE_URL}/r/{quote(room, safe='')}", params={"format": "json", "since": since, "wait": min(max(wait, 0), 10), "limit": 200}, timeout=20)
+        if response.status_code == 429:
+            try: retry = max(0.0, float(response.headers.get("Retry-After", "1")))
+            except ValueError: retry = 1.0
+            return None, retry, "rate_limited"
+        response.raise_for_status(); return response.json(), None, None
+    except httpx.HTTPError as error: return None, None, type(error).__name__
+
+
+async def snapshot_room(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, room: str, own_did: str | None, mailbox: str | None) -> None:
+    await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), 0)
+    if error: set_error(state, room, error, str(retry or "")); return
+    process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]); set_success(state, room)
+
+
+async def observe_once_async(client: httpx.AsyncClient | None = None) -> dict:
     with ObserverLock():
-        config, state = load_config(), load_state()
-        observe_cycle(config, state)
+        config, state, own_did = load_config(), load_state(), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
+        if owned: client = httpx.AsyncClient()
+        try:
+            await asyncio.gather(*(snapshot_room(client, budget, state, config, room, own_did, mailbox) for room in observed_rooms(config)))
+            queued = state["discovery_queue"][:config["discovery_sample_limit"]]; state["discovery_queue"] = state["discovery_queue"][len(queued):]
+            for item in queued: await snapshot_room(client, budget, state, config, item["room"], own_did, mailbox)
+            save_state(state)
+            append_log(config, {"kind": "snapshot_complete", "at": state["updated_at"]})
+            return observer_status(config, state)
+        finally:
+            if owned: await client.aclose()
+
+
+def observe_once() -> dict: return asyncio.run(observe_once_async())
+def room_interval(config: dict, room: str, mailbox: str | None) -> int: return config["room_intervals_seconds"]["lobby" if room == "lobby" else "events" if room == "events" else "mailbox" if room == mailbox else "watch"]
+
+
+async def room_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, room: str, own_did: str | None, mailbox: str | None, stop: asyncio.Event) -> None:
+    backoff = 0.0
+    while not stop.is_set():
+        await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), config["long_poll_seconds"])
+        if error: set_error(state, room, error, str(retry or "")); backoff = retry if retry is not None else min(300.0, max(1.0, backoff * 2 or 1.0))
+        else: process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]); set_success(state, room); backoff = 0.0
         save_state(state)
-        return observer_status(config, state)
+        try: await asyncio.wait_for(stop.wait(), timeout=backoff or room_interval(config, room, mailbox))
+        except TimeoutError: pass
+
+
+async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx.AsyncClient | None = None) -> None:
+    stop = stop or asyncio.Event()
+    with ObserverLock():
+        config, state, own_did = load_config(), load_state(), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
+        if owned: client = httpx.AsyncClient()
+        try:
+            tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop)) for room in observed_rooms(config)]
+            try: await asyncio.gather(*tasks)
+            finally:
+                for task in tasks: task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            if owned: await client.aclose()
 
 
 def observe_forever(stop: Event | None = None) -> None:
-    stop = stop or Event()
-    previous_handlers: dict[int, Any] = {}
-    def request_stop(*_: object) -> None:
-        stop.set()
+    async_stop = asyncio.Event()
+    def request_stop(*_: object) -> None: async_stop.set()
+    previous = {}
     for number in (signal.SIGINT, signal.SIGTERM):
-        try:
-            previous_handlers[number] = signal.signal(number, request_stop)
-        except (ValueError, OSError):
-            pass
+        try: previous[number] = signal.signal(number, request_stop)
+        except (OSError, ValueError): pass
     try:
-        with ObserverLock():
-            config, state = load_config(), load_state()
-            while not stop.is_set():
-                observe_cycle(config, state)
-                save_state(state)
-                stop.wait(config["poll_interval_seconds"])
+        if not (stop and stop.is_set()): asyncio.run(observe_forever_async(async_stop))
     finally:
-        for number, handler in previous_handlers.items():
-            signal.signal(number, handler)
+        for number, handler in previous.items(): signal.signal(number, handler)
 
 
 def observer_status(config: dict | None = None, state: dict | None = None) -> dict:
-    config = config or load_config()
-    state = state or load_state()
-    return {"read_only": True, "schema_version": SCHEMA_VERSION, "rooms": observed_rooms(config), "cursors": state["cursors"], "metrics": state["metrics"], "agent_count": len(state["agents"]), "last_error": state["last_error"]}
-
-
+    config, state = config or load_config(), state or load_state()
+    return {"read_only": True, "schema_version": SCHEMA_VERSION, "rooms": observed_rooms(config), "cursors": state["cursors"], "metrics": state["metrics"], "agent_count": len(state["agents"]), "health": state["health"], "error_history": state["error_history"]}
 def list_agents() -> dict:
-    state = load_state()
-    return {"agents": [{"fingerprint": fingerprint, "did": agent["did"], "facts": {key: value for key, value in agent["facts"].items() if key != "recent_messages"}, "inferences": agent["inferences"]} for fingerprint, agent in state["agents"].items()]}
-
-
+    state = load_state(); return {"agents": [{"fingerprint": fp, "did": agent["did"], "facts": {k: v for k, v in agent["facts"].items() if k != "recent_messages"}, "inferences": agent["inferences"]} for fp, agent in state["agents"].items()]}
 def get_agent(identifier: str) -> dict:
-    state = load_state()
-    for fingerprint, agent in state["agents"].items():
-        if identifier in (fingerprint, agent["did"]):
-            return {"untrusted_data": True, "agent": agent}
+    for fp, agent in load_state()["agents"].items():
+        if identifier in (fp, agent["did"]): return {"untrusted_data": True, "agent": agent}
     raise RuntimeError("agent was not found")
-
-
 def opportunities() -> dict:
-    state = load_state()
-    return {"untrusted_data": True, "opportunities": state["opportunities"], "metrics": state["metrics"]}
+    state = load_state(); return {"untrusted_data": True, "opportunities": state["opportunities"], "metrics": state["metrics"]}
