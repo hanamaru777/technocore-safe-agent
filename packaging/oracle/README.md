@@ -1,5 +1,7 @@
 # Oracle Resident package
 
-This package is a deployment template only; it does not install, enable, or connect anything automatically. Run it only after reviewing paths, ownership, systemd unit names, and outbound-only networking. Keep all Resident state in `/var/lib/technocore-safe-agent`; do not place a DID seed on the VM. The optional Discord env file is mode 0600 and must contain only Discord controls, never a DID seed.
+This is a reviewed deployment package, not an installer that runs itself. It targets Ubuntu and Oracle Linux, uses the unprivileged `technocore` user, keeps root-managed Discord configuration in `/etc/technocore-safe-agent/env`, and puts public observer/resident state in `/var/lib/technocore-safe-agent`. It never requests, copies, or stores a DID seed.
 
-To transfer a locally created export, review it and run `import-state.py EXPORT.zip /var/lib/technocore-safe-agent`. The importer accepts only the documented public-state allowlist and verifies its manifest hashes.
+After review, root may run `./install.sh REPOSITORY_URL` (or add `--discord` for the optional Discord dependency and unit). It clones the repository, installs locked dependencies, writes units, and calls `daemon-reload`; it never enables or starts either service. Review the empty `env` file and explicitly enable services afterwards.
+
+`update.sh` fast-forwards `main`, syncs dependencies, runs secret scan and doctor, and restarts only services that are already active. A failed preflight leaves the running process untouched. `healthcheck.sh` checks the resident process plus observer health and state freshness. `import-state.py` accepts only the current relative-layout export, validates every manifest hash and JSON object, rejects zip-slip/duplicates/flat legacy exports, makes a backup before overwrite, and writes state atomically.

@@ -392,7 +392,7 @@ async def resident_worker(config: dict, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try: resident.refresh()
         except RuntimeError: pass
-        try: await asyncio.wait_for(stop.wait(), timeout=config["poll_interval_seconds"])
+        try: await asyncio.wait_for(stop.wait(), timeout=resident.load_config()["refresh_interval_seconds"])
         except TimeoutError: pass
 
 

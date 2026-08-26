@@ -1,3 +1,4 @@
+import asyncio
 import json
 import subprocess
 import sys
@@ -6,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from flop_agent import core, discord_control, observer, resident
+from flop_agent import core, discord_control, observer, resident, resident_daemon
 
 
 def setup(monkeypatch, tmp_path):
@@ -73,6 +74,7 @@ def test_discord_rejects_unauthorized_and_does_not_execute_content(monkeypatch, 
     assert control.command("7", "/resident-status")["error"] == "unauthorized"
     monkeypatch.setattr(discord_control.os, "system", lambda *_: pytest.fail("Discord content must not execute"))
     assert control.command("42", "https://example.invalid/; rm -rf /")["error"] == "unsupported"
+    assert control.command("42", "/help", "different-channel")["error"] == "wrong_channel"
 
 
 def test_notification_dedupe_and_publish_seed_gate(monkeypatch, tmp_path):
@@ -100,20 +102,91 @@ def test_export_is_allowlisted_and_excludes_sensitive_names(monkeypatch, tmp_pat
     archive = resident.export_state()
     with zipfile.ZipFile(archive) as bundle:
         names = bundle.namelist()
-    assert "manifest.json" in names and "secret.txt" not in names
+    assert "manifest.json" in names and "observer/resident-state.json" in names and "secret.txt" not in names
     assert all("seed" not in name.lower() and "secret" not in name.lower() for name in names)
 
 
-def test_oracle_import_rejects_files_outside_allowlist(monkeypatch, tmp_path):
+def test_oracle_import_uses_runtime_layout_and_rejects_unsafe_archives(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path); resident.save_state(resident.default_state())
     archive = resident.export_state()
     target = tmp_path / "imported"
     script = core.ROOT / "packaging" / "oracle" / "import-state.py"
     result = subprocess.run([sys.executable, str(script), archive, str(target)], capture_output=True, text=True, check=False)
-    assert result.returncode == 0 and (target / "resident-state.json").exists()
+    assert result.returncode == 0 and (target / "observer" / "resident-state.json").exists()
     unsafe = tmp_path / "unsafe.zip"
     with zipfile.ZipFile(unsafe, "w") as bundle:
         bundle.writestr("manifest.json", '{"files": []}')
         bundle.writestr("not-allowed.txt", "x")
     result = subprocess.run([sys.executable, str(script), str(unsafe), str(target)], capture_output=True, text=True, check=False)
     assert result.returncode != 0
+    slip = tmp_path / "slip.zip"
+    with zipfile.ZipFile(slip, "w") as bundle:
+        bundle.writestr("manifest.json", '{"files": [{"name": "../bad.json", "sha256": "x"}]}')
+        bundle.writestr("../bad.json", "{}")
+    assert subprocess.run([sys.executable, str(script), str(slip), str(target)], capture_output=True, text=True, check=False).returncode != 0
+    duplicate = tmp_path / "duplicate.zip"
+    with pytest.warns(UserWarning):
+        with zipfile.ZipFile(duplicate, "w") as bundle:
+            bundle.writestr("manifest.json", '{"files": []}'); bundle.writestr("manifest.json", '{"files": []}')
+    assert subprocess.run([sys.executable, str(script), str(duplicate), str(target)], capture_output=True, text=True, check=False).returncode != 0
+    flat = tmp_path / "flat.zip"
+    with zipfile.ZipFile(flat, "w") as bundle:
+        data = b'{"schema_version": 1}'
+        bundle.writestr("resident-state.json", data)
+        bundle.writestr("manifest.json", json.dumps({"files": [{"name": "resident-state.json", "sha256": "00"}]}))
+    assert subprocess.run([sys.executable, str(script), str(flat), str(target)], capture_output=True, text=True, check=False).returncode != 0
+    mismatch = tmp_path / "mismatch.zip"
+    with zipfile.ZipFile(mismatch, "w") as bundle:
+        bundle.writestr("observer/resident-state.json", b'{"schema_version": 1}')
+        bundle.writestr("manifest.json", json.dumps({"files": [{"name": "observer/resident-state.json", "sha256": "00"}]}))
+    assert subprocess.run([sys.executable, str(script), str(mismatch), str(target)], capture_output=True, text=True, check=False).returncode != 0
+
+
+def test_ttl_cooldown_and_expired_publish_gate(monkeypatch, tmp_path):
+    _, useful, _ = populate(monkeypatch, tmp_path); resident.refresh()
+    item = next(item for item in resident.list_candidates()["candidates"] if item["did"] == useful)
+    state = resident.load_state(); state["candidates"][item["candidate_id"]]["expires_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat(); resident.save_state(state)
+    resident.refresh(); assert resident.candidate(item["candidate_id"])["candidate"]["status"] == "expired"
+    with pytest.raises(RuntimeError, match="expired"):
+        resident.publish_approved(item["candidate_id"], True)
+    state = resident.load_state(); config = resident.load_config()
+    state["candidates"][item["candidate_id"]]["created_at"] = (datetime.now(UTC) - timedelta(seconds=config["candidate_cooldown_seconds"] + 1)).isoformat()
+    state["candidates"][item["candidate_id"]]["feedback_at"] = state["candidates"][item["candidate_id"]]["created_at"]
+    observer.emit_event(observer.load_state(), "help_candidate", "lobby", msg(99, useful, "help with new constraint"), useful)
+    observed = observer.load_state(); observer.emit_event(observed, "help_candidate", "lobby", msg(99, useful, "help with new constraint"), useful); observer.save_state(observed); resident.save_state(state)
+    resident.refresh(); assert len([candidate for candidate in resident.list_candidates()["candidates"] if candidate["did"] == useful]) >= 2
+    state = resident.load_state(); state["candidates"][item["candidate_id"]]["status"] = "published"; state["candidates"][item["candidate_id"]]["expires_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat(); resident.save_state(state)
+    with pytest.raises(RuntimeError, match="approved"):
+        resident.publish_approved(item["candidate_id"], True)
+
+
+def test_pause_keeps_relationship_refresh_but_stops_candidates(monkeypatch, tmp_path):
+    own, useful, _ = populate(monkeypatch, tmp_path); resident.pause(True)
+    state = observer.load_state(); config = observer.load_config()
+    observer.process_message(state, config, "third", msg(1, useful, "specific test artifact", "third"), own, None); observer.save_state(state)
+    resident.refresh(); local = resident.load_state()
+    assert local["relationships"][core.did_note_location(useful)[2]]["rooms"] == ["lobby", "other", "third"]
+    assert not local["candidates"]
+
+
+def test_discord_notification_digest_and_safe_human_response(monkeypatch, tmp_path):
+    _, useful, _ = populate(monkeypatch, tmp_path); resident.refresh()
+    item = next(item for item in resident.list_candidates()["candidates"] if item["did"] == useful)
+    state = resident.load_state(); state["candidates"][item["candidate_id"]]["priority"] = "critical"; resident.save_state(state)
+    control = discord_control.Control({"42"}, "99")
+    message = control.command("42", f"/candidate {item['candidate_id']}", "99")["message"]
+    assert "Candidate" in message and "Draft:" in message and len(control.notifications()) == 1 and control.notifications() == []
+    assert "Resident digest" in control.digest()
+
+
+def test_resident_worker_refreshes_without_network_and_daemon_entrypoint(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); calls = []
+    async def run():
+        stop = asyncio.Event()
+        def refresh(): calls.append(True); stop.set(); return {}
+        monkeypatch.setattr(resident, "refresh", refresh)
+        monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 5})
+        await observer.resident_worker({}, stop)
+    asyncio.run(run())
+    assert calls and resident_daemon.main.__module__ == "flop_agent.resident_daemon"
+    assert "flop_agent.resident_daemon" in (core.ROOT / "packaging" / "oracle" / "resident.service").read_text("utf-8")

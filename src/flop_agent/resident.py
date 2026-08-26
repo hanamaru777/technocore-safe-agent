@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,7 +18,7 @@ from . import core, observer
 SCHEMA_VERSION = 1
 STATE_FILE = "resident-state.json"
 CONFIG_FILE = "resident-config.json"
-DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "candidate_cooldown_seconds": 21600, "candidate_ttl_seconds": 604800, "generic_templates": ["notic(ed|ing) recent activity", "curious if", "collaboration synergy"], "quality_threshold": 0.35}
+DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "candidate_cooldown_seconds": 21600, "candidate_ttl_seconds": 604800, "refresh_interval_seconds": 30, "discord_digest_interval_seconds": 3600, "generic_templates": ["notic(ed|ing) recent activity", "curious if", "collaboration synergy"], "quality_threshold": 0.35}
 REJECT_REASONS = {"spam", "generic", "not_relevant", "wrong_agent", "bad_draft", "too_frequent", "unsafe", "other"}
 
 
@@ -47,6 +46,8 @@ def load_config() -> dict:
     config = {**DEFAULT_CONFIG, **data}
     if not isinstance(config["candidate_cooldown_seconds"], int) or not 60 <= config["candidate_cooldown_seconds"] <= 2592000: raise RuntimeError("resident cooldown config is invalid")
     if not isinstance(config["candidate_ttl_seconds"], int) or not 300 <= config["candidate_ttl_seconds"] <= 2592000: raise RuntimeError("resident ttl config is invalid")
+    if not isinstance(config["refresh_interval_seconds"], int) or not 5 <= config["refresh_interval_seconds"] <= 3600: raise RuntimeError("resident refresh interval config is invalid")
+    if not isinstance(config["discord_digest_interval_seconds"], int) or not 60 <= config["discord_digest_interval_seconds"] <= 86400: raise RuntimeError("Discord digest interval config is invalid")
     return config
 
 
@@ -116,16 +117,36 @@ def draft(agent: dict, event: dict, category: str) -> str:
     return f"I noted the concrete context: {point}. I can follow up with a focused, useful observation rather than a generic greeting."
 
 
+def expire_candidates(state: dict, current: datetime | None = None) -> None:
+    current = current or datetime.now(UTC)
+    for item in state["candidates"].values():
+        if item.get("status") != "pending": continue
+        expiry = observer.parse_time(item.get("expires_at"))
+        if expiry and expiry <= current:
+            item["status"] = "expired"; item["expired_at"] = now(); item["expiration_reason"] = "candidate_ttl_elapsed"
+
+
+def cooldown_active(state: dict, did: str, current: datetime, seconds: int) -> bool:
+    timestamps = []
+    for item in state["candidates"].values():
+        if item.get("did") == did:
+            timestamps.extend(item.get(key) for key in ("published_at", "feedback_at", "created_at") if item.get(key))
+    latest = max((observer.parse_time(value) for value in timestamps), default=None)
+    return bool(latest and (current - latest).total_seconds() < seconds)
+
+
 def refresh() -> dict:
     config, state, observed = load_config(), load_state(), observer.load_state()
-    if state["control"].get("paused"): return resident_status(state, observed)
+    current = datetime.now(UTC); expire_candidates(state, current)
+    paused = bool(state["control"].get("paused"))
     own_did = observer.verified_did(); agents = [agent for agent in observed["agents"].values() if agent["did"] != own_did]
     assessments = {agent["did"]: quality(agent, agents, config) for agent in agents}
     for agent in agents: relationship(state, agent, assessments[agent["did"]])
+    if paused:
+        state["daemon"]["last_refresh_at"] = now(); save_state(state); return resident_status(state, observed)
     grouped: dict[tuple, list[dict]] = {}
     for event in observed["opportunities"]:
         if event.get("did") and event["did"] != own_did: grouped.setdefault((event["did"], event["room"], event.get("seq")), []).append(event)
-    current = datetime.now(UTC)
     for (did, room, seq), events in grouped.items():
         agent = next((item for item in agents if item["did"] == did), None)
         if not agent: continue
@@ -134,8 +155,7 @@ def refresh() -> dict:
         if not decision: continue
         category, priority = decision; candidate_id = hashlib.sha256(f"{did}|{room}|{seq}|{category}".encode()).hexdigest()[:16]
         if candidate_id in state["candidates"]: continue
-        prior = [candidate for candidate in state["candidates"].values() if candidate["did"] == did and candidate["status"] in {"pending", "approved"}]
-        if prior: continue
+        if priority != "critical" and cooldown_active(state, did, current, config["candidate_cooldown_seconds"]): continue
         event = events[0]
         candidate = {"candidate_id": candidate_id, "did": did, "fingerprint": agent["fingerprint"], "room": room, "seq": seq, "permalink": core.human_permalink(room, seq) if isinstance(seq, int) else None, "category": category, "priority": priority, "ranking_weight": float(state["learning"]["weights"].get(category, 1.0)), "why": f"{category} after quality filtering", "signals": assessment, "context": {"excerpt": event.get("text_excerpt", "")[:280], "untrusted": True}, "suggested_action": "review and optionally approve; approval does not post", "draft_reply": draft(agent, event, category), "created_at": now(), "expires_at": (current + timedelta(seconds=config["candidate_ttl_seconds"])).isoformat(), "status": "pending"}
         state["candidates"][candidate_id] = candidate
@@ -175,7 +195,7 @@ def feedback(candidate_id: str, decision: str, reason: str | None = None) -> dic
 def reset_learning() -> dict:
     state = load_state(); state["learning"] = {"weights": {}, "history": []}; save_state(state); return state["learning"]
 def feedback_status() -> dict:
-    state = load_state(); return {"learning": state["learning"], "approved": sum(item["status"] == "approved" for item in state["candidates"].values()), "rejected": sum(item["status"] == "rejected" for item in state["candidates"].values())}
+    state = load_state(); expire_candidates(state); save_state(state); return {"learning": state["learning"], "approved": sum(item["status"] == "approved" for item in state["candidates"].values()), "rejected": sum(item["status"] == "rejected" for item in state["candidates"].values()), "expired": sum(item["status"] == "expired" for item in state["candidates"].values())}
 def pause(value: bool) -> dict:
     state = load_state(); state["control"]["paused"] = value; save_state(state); return state["control"]
 
@@ -187,28 +207,30 @@ def resident_status(state: dict | None = None, observed: dict | None = None) -> 
     agents = [agent for agent in observed["agents"].values() if agent["did"] != own_did]
     config = load_config()
     noise = sum(quality(agent, agents, config)["spam_noise_probability"] >= 0.6 for agent in agents)
-    return {"read_only": True, "uptime_started_at": state["daemon"]["started_at"], "health": observed["health"], "last_refresh_at": state["daemon"]["last_refresh_at"], "cursors": observed["cursors"], "message_gaps": observed["metrics"]["message_gaps"], "discovery_queue": len(observed["discovery_queue"]), "agents_known": len(observed["agents"]), "useful_candidates": sum(item["status"] == "pending" for item in candidates), "noise_ignored": noise, "returning_agents": observed["metrics"]["unique_returning_dids"], "inbound": observed["metrics"]["inbound_mailbox_messages"], "approved": sum(item["status"] == "approved" for item in candidates), "rejected": sum(item["status"] == "rejected" for item in candidates), "published": len(state["published"]), "paused": state["control"]["paused"], "discord_status": "not_connected"}
+    return {"read_only": True, "uptime_started_at": state["daemon"]["started_at"], "health": observed["health"], "last_refresh_at": state["daemon"]["last_refresh_at"], "cursors": observed["cursors"], "message_gaps": observed["metrics"]["message_gaps"], "discovery_queue": len(observed["discovery_queue"]), "agents_known": len(observed["agents"]), "useful_candidates": sum(item["status"] == "pending" for item in candidates), "noise_ignored": noise, "returning_agents": observed["metrics"]["unique_returning_dids"], "inbound": observed["metrics"]["inbound_mailbox_messages"], "approved": sum(item["status"] == "approved" for item in candidates), "rejected": sum(item["status"] == "rejected" for item in candidates), "expired": sum(item["status"] == "expired" for item in candidates), "published": len(state["published"]), "paused": state["control"]["paused"], "discord_status": "not_connected"}
 
 
 def publish_approved(candidate_id: str, confirm: bool) -> dict:
     if os.name != "nt": raise RuntimeError("publish-approved is Windows secure-signer only")
     item = candidate(candidate_id)["candidate"]
+    if not confirm: raise RuntimeError("publish-approved requires final confirmation")
+    if observer.parse_time(item.get("expires_at")) and observer.parse_time(item["expires_at"]) <= datetime.now(UTC):
+        raise RuntimeError("expired candidate cannot be published")
     if item["status"] != "approved": raise RuntimeError("candidate must be approved before publishing")
     did = core.current_did(); core.require_verified_did(did)
     record = core.post_signed(item["room"], item["draft_reply"], confirm, did=did, action="approved_candidate_publish")
-    state = load_state(); state["candidates"][candidate_id]["status"] = "published"; state["published"].append({"candidate_id": candidate_id, "at": now(), "permalink": record["permalink"]}); save_state(state); return record
+    state = load_state(); state["candidates"][candidate_id]["status"] = "published"; state["candidates"][candidate_id]["published_at"] = now(); state["published"].append({"candidate_id": candidate_id, "at": now(), "permalink": record["permalink"]}); save_state(state); return record
 
 
 def export_state() -> str:
     """Export a strict public-state allowlist, never arbitrary local-state files."""
-    allowed = [observer.state_path(), observer.config_path(), state_path(), config_path(), core.STATE / "verified-did.json"]
+    allowed = [(core.STATE / "verified-did.json", "verified-did.json"), (observer.state_path(), "observer/observer-state.json"), (observer.config_path(), "observer/observer-config.json"), (state_path(), "observer/resident-state.json"), (config_path(), "observer/resident-config.json")]
     export_dir = core.STATE / "resident-exports"; export_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"); archive = export_dir / f"resident-state-{stamp}.zip"
     manifest = []
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for path in allowed:
+        for path, name in allowed:
             if not path.exists(): continue
-            name = path.name
             if any(word in name.lower() for word in ("seed", "secret", "credential", "private", "token")): continue
             data = path.read_bytes(); manifest.append({"name": name, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}); bundle.writestr(name, data)
         bundle.writestr("manifest.json", json.dumps({"schema_version": 1, "files": manifest}, indent=2))

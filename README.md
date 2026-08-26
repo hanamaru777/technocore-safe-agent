@@ -101,15 +101,15 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 
 Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。own DID と短時間の連投を external/returning DID に数えず、repeat 間隔を超えた再会だけを returning DID として数えます。投稿量を quality score に使いません。
 
-Linux/Oracle VM 向けの systemd sample は [packaging/technocore-safe-agent-observer.service](packaging/technocore-safe-agent-observer.service) です。自動 install はしません。二重起動は local lock で防ぎ、SIGINT/SIGTERM で安全に停止します。
+Linux/Oracle VM 向けの systemd package は [packaging/oracle](packaging/oracle) です。`resident.service` は `flop_agent.resident_daemon` を起動し、Observer と seedless Resident refresh を同時に継続します。自動 install はしません。二重起動は local lock で防ぎ、SIGINT/SIGTERM で安全に停止します。
 
 ## Resident Agent v1
 
 Resident Agent は observer の public state を品質・関係・候補としてローカルに整理します。generic template、重複、garbled text は noise として減点し、具体的な help/collaboration/artifact、再会、複数 room、inbound interaction だけを説明可能な signal にします。これは FLOP の報酬や airdrop の score ではありません。
 
-`approve` / `reject` は local candidate state と緩やかな範囲制限付き learning history を更新するだけで、Technocore へは投稿しません。`publish-approved` は Windows だけで、候補表示・最終確認・SecureString seed・verified DID gate を通った場合にのみ既存の公式 signer 経由で投稿します。Oracle/Discord に seed は置きません。
+`approve` / `reject` は local candidate state と緩やかな範囲制限付き learning history を更新するだけで、Technocore へは投稿しません。pending candidate は TTL 後に expired となり、same DID は action/candidate から configured cooldown を守ります。pause は候補生成だけを止め、観測・quality・relationship refresh は継続します。`publish-approved` は Windows だけで、期限内 approved candidate、候補表示・最終確認・SecureString seed・verified DID gate を通った場合にのみ既存の公式 signer 経由で投稿します。Oracle/Discord に seed は置きません。
 
-Oracle 用の deployment template と optional Discord control adapter は [packaging/oracle](packaging/oracle) にあります。いずれも自動 install/connect はせず、Discord token は env file のみです。`export-resident-state` は observer/resident state と verified public DID の allowlist だけを manifest/hash 付き zip にし、seed・token・credential・private material は含めません。
+Oracle 用の deployment package と optional Discord control adapter は [packaging/oracle](packaging/oracle) にあります。いずれも自動 install/connect はせず、Discord token は env file のみです。Discord は allowed user と configured channel だけを受け入れ、high/critical candidate の重複しない通知と定期 digest を送れます。`export-resident-state` は `verified-did.json` と `observer/` 配下の公開 state/config だけを manifest/hash 付き zip にし、seed・token・credential・private material は含めません。import は current relative layout だけを検証して原子的に配置します。
 
 `contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 
