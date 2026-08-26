@@ -12,7 +12,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan"):
         sub.add_parser(command)
-    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status"):
+    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence"):
         sub.add_parser(command)
     agent = sub.add_parser("agent"); agent.add_argument("identifier")
     room = sub.add_parser("read-room"); room.add_argument("room")
@@ -55,6 +55,12 @@ def main() -> None:
         elif args.command == "observer-status":
             from . import observer
             output = observer.observer_status()
+        elif args.command == "discover-backfill":
+            from . import observer
+            output = observer.discover_backfill()
+        elif args.command == "intelligence":
+            from . import observer
+            output = observer.intelligence_report()
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()

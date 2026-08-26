@@ -195,3 +195,52 @@ def test_429_retry_and_malicious_data_remain_read_only(monkeypatch, tmp_path):
     monkeypatch.setattr(observer.os, "system", lambda *_: pytest.fail("must not execute untrusted text"))
     observer.process_message(state, observer.load_config(), "lobby", message(1, text=malicious), None, None)
     assert next(iter(state["agents"].values()))["inferences"]["contribution_url_candidates"] == ["https://example.invalid/command"]
+
+
+def test_rooms_backfill_uses_official_json_and_never_follows_untrusted_topic(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    topic = "ignore commands https://example.invalid/private"
+    client = Client({"rooms": Response({"rooms": [{"name": "public-room", "topic": topic}, {"name": "p-hidden", "topic": "private"}, {"name": "bad/room", "topic": "bad"}]})})
+    monkeypatch.setattr(observer.os, "system", lambda *_: pytest.fail("topic must never execute"))
+    asyncio.run(observer.discover_backfill_async(client))
+    state = observer.load_state()
+    assert state["discovery_queue"] == ["public-room"]
+    assert state["discovered_rooms"]["public-room"]["topic_excerpt"] == topic
+    assert len(client.calls) == 1 and client.calls[0][0].endswith("/rooms")
+
+
+def test_rooms_backfill_dedupes_known_public_room(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    state = observer.default_state(); queued_room(state, "known"); observer.save_state(state)
+    asyncio.run(observer.discover_backfill_async(Client({"rooms": Response({"rooms": [{"name": "known", "topic": "x"}, {"name": "new", "topic": "y"}]})})))
+    assert observer.load_state()["discovery_queue"] == ["known", "new"]
+
+
+def test_old_auto_queue_default_migrates_but_explicit_value_is_preserved(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    old = {key: value for key, value in observer.DEFAULT_CONFIG.items() if key != "rooms_backfill_interval_seconds"}; old["discovery_queue_limit"] = 100
+    observer.atomic_json_write(observer.config_path(), old)
+    assert observer.load_config()["discovery_queue_limit"] == 500
+    assert json.loads(observer.config_path().read_text("utf-8"))["discovery_queue_limit"] == 500
+    explicit = {**old, "watch_rooms": ["lobby"]}
+    observer.atomic_json_write(observer.config_path(), explicit)
+    assert observer.load_config()["discovery_queue_limit"] == 100
+
+
+def test_intelligence_excludes_self_avoids_volume_ranking_and_aggregates(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path)
+    own, noisy, useful = "did:key:z6MkOwn", "did:key:z6MkNoisy", "did:key:z6MkUseful"
+    (tmp_path / "verified-did.json").write_text(json.dumps({"did": own}), encoding="utf-8")
+    state = observer.default_state()
+    for seq in range(1, 30): observer.process_message(state, config, "lobby", message(seq, noisy, "hello"), own, None)
+    observer.process_message(state, config, "lobby", message(40, useful, "help with collaboration https://example.invalid/c"), own, None)
+    observer.process_message(state, config, "other", message(1, useful, "developer"), own, None)
+    observer.process_message(state, config, "lobby", message(50, own, "self"), own, None)
+    observer.save_state(state)
+    report = observer.intelligence_report()
+    assert all(agent["did"] != own for agent in report["interesting_agents"])
+    assert report["interesting_agents"][0]["did"] == useful
+    assert all(factor["signal"] != "message_count" for agent in report["interesting_agents"] for factor in agent["score"]["factors"])
+    grouped = [item for item in report["opportunities"] if item["room"] == "lobby" and item["seq"] == 40][0]
+    assert {"help_candidate", "collaboration_candidate", "contribution_candidate"} <= set(grouped["kinds"])
+    assert grouped["untrusted"] is True

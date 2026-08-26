@@ -24,7 +24,7 @@ from . import core
 
 SCHEMA_VERSION = 2
 CONFIG_NAME, STATE_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer.lock", "observer.log"
-DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 50, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 100, "discovery_max_attempts": 5}
+DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 50, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 500, "discovery_max_attempts": 5, "rooms_backfill_interval_seconds": 3600}
 URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.I)
 QUESTION_RE = re.compile(r"[?？]|\b(how|question|please)\b", re.I)
 HELP_RE = re.compile(r"\b(help|assist|stuck)\b", re.I)
@@ -66,13 +66,19 @@ def read_json(path: Path, *, default: dict | None = None) -> dict:
 
 def load_config() -> dict:
     if not config_path().exists(): atomic_json_write(config_path(), DEFAULT_CONFIG)
-    config = {**DEFAULT_CONFIG, **read_json(config_path())}
+    raw = read_json(config_path())
+    old_auto = {key: value for key, value in DEFAULT_CONFIG.items() if key != "rooms_backfill_interval_seconds"}
+    old_auto["discovery_queue_limit"] = 100
+    if raw == old_auto:
+        raw["discovery_queue_limit"] = 500
+        atomic_json_write(config_path(), raw)
+    config = {**DEFAULT_CONFIG, **raw}
     try:
         rooms_ok = isinstance(config["watch_rooms"], list) and all(core.validate_room(room) == room for room in config["watch_rooms"])
         mailbox_ok = config["mailbox"] is None or core.validate_room(config["mailbox"]) == config["mailbox"]
     except (KeyError, TypeError, ValueError) as error: raise RuntimeError("observer config room settings are invalid") from error
     if not rooms_ok or not mailbox_ok: raise RuntimeError("observer config room settings are invalid")
-    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20)):
+    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20), ("rooms_backfill_interval_seconds", 60, 86400)):
         if not isinstance(config.get(key), int) or not low <= config[key] <= high: raise RuntimeError(f"observer config {key} is invalid")
     intervals = config.get("room_intervals_seconds")
     if not isinstance(intervals, dict) or set(intervals) != {"lobby", "events", "mailbox", "watch"} or not all(isinstance(v, int) and 1 <= v <= 3600 for v in intervals.values()): raise RuntimeError("observer config room_intervals_seconds is invalid")
@@ -173,21 +179,23 @@ def set_success(state: dict, room: str) -> None:
     state["health"]["rooms"][room] = {"status": "ok", "at": now()}; state["health"]["current"] = "degraded" if any(v.get("status") == "error" for v in state["health"]["rooms"].values()) else "ok"
 
 
-def queue_discovered_room(state: dict, config: dict, message: dict) -> None:
-    if message.get("from") != "server": return
-    match = CREATED_ROOM_RE.fullmatch(message.get("text", ""))
-    if not match: return
-    room = match.group(1)
+def queue_public_room(state: dict, config: dict, room: str, source: str, message: dict, topic: str | None = None) -> None:
     if room.startswith("p-"): return
     try: core.validate_room(room)
     except ValueError: return
     if room in state["discovered_rooms"]: return
     if len(state["discovery_queue"]) >= config["discovery_queue_limit"]:
-        metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", "events", message, extra={"discovered_room": room, "reason": "queue_limit"})
+        metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", source, message, extra={"discovered_room": room, "reason": "queue_limit"})
         return
-    record = {"room": room, "event_seq": message["seq"], "enqueued_at": now(), "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None, "next_attempt_at": None}
+    record = {"room": room, "event_seq": message.get("seq"), "enqueued_at": now(), "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None, "next_attempt_at": None, "source": source, "topic_excerpt": excerpt(topic) if isinstance(topic, str) else "", "untrusted": True}
     state["discovery_queue"].append(room); state["discovered_rooms"][room] = record
-    emit_event(state, "new_room", "events", message, extra={"discovered_room": room})
+    emit_event(state, "new_room", source, message, extra={"discovered_room": room, "source": source})
+
+
+def queue_discovered_room(state: dict, config: dict, message: dict) -> None:
+    if message.get("from") != "server": return
+    match = CREATED_ROOM_RE.fullmatch(message.get("text", ""))
+    if match: queue_public_room(state, config, match.group(1), "events", message)
 
 
 def parse_time(value: str | None) -> datetime | None:
@@ -265,6 +273,43 @@ async def read_room(client: httpx.AsyncClient, room: str, since: int, wait: int)
     except httpx.HTTPError as error: return None, None, type(error).__name__
 
 
+async def read_rooms(client: httpx.AsyncClient) -> tuple[list[dict] | None, float | None, str | None]:
+    """Read only the server's listed public-room index; never follow room topics."""
+    try:
+        response = await client.get(f"{core.BASE_URL}/rooms", params={"format": "json", "limit": 200}, timeout=20)
+        if response.status_code == 429:
+            try: retry = max(0.0, float(response.headers.get("Retry-After", "1")))
+            except ValueError: retry = 1.0
+            return None, retry, "rate_limited"
+        response.raise_for_status()
+        payload = response.json(); rooms = payload.get("rooms", payload if isinstance(payload, list) else None)
+        return rooms if isinstance(rooms, list) else None, None, None if isinstance(rooms, list) else "invalid_response"
+    except httpx.HTTPError as error: return None, None, type(error).__name__
+
+
+async def backfill_into_state(client: httpx.AsyncClient, budget: "ReadBudget", state: dict, config: dict) -> None:
+    await budget.acquire(); rooms, retry, error = await read_rooms(client)
+    if error: set_error(state, "rooms", error, str(retry or "")); return
+    for item in rooms or []:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str): continue
+        queue_public_room(state, config, item["name"], "rooms", {"seq": None, "text": item.get("topic", "")}, item.get("topic"))
+    set_success(state, "rooms")
+
+
+async def discover_backfill_async(client: httpx.AsyncClient | None = None) -> dict:
+    with ObserverLock():
+        config, state, owned = load_config(), load_state(), client is None
+        if owned: client = httpx.AsyncClient()
+        try:
+            await backfill_into_state(client, ReadBudget(config["read_budget_per_minute"]), state, config)
+            save_state(state); return observer_status(config, state)
+        finally:
+            if owned: await client.aclose()
+
+
+def discover_backfill() -> dict: return asyncio.run(discover_backfill_async())
+
+
 async def snapshot_room(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, room: str, own_did: str | None, mailbox: str | None) -> None:
     await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), 0)
     if error: set_error(state, room, error, str(retry or "")); return
@@ -334,6 +379,13 @@ async def discovery_worker(client: httpx.AsyncClient, budget: ReadBudget, state:
         except TimeoutError: pass
 
 
+async def backfill_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        await backfill_into_state(client, budget, state, config); save_state(state)
+        try: await asyncio.wait_for(stop.wait(), timeout=config["rooms_backfill_interval_seconds"])
+        except TimeoutError: pass
+
+
 async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx.AsyncClient | None = None) -> None:
     stop = stop or asyncio.Event()
     with ObserverLock():
@@ -342,6 +394,7 @@ async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx
         try:
             tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop)) for room in observed_rooms(config)]
             tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop)))
+            tasks.append(asyncio.create_task(backfill_worker(client, budget, state, config, stop)))
             try: await asyncio.gather(*tasks)
             finally:
                 for task in tasks: task.cancel()
@@ -372,5 +425,38 @@ def get_agent(identifier: str) -> dict:
     for fp, agent in load_state()["agents"].items():
         if identifier in (fp, agent["did"]): return {"untrusted_data": True, "agent": agent}
     raise RuntimeError("agent was not found")
+
+
+def intelligence_report() -> dict:
+    """Summarize local observer facts only; this function performs no network access."""
+    state, own_did = load_state(), verified_did()
+    rooms = state["discovered_rooms"]
+    discovery = {status: sum(1 for record in rooms.values() if record.get("sample_status") == status) for status in ("sampled", "queued", "dropped")}
+    discovery["retrying"] = sum(1 for record in rooms.values() if record.get("sample_status") == "queued" and record.get("last_error"))
+    drop_reasons: dict[str, int] = {}
+    for record in state["opportunities"]:
+        if record["kind"] == "discovery_queue_drop": drop_reasons[record.get("reason", "unknown")] = drop_reasons.get(record.get("reason", "unknown"), 0) + 1
+    grouped: dict[tuple, dict] = {}
+    reportable = {"question_candidate", "help_candidate", "collaboration_candidate", "contribution_candidate", "inbound_mailbox_message", "new_did", "returning_did", "new_room", "message_gap"}
+    for record in state["opportunities"]:
+        if record["kind"] not in reportable: continue
+        key = (record["room"], record.get("seq"), record.get("did"))
+        group = grouped.setdefault(key, {"room": record["room"], "seq": record.get("seq"), "did": record.get("did"), "kinds": [], "text_excerpt": record["text_excerpt"], "untrusted": True})
+        if record["kind"] not in group["kinds"]: group["kinds"].append(record["kind"])
+    signals_by_did: dict[str, set[str]] = {}
+    for group in grouped.values():
+        if group["did"] and group["did"] != own_did: signals_by_did.setdefault(group["did"], set()).update(group["kinds"])
+    agents = []
+    for agent in state["agents"].values():
+        if agent["did"] == own_did: continue
+        facts, inference, factors = agent["facts"], agent["inferences"], []
+        if len(facts["rooms"]) > 1: factors.append({"signal": "multiple_rooms", "fact": len(facts["rooms"])})
+        if inference["repeat_seen"]: factors.append({"signal": "returning_encounter", "fact": True})
+        for kind, label in (("collaboration_candidate", "collaboration_candidate"), ("help_candidate", "help_interaction"), ("contribution_candidate", "contribution_candidate"), ("inbound_mailbox_message", "inbound_interaction")):
+            if kind in signals_by_did.get(agent["did"], set()): factors.append({"signal": label, "fact": True})
+        if inference["role_candidates"]: factors.append({"signal": "role_evidence", "inference": inference["role_candidates"]})
+        agents.append({"did": agent["did"], "fingerprint": agent["fingerprint"], "facts": {"rooms": facts["rooms"], "first_seen": facts["first_seen"], "last_seen": facts["last_seen"], "interaction_with_us": facts["interaction_with_us"]}, "inferences": {"roles": inference["role_candidates"], "contribution_url_candidates": inference["contribution_url_candidates"]}, "score": {"value": len(factors), "factors": factors}, "untrusted": True})
+    agents.sort(key=lambda item: (-item["score"]["value"], item["fingerprint"]))
+    return {"read_only": True, "health": state["health"], "facts": {"observed_unique_external_dids": state["metrics"]["unique_dids_discovered"], "rooms_observed": state["metrics"]["rooms_observed"], "discovery": {**discovery, "drop_reasons": drop_reasons}, "returning_dids": state["metrics"]["unique_returning_dids"], "inbound_mailbox": state["metrics"]["inbound_mailbox_messages"], "questions": state["metrics"]["questions_detected"], "help": state["metrics"]["help_candidates"], "collaboration": state["metrics"]["collab_candidates"], "contribution": state["metrics"]["contribution_candidates"], "message_gaps": state["metrics"]["message_gaps"]}, "opportunities": list(grouped.values())[-20:], "interesting_agents": agents[:20]}
 def opportunities() -> dict:
     state = load_state(); return {"untrusted_data": True, "opportunities": state["opportunities"], "metrics": state["metrics"]}

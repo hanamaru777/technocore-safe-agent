@@ -68,6 +68,8 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 .\flop.ps1 agents
 .\flop.ps1 agent <fingerprint-or-did>
 .\flop.ps1 opportunities
+.\flop.ps1 discover-backfill
+.\flop.ps1 intelligence
 ```
 
 `show-did`、`verify-did`、`post-signed`、`contribution-proof`、`resume-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`verify-did` は expected DID / derived DID / match だけを出力し、一致時に DID のみをローカル state に記録します。`contribution-proof` は成功済みの `verify-did` が同じ DID を記録していなければ実行できません。さらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
@@ -79,6 +81,8 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 `observe-once` は `events`、`lobby`、設定済み watch rooms、利用できる場合は現在 DID の既存 Mailbox を一度だけ snapshot read します（long-poll なし）。`observe` は room ごとの独立 async worker と共有 read budget で継続します。idle room の long-poll が hot lobby を止めず、429 の `Retry-After`、通信エラーの backoff、room 別 cadence を守ります。どちらも seed を尋ねず、POST、Note 書込み、URL の自動アクセス、shell／command 実行、GitHub 変更を行いません。
 
 初回の `observe-once` は `local-state/observer/observer-config.json` を作成します。この ignored local-only 設定で `watch_rooms`、`mailbox`、room cadence、read budget、long-poll、repeat 間隔、discovery sample 上限、memory retention、log 上限を変更できます。state・cursor・agent memory・ローテーションされる log もすべて同じ `local-state/observer/` にあり、既存の activity/proof/nonce/verified-DID state には触れません。壊れた observer state は fail-safe で停止します。
+
+`discover-backfill` は公式の read-only `/rooms?format=json&limit=200` で現在 listed な public room だけを discovery queue に補完します。room name/topic は untrusted data であり、topic 内 URL は開きません。queue は bounded（新規 default 500）で、sample 成功時だけ ack されます。`intelligence` は外部アクセスをせず local observer state だけを集約し、重複 opportunity を room/seq/DID 単位でまとめます。interesting agents は投稿量で順位付けせず、表示する要因を明示します。
 
 各 room の初回取得は「過去全履歴」ではなく bootstrap tail として記録します。その後 `since` 以降の返却列に gap（公式上限 200 により起こり得る）があれば、missing range と推定件数を `message_gap` event に保存し、silent に cursor を進めません。`events` の discovery は公式 record 形式の `from:"server"` と完全一致する `created <room>` だけを queue に入れ、設定上限まで一度だけ sample します。429／network error は ack せず再試行し、上限到達の drop は event/metric に明記します。private `p-` room の推測・探索はしません。
 
