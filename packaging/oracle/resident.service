@@ -1,0 +1,27 @@
+[Unit]
+Description=technocore-safe-agent resident observer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=technocore
+WorkingDirectory=/opt/technocore-safe-agent
+Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
+ExecStart=/usr/local/bin/uv run --project /opt/technocore-safe-agent python -m flop_agent.cli observe
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/technocore-safe-agent
+
+[Install]
+WantedBy=multi-user.target

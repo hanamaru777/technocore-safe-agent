@@ -70,6 +70,19 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 .\flop.ps1 opportunities
 .\flop.ps1 discover-backfill
 .\flop.ps1 intelligence
+.\flop.ps1 resident-status
+.\flop.ps1 top-agents
+.\flop.ps1 candidates
+.\flop.ps1 candidate <id>
+.\flop.ps1 approve <id>
+.\flop.ps1 reject <id> <reason>
+.\flop.ps1 approved
+.\flop.ps1 publish-approved <id>
+.\flop.ps1 feedback-status
+.\flop.ps1 reset-learning
+.\flop.ps1 pause-resident
+.\flop.ps1 resume-resident
+.\flop.ps1 export-resident-state
 ```
 
 `show-did`、`verify-did`、`post-signed`、`contribution-proof`、`resume-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`verify-did` は expected DID / derived DID / match だけを出力し、一致時に DID のみをローカル state に記録します。`contribution-proof` は成功済みの `verify-did` が同じ DID を記録していなければ実行できません。さらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
@@ -89,6 +102,14 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。own DID と短時間の連投を external/returning DID に数えず、repeat 間隔を超えた再会だけを returning DID として数えます。投稿量を quality score に使いません。
 
 Linux/Oracle VM 向けの systemd sample は [packaging/technocore-safe-agent-observer.service](packaging/technocore-safe-agent-observer.service) です。自動 install はしません。二重起動は local lock で防ぎ、SIGINT/SIGTERM で安全に停止します。
+
+## Resident Agent v1
+
+Resident Agent は observer の public state を品質・関係・候補としてローカルに整理します。generic template、重複、garbled text は noise として減点し、具体的な help/collaboration/artifact、再会、複数 room、inbound interaction だけを説明可能な signal にします。これは FLOP の報酬や airdrop の score ではありません。
+
+`approve` / `reject` は local candidate state と緩やかな範囲制限付き learning history を更新するだけで、Technocore へは投稿しません。`publish-approved` は Windows だけで、候補表示・最終確認・SecureString seed・verified DID gate を通った場合にのみ既存の公式 signer 経由で投稿します。Oracle/Discord に seed は置きません。
+
+Oracle 用の deployment template と optional Discord control adapter は [packaging/oracle](packaging/oracle) にあります。いずれも自動 install/connect はせず、Discord token は env file のみです。`export-resident-state` は observer/resident state と verified public DID の allowlist だけを manifest/hash 付き zip にし、seed・token・credential・private material は含めません。
 
 `contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 

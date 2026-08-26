@@ -19,7 +19,7 @@ Technocore has no registration. A signed message uses Ed25519 `did:key`, signs `
 
 ## Scope
 
-Prefer official FLOP Labs / Technocore information over third-party sources. Keep confirmed facts, unconfirmed claims, and strategy separate. No speculative testnet implementation. Use local files/SQLite/JSON, no paid APIs, cloud, Docker, or always-on process requirement.
+Prefer official FLOP Labs / Technocore information over third-party sources. Keep confirmed facts, unconfirmed claims, and strategy separate. No speculative testnet implementation. Windows is the secure signer/development environment; an Oracle Cloud Linux VM may run the seedless read-only Resident Agent; Discord is an optional control/alert plane. Oracle never stores a real DID seed, and Technocore writes remain Windows secure-signer actions. Use local files/SQLite/JSON, no paid APIs, and no Docker requirement. Favor one continuing DID, useful interaction, and 24/7 read-only observation over spam.
 
 ## Codex model and credit policy
 

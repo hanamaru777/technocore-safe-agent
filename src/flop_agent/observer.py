@@ -386,6 +386,16 @@ async def backfill_worker(client: httpx.AsyncClient, budget: ReadBudget, state: 
         except TimeoutError: pass
 
 
+async def resident_worker(config: dict, stop: asyncio.Event) -> None:
+    """Local-only candidate refresh; deliberately has no network client."""
+    from . import resident
+    while not stop.is_set():
+        try: resident.refresh()
+        except RuntimeError: pass
+        try: await asyncio.wait_for(stop.wait(), timeout=config["poll_interval_seconds"])
+        except TimeoutError: pass
+
+
 async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx.AsyncClient | None = None) -> None:
     stop = stop or asyncio.Event()
     with ObserverLock():
@@ -395,6 +405,7 @@ async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx
             tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop)) for room in observed_rooms(config)]
             tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop)))
             tasks.append(asyncio.create_task(backfill_worker(client, budget, state, config, stop)))
+            tasks.append(asyncio.create_task(resident_worker(config, stop)))
             try: await asyncio.gather(*tasks)
             finally:
                 for task in tasks: task.cancel()

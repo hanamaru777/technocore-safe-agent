@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)] [string]$Command,
-    [Parameter(Position = 1)] [string]$Room
+    [Parameter(Position = 1)] [string]$Room,
+    [Parameter(Position = 2)] [string]$Value
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,7 +64,19 @@ try {
         $plan | ConvertTo-Json -Depth 8
         if ((Read-Host 'Resume this existing Proof? (yes/no)') -cne 'yes') { throw 'Resume cancelled' }
         & $uv run --project $rootPath python -m flop_agent.cli resume-proof --plan-id $Room --confirm
-    } elseif ($Command -in @('read-room', 'read-new', 'agent')) {
+    } elseif ($Command -eq 'publish-approved') {
+        if (-not $Room) { throw 'Candidate ID is required' }
+        & $uv run --project $rootPath python -m flop_agent.cli candidate $Room
+        if ($LASTEXITCODE -ne 0) { throw 'Candidate could not be read' }
+        if ((Read-Host 'Publish this approved candidate? (yes/no)') -cne 'yes') { throw 'Publish cancelled' }
+        $secure = Read-Host 'Existing DID seed (hidden)' -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        $env:SIGN_SEED = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        & $uv run --project $rootPath python -m flop_agent.cli publish-approved $Room --confirm
+    } elseif ($Command -eq 'reject') {
+        if (-not $Room -or -not $Value) { throw 'Candidate ID and rejection reason are required' }
+        & $uv run --project $rootPath python -m flop_agent.cli reject $Room $Value
+    } elseif ($Command -in @('read-room', 'read-new', 'agent', 'candidate', 'approve')) {
         if (-not $Room) { throw 'Room is required' }
         & $uv run --project $rootPath python -m flop_agent.cli $Command $Room
     } else {

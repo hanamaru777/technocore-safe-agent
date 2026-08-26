@@ -18,7 +18,7 @@ from urllib.parse import quote
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-STATE = ROOT / "local-state"
+STATE = Path(os.environ.get("FLOP_STATE_DIR", str(ROOT / "local-state"))).resolve()
 BASE_URL = "https://technocore.chat"
 UPSTREAM_COMMIT = "53079408c1581f46eff6acbf6e2eada289d4332c"
 SIGNER_SHA256 = "d093e89c16671a5ada8d392133e34d4433155545bade7e23f4036a1da0da4f7f"

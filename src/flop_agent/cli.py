@@ -12,9 +12,13 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan"):
         sub.add_parser(command)
-    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence"):
+    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state"):
         sub.add_parser(command)
     agent = sub.add_parser("agent"); agent.add_argument("identifier")
+    resident_candidate = sub.add_parser("candidate"); resident_candidate.add_argument("candidate_id")
+    approve = sub.add_parser("approve"); approve.add_argument("candidate_id")
+    reject = sub.add_parser("reject"); reject.add_argument("candidate_id"); reject.add_argument("reason")
+    publish = sub.add_parser("publish-approved"); publish.add_argument("candidate_id"); publish.add_argument("--confirm", action="store_true")
     room = sub.add_parser("read-room"); room.add_argument("room")
     new = sub.add_parser("read-new"); new.add_argument("room")
     post = sub.add_parser("post-signed"); post.add_argument("room"); post.add_argument("--text", required=True); post.add_argument("--confirm", action="store_true")
@@ -61,6 +65,21 @@ def main() -> None:
         elif args.command == "intelligence":
             from . import observer
             output = observer.intelligence_report()
+        elif args.command in {"resident-status", "top-agents", "candidates", "candidate", "approve", "reject", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "publish-approved"}:
+            from . import observer, resident
+            if args.command == "resident-status": output = resident.refresh()
+            elif args.command == "top-agents": output = {"agents": resident.refresh() and observer.intelligence_report()["interesting_agents"]}
+            elif args.command == "candidates": output = resident.list_candidates()
+            elif args.command == "candidate": output = resident.candidate(args.candidate_id)
+            elif args.command == "approve": output = resident.feedback(args.candidate_id, "approved")
+            elif args.command == "reject": output = resident.feedback(args.candidate_id, "rejected", args.reason)
+            elif args.command == "feedback-status": output = resident.feedback_status()
+            elif args.command == "reset-learning": output = resident.reset_learning()
+            elif args.command == "pause-resident": output = resident.pause(True)
+            elif args.command == "resume-resident": output = resident.pause(False)
+            elif args.command == "approved": output = {"candidates": [item for item in resident.list_candidates()["candidates"] if item["status"] == "approved"]}
+            elif args.command == "export-resident-state": output = {"export_path": resident.export_state()}
+            else: output = resident.publish_approved(args.candidate_id, args.confirm)
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()
