@@ -13,6 +13,7 @@ Phase 2 Useful Agent hardening is complete before real public writing:
 - Contribution Signed Proof and local Public Proof export
 - preflight for doctor, upstream signer/blob integrity, activity log, and unauthenticated Contribution URL
 - current and full Git-history secret scanning
+- verified-DID gate before any contribution-proof execution
 
 No real Technocore post or Note write has been performed by this implementation work. Phase 3 public Contribution execution requires explicit user approval for each reviewed operation.
 

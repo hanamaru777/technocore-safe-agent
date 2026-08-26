@@ -41,12 +41,18 @@ Technocore の room は永続保管向けではありません。通常 Note は
    .\flop.ps1 doctor
    .\flop.ps1 history-secret-scan
    ```
+4. Proof を作成する前に、既存 DID を照合します。expected DID は公開情報として入力します。
+
+   ```powershell
+   .\flop.ps1 verify-did
+   ```
 
 ## コマンド
 
 ```powershell
 .\flop.ps1 status
 .\flop.ps1 show-did
+.\flop.ps1 verify-did
 .\flop.ps1 read-room lobby
 .\flop.ps1 read-new lobby
 .\flop.ps1 activity-log
@@ -55,7 +61,7 @@ Technocore の room は永続保管向けではありません。通常 Note は
 .\flop.ps1 contribution-proof lobby
 ```
 
-`show-did`、`post-signed`、`contribution-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`contribution-proof` ではさらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
+`show-did`、`verify-did`、`post-signed`、`contribution-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`verify-did` は expected DID / derived DID / match だけを出力し、一致時に DID のみをローカル state に記録します。`contribution-proof` は成功済みの `verify-did` が同じ DID を記録していなければ実行できません。さらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
 
 `contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 

@@ -100,6 +100,7 @@ def test_sync_official_does_not_confuse_raw_line_endings_with_blob_change(monkey
 def test_proof_plan_uses_existing_did_and_sharded_profile(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkExisting")
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
     monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
     plan = core.create_proof_plan("https://example.com/contribution")
     shard, key, fingerprint = core.did_note_location("did:key:z6MkExisting")
@@ -118,6 +119,7 @@ def test_proof_bundle_needs_confirmation_before_any_write(monkeypatch, tmp_path)
 def test_proof_bundle_records_public_evidence_without_network_in_test(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkExisting")
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
     monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
     plan = core.create_proof_plan("https://example.com/contribution", "lobby")
     written_notes, actions = [], []
@@ -190,3 +192,35 @@ def test_public_contribution_url_preflight_rejects_nonpublic_response(monkeypatc
     monkeypatch.setattr(core.httpx, "get", lambda *args, **kwargs: Response())
     with pytest.raises(RuntimeError, match="公開アクセス"):
         core.public_contribution_url_preflight("https://example.com/private")
+
+
+def test_verify_did_persists_only_matching_public_did(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkExisting")
+    result = core.verify_did("did:key:z6MkExisting")
+    assert result == {"expected_did": "did:key:z6MkExisting", "derived_did": "did:key:z6MkExisting", "match": True}
+    stored = (tmp_path / "verified-did.json").read_text("utf-8")
+    assert "did:key:z6MkExisting" in stored
+    assert "seed" not in stored.lower()
+
+
+def test_verify_did_mismatch_does_not_authorize_proof(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkActual")
+    assert core.verify_did("did:key:z6MkExpected")["match"] is False
+    with pytest.raises(RuntimeError, match="verify-did"):
+        core.require_verified_did("did:key:z6MkActual")
+
+
+def test_verified_did_guard_rejects_different_signer(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    (tmp_path / "verified-did.json").write_text('{"did":"did:key:z6MkOne"}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="does not match"):
+        core.require_verified_did("did:key:z6MkTwo")
+
+
+def test_powershell_entrypoint_is_ascii_and_ps51_safe():
+    script = (core.ROOT / "flop.ps1").read_bytes()
+    assert all(byte < 128 for byte in script)
+    text = script.decode("ascii")
+    assert "??" not in text and "?." not in text and "-Parallel" not in text

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -77,6 +78,33 @@ def current_did() -> str:
     if len(lines) != 1 or not lines[0].startswith("did:key:z6Mk"):
         raise RuntimeError("公式 signer から有効な DID を取得できませんでした")
     return lines[0]
+
+
+def verified_did_path() -> Path:
+    STATE.mkdir(exist_ok=True)
+    return STATE / "verified-did.json"
+
+
+def verify_did(expected_did: str) -> dict:
+    """Derive only through the official signer and persist no secret material."""
+    derived_did = current_did()
+    match = hmac.compare_digest(expected_did, derived_did)
+    result = {"expected_did": expected_did, "derived_did": derived_did, "match": match}
+    if match:
+        verified_did_path().write_text(json.dumps({"did": derived_did, "verified_at": datetime.now(UTC).isoformat()}), encoding="utf-8")
+    return result
+
+
+def require_verified_did(did: str) -> None:
+    path = verified_did_path()
+    if not path.exists():
+        raise RuntimeError("verify-did must succeed before contribution-proof can run")
+    try:
+        verified = json.loads(path.read_text("utf-8")).get("did", "")
+    except json.JSONDecodeError as error:
+        raise RuntimeError("verified DID state is invalid; run verify-did again") from error
+    if not hmac.compare_digest(verified, did):
+        raise RuntimeError("verified DID does not match the current signer DID")
 
 
 def make_nonce(room: str, did: str) -> str:
@@ -240,6 +268,7 @@ def create_proof_plan(contribution_url: str, room: str = "lobby") -> dict:
     validate_room(room)
     contribution_url = validate_contribution_url(contribution_url)
     did = current_did()
+    require_verified_did(did)
     shard, key, fingerprint = did_note_location(did)
     plan = {"plan_id": secrets.token_hex(8), "did": did, "fingerprint": fingerprint, "shard": shard, "key": key, "room": room, "mailbox": f"mb-p-{secrets.token_hex(16)}", "contribution_url": contribution_url, "git_commit_sha": git_commit_sha(), "created_at": datetime.now(UTC).isoformat(), "notice": CONTRIBUTION_NOTICE, "checkpoints": {}}
     save_proof_plan(plan)
@@ -363,6 +392,7 @@ def create_proof_bundle(plan_id: str, confirm: bool) -> dict:
         raise RuntimeError("公開 Proof 作成はユーザー確認なしでは実行しません")
     plan = load_proof_plan(plan_id)
     did = current_did()
+    require_verified_did(did)
     if did != plan["did"] or git_commit_sha() != plan["git_commit_sha"]:
         raise RuntimeError("DID または Git commit が plan と異なります。新しい proof plan を作成してください")
     observed = proof_preflight(plan)

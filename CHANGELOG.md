@@ -14,3 +14,4 @@
 
 - Added safe, confirmed useful-contribution proof planning and export foundation.
 - Added resumable proof checkpoints, if-absent Notes, contribution pointer, preflight, and full-history secret scan.
+- Added ASCII-only Windows PowerShell entrypoint and verified-DID proof gate.

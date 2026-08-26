@@ -6,8 +6,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $rootPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$needsSeed = $Command -in @('show-did', 'post-signed', 'contribution-proof')
+$needsSeed = $Command -in @('show-did', 'verify-did', 'post-signed', 'contribution-proof')
 $bstr = [IntPtr]::Zero
+$exitCode = 0
+$expectedDid = $null
 $previousPythonPath = $env:PYTHONPATH
 $previousUvLinkMode = $env:UV_LINK_MODE
 $env:PYTHONPATH = Join-Path $rootPath 'src'
@@ -18,37 +20,42 @@ function Resolve-Uv {
     if ($fromPath) { return $fromPath.Source }
     $fallback = Join-Path $HOME '.local\bin\uv.exe'
     if (Test-Path -LiteralPath $fallback -PathType Leaf) { return $fallback }
-    throw 'uv が PATH または $HOME\.local\bin\uv.exe に見つかりません'
+    throw 'uv was not found on PATH or in $HOME\.local\bin\uv.exe'
 }
 
-$uv = Resolve-Uv
-
 try {
+    $uv = Resolve-Uv
+    if ($Command -eq 'verify-did') {
+        $expectedDid = Read-Host 'Expected DID (public)'
+    }
     if ($needsSeed) {
-        $secure = Read-Host '既存DIDのseed（画面表示されません）' -AsSecureString
+        $secure = Read-Host 'Existing DID seed (hidden)' -AsSecureString
         $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
         $env:SIGN_SEED = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
     }
-    if ($Command -eq 'post-signed') {
-        if (-not $Room) { throw 'room を指定してください: .\flop.ps1 post-signed lobby' }
-        $text = Read-Host '投稿本文'
+    if ($Command -eq 'verify-did') {
+        & $uv run --project $rootPath python -m flop_agent.cli verify-did --expected-did $expectedDid
+        if ($LASTEXITCODE -ne 0) { $exitCode = 1 }
+    } elseif ($Command -eq 'post-signed') {
+        if (-not $Room) { throw 'Room is required: .\flop.ps1 post-signed lobby' }
+        $text = Read-Host 'Post text'
         Write-Host "Room: $Room"
         & $uv run --project $rootPath python -m flop_agent.cli show-did
-        Write-Host "本文: $text"
-        if ((Read-Host 'Technocoreへ送信しますか? (yes/no)') -cne 'yes') { throw '送信を中止しました' }
+        Write-Host "Text: $text"
+        if ((Read-Host 'Send to Technocore? (yes/no)') -cne 'yes') { throw 'Send cancelled' }
         & $uv run --project $rootPath python -m flop_agent.cli post-signed $Room --text $text --confirm
     } elseif ($Command -eq 'contribution-proof') {
-        $contributionUrl = Read-Host '公開 Contribution URL（https://...）'
+        $contributionUrl = Read-Host 'Public Contribution URL (https://...)'
         $proofRoom = if ($Room) { $Room } else { 'lobby' }
         $planJson = & $uv run --project $rootPath python -m flop_agent.cli proof-plan --contribution-url $contributionUrl --room $proofRoom
-        if ($LASTEXITCODE -ne 0) { throw 'proof plan の作成に失敗しました' }
+        if ($LASTEXITCODE -ne 0) { throw 'Proof plan creation failed. Run verify-did successfully first.' }
         $plan = $planJson | ConvertFrom-Json
-        Write-Host '以下の Proof を1回だけ作成します。TechnocoreのNoteは公開・world-writableです。'
+        Write-Host 'The following Proof will be created once. Technocore Notes are public and world-writable.'
         $plan | ConvertTo-Json -Depth 5
-        if ((Read-Host 'この内容で Technocore へ書き込みますか? (yes/no)') -cne 'yes') { throw '書き込みを中止しました' }
+        if ((Read-Host 'Write this Proof to Technocore? (yes/no)') -cne 'yes') { throw 'Write cancelled' }
         & $uv run --project $rootPath python -m flop_agent.cli create-proof --plan-id $plan.plan_id --confirm
     } elseif ($Command -in @('read-room', 'read-new')) {
-        if (-not $Room) { throw 'room を指定してください' }
+        if (-not $Room) { throw 'Room is required' }
         & $uv run --project $rootPath python -m flop_agent.cli $Command $Room
     } else {
         & $uv run --project $rootPath python -m flop_agent.cli $Command
@@ -59,3 +66,5 @@ try {
     if ($null -eq $previousUvLinkMode) { Remove-Item Env:UV_LINK_MODE -ErrorAction SilentlyContinue } else { $env:UV_LINK_MODE = $previousUvLinkMode }
     if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
+
+if ($exitCode -ne 0) { exit $exitCode }
