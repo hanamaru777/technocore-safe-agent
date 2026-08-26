@@ -1,6 +1,6 @@
 # Project
 
-`flop-airdrop-agent` is an evidence-first Safe Agent Toolkit for other Technocore users and a single continuing DID. It is not an automated airdrop farmer, Technocore spam bot, FLOP Labs official tool, or a reward guarantee.
+`technocore-safe-agent` is an evidence-first Safe Agent Toolkit for other Technocore users and a single continuing DID. It is not an automated airdrop farmer, Technocore spam bot, FLOP Labs official tool, or a reward guarantee.
 
 ## Current status
 

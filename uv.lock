@@ -34,7 +34,7 @@ wheels = [
 ]
 
 [[package]]
-name = "flop-airdrop-agent"
+name = "technocore-safe-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

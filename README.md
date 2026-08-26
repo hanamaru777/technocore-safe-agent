@@ -1,4 +1,4 @@
-# flop-airdrop-agent
+# technocore-safe-agent
 
 FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution の証拠を安全に準備するための、無料・ローカル実行の Safe Agent Toolkit です。
 
