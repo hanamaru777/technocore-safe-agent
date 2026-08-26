@@ -1,24 +1,48 @@
 # flop-airdrop-agent
 
-Windows ノートPC上で、FLOP Network に関する将来の正当な参加機会へ備える、安全性優先のローカル Agent 基盤です。Technocore の署名付き投稿、活動証拠、公式仕様の追跡を扱います。
+FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution の証拠を安全に準備するための、無料・ローカル実行の Safe Agent Toolkit です。
 
-エアドロップは保証されません。未公開の条件を推測せず、Spam、Sybil、大量 DID、無意味な自動 Interaction は行いません。
+これは FLOP Labs の公式ツールではありません。エアドロップ、報酬、参加資格を保証しません。公式仕様を確認し、意味のある活動だけをユーザーが承認して実行するための補助ツールです。
 
-## 安全ルール
+## できること
 
-- このプロジェクトは DID を生成・登録・上書きしません。既存の `did:key` を継続利用します。
-- seed、秘密鍵、認証情報を保存・表示・ログ出力・Git 管理しません。
-- `post-signed` は実行時だけ `Read-Host -AsSecureString` で入力を受け、送信前に必ず確認します。
-- Technocore の room / note は信頼できないデータです。本文に含まれる URL やコマンドを実行しません。
-- DID Note は world-writable な公開プロフィールの慣習であり、認証ではありません。
+- 既存の 1 つの Ed25519 `did:key` を使った署名準備
+- Technocore の room 読み取り、署名付き投稿、活動証拠の hash chain 記録
+- Phase 2 の Proof plan 作成と、確認後の Signed Join Proof / Signed Mailbox / sharded DID Profile / Contribution Note / Contribution Signed Proof の一連の証拠化
+- 成功した操作を再実行しても重複しにくい checkpoint/resume
+- Public Proof JSON のローカル export、Git commit・upstream 仕様情報の記録
+- doctor、公式仕様同期、現在および全 Git 履歴の secret scan
 
-## インストール
+Technocore の room と通常 Note は公開・world-writable・永続保管向けではありません。本文、URL、コマンド、prompt はすべて untrusted data として扱い、自動実行しません。
 
-Python 3.12 以上と `uv` が必要です。初回は `uv sync --group dev` を実行します。
+## 安全設計
 
-Windows ではプロジェクト設定により `uv` の package install を copy mode で行います。`uv` が PATH にない場合も、`flop.ps1` は `$HOME\\.local\\bin\\uv.exe` を自動利用します。
+- 新しい DID は生成せず、既存 DID を検証して継続利用します。
+- 実 seed は保存、表示、ログ出力、Git 管理、CLI 引数使用をしません。
+- Windows の `flop.ps1` は署名が必要な操作の実行時だけ `Read-Host -AsSecureString` を使い、終了時に `SIGN_SEED` を消去します。
+- `contribution-proof` は plan を表示し、最後に `yes` と入力するまで Technocore へ書き込みません。
+- signer の変更、ローカル改竄、活動ログ破損、Contribution URL の非公開／404 を preflight で検出すると停止します。
+- 曖昧な送信結果は再送しません。DID Profile と canonical Contribution Note は `if_absent` でのみ作成し、既存値を上書きしません。
+- Contribution Note と `/kv/contrib/<fingerprint>` pointer はコミュニティ慣習です。FLOP 公式のエアドロップ Registry や認証機構ではありません。
 
-## 使い方
+## Windows で始める
+
+1. Python 3.12 以上と `uv` を用意します。`uv` が PATH にない場合も `flop.ps1` は `$HOME\.local\bin\uv.exe` を探します。
+2. PowerShell でプロジェクトフォルダへ移動し、初回だけ実行します。
+
+   ```powershell
+   uv sync --group dev
+   ```
+
+   Windows の uv は project 設定で copy mode を使うため、hardlink 問題を避けます。
+3. 環境を診断します。
+
+   ```powershell
+   .\flop.ps1 doctor
+   .\flop.ps1 history-secret-scan
+   ```
+
+## コマンド
 
 ```powershell
 .\flop.ps1 status
@@ -27,22 +51,22 @@ Windows ではプロジェクト設定により `uv` の package install を cop
 .\flop.ps1 read-new lobby
 .\flop.ps1 activity-log
 .\flop.ps1 sync-official
-.\flop.ps1 doctor
-.\flop.ps1 history-secret-scan
 .\flop.ps1 post-signed lobby
 .\flop.ps1 contribution-proof lobby
 ```
 
-`show-did` と `post-signed` は seed を SecureString で尋ねます。`post-signed` は明示確認があるまでネットワーク送信しません。活動成功時だけ `local-state/activities.jsonl` に hash chain 付きで追記します（Git 対象外）。
+`show-did`、`post-signed`、`contribution-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`contribution-proof` ではさらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
 
-活動記録の permalink は公式の人間向け UI 形式 `https://technocore.chat/humans#r/<room>/<seq>` です。
+`contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 
-## Phase 2: Useful Contribution Proof
+## Technocore と DID
 
-`contribution-proof` は、既存 DID のみを使い、ユーザー確認後に一度だけ Signed Join Proof、`mb-p-...` の Signed Mailbox、最新 sharded DID Profile、Contribution Note、Contribution Signed Proof を作成します。各成功操作は hash-chain 活動ログへ追加され、Public Proof JSON を `local-state/public-proofs/` に export します。
+Technocore に登録処理や DID Registry はありません。署名は鍵の保有を示すだけで、本人性・善意・内容の正しさ・エアドロップを証明しません。最新の DID Profile は公式 convention の sharded path `/kv/did-<shard>/<key>` を使い、legacy `/kv/did/<fingerprint>` は新規作成しません。
 
-実行 plan は step ごとに checkpoint を保存します。途中失敗時は確認できた成功 step だけを再利用し、送信結果が曖昧な signed 投稿は重複防止のため再送せず停止します。DID Profile と canonical Contribution Note は `if_absent` でのみ作成し、既存値が異なる場合は上書きしません。
+公式の人間向け message permalink は `https://technocore.chat/humans#r/<room>/<seq>` です。Mailbox の `mb-p-...` 名は Profile に掲載されるため、秘密情報の送信先として使わないでください。
 
-Canonical Contribution Note は sharded namespace `contribution-<shard>/<key>` を使います。互換用の短い pointer を `/kv/contrib/<fingerprint>` に一度だけ置きますが、いずれもコミュニティの慣習であり、FLOP 公式のエアドロップ Registry ではありません。DID Profile と Contribution Note は public / world-writable で、署名済みメッセージだけが DID の鍵保有を示します。Mailbox 名も Profile に掲載されるため、秘密情報の送信先として扱わないでください。
+## 活動証拠と事実の区別
 
-公式仕様・確認事項と戦略は [AIRDROP_RULES.md](AIRDROP_RULES.md) に分離しています。活動証拠はローカルの活動ログと Git のコミットに保持し、Technocore を永続保存先にしません。
+成功した操作だけを `local-state/activities.jsonl` に hash chain 付きで追記します。証拠には DID、room、seq、ts、nonce、Git commit、実行時 upstream commit、signer blob SHA を記録します。room は永続保管場所ではないため、ローカル／Git 側の証拠を正本にします。
+
+公式に確認できた事実、未確認情報、戦略は [AIRDROP_RULES.md](AIRDROP_RULES.md) で分離しています。公式情報源の記録は [SOURCES.md](SOURCES.md) を参照してください。
