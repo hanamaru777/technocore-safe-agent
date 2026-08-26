@@ -12,6 +12,9 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan"):
         sub.add_parser(command)
+    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status"):
+        sub.add_parser(command)
+    agent = sub.add_parser("agent"); agent.add_argument("identifier")
     room = sub.add_parser("read-room"); room.add_argument("room")
     new = sub.add_parser("read-new"); new.add_argument("room")
     post = sub.add_parser("post-signed"); post.add_argument("room"); post.add_argument("--text", required=True); post.add_argument("--confirm", action="store_true")
@@ -34,6 +37,24 @@ def main() -> None:
         elif args.command == "create-proof": output = core.create_proof_bundle(args.plan_id, args.confirm)
         elif args.command == "resume-proof": output = core.resume_proof_bundle(args.plan_id, args.confirm)
         elif args.command == "show-proof-plan": output = core.show_proof_plan(args.plan_id)
+        elif args.command == "observe":
+            from . import observer
+            observer.observe_forever(); return
+        elif args.command == "observe-once":
+            from . import observer
+            output = observer.observe_once()
+        elif args.command == "agents":
+            from . import observer
+            output = observer.list_agents()
+        elif args.command == "agent":
+            from . import observer
+            output = observer.get_agent(args.identifier)
+        elif args.command == "opportunities":
+            from . import observer
+            output = observer.opportunities()
+        elif args.command == "observer-status":
+            from . import observer
+            output = observer.observer_status()
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()

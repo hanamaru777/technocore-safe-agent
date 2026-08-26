@@ -63,7 +63,7 @@ try {
         $plan | ConvertTo-Json -Depth 8
         if ((Read-Host 'Resume this existing Proof? (yes/no)') -cne 'yes') { throw 'Resume cancelled' }
         & $uv run --project $rootPath python -m flop_agent.cli resume-proof --plan-id $Room --confirm
-    } elseif ($Command -in @('read-room', 'read-new')) {
+    } elseif ($Command -in @('read-room', 'read-new', 'agent')) {
         if (-not $Room) { throw 'Room is required' }
         & $uv run --project $rootPath python -m flop_agent.cli $Command $Room
     } else {

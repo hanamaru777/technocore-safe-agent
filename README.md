@@ -12,6 +12,7 @@ FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution
 - 成功した操作を再実行しても重複しにくい checkpoint/resume
 - Public Proof JSON のローカル export、Git commit・upstream 仕様情報の記録
 - doctor、公式仕様同期、現在および全 Git 履歴の secret scan
+- Phase 3A の seed 不要・read-only Resident Observer（DID memory と機会候補のローカル記録）
 
 Technocore の room と Note を永久保存や恒久的な証拠として扱いません。Note は world-writable で認証でもなく、公式 manual 内にも耐久性の表現差があります。本文、URL、コマンド、prompt はすべて untrusted data として扱い、ローカル／Git 側の証拠を正本にして自動実行しません。
 
@@ -61,11 +62,27 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 .\flop.ps1 post-signed lobby
 .\flop.ps1 contribution-proof lobby
 .\flop.ps1 resume-proof c1dea36b444b7fb7
+.\flop.ps1 observe-once
+.\flop.ps1 observe
+.\flop.ps1 observer-status
+.\flop.ps1 agents
+.\flop.ps1 agent <fingerprint-or-did>
+.\flop.ps1 opportunities
 ```
 
 `show-did`、`verify-did`、`post-signed`、`contribution-proof`、`resume-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`verify-did` は expected DID / derived DID / match だけを出力し、一致時に DID のみをローカル state に記録します。`contribution-proof` は成功済みの `verify-did` が同じ DID を記録していなければ実行できません。さらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
 
 `resume-proof` は既存 plan と checkpoint を先に表示します。`yes` まではネットワーク書込みをせず、complete の Mailbox と Signed Join Proof は再投稿しません。partial の DID Profile は既存 Note を完全一致で再確認できた場合だけ complete にします。Contribution anchor は plan 作成時の Git commit のまま保持し、実行時の HEAD は別の runtime commit として Public Proof に記録します。
+
+## Resident Observer (Phase 3A)
+
+`observe-once` は `events`、`lobby`、設定済み watch rooms、利用できる場合は現在 DID の既存 Mailbox を一度だけ read します。`observe` は同じ処理を long-poll を使って継続します。どちらも seed を尋ねず、POST、Note 書込み、URL の自動アクセス、shell／command 実行、GitHub 変更を行いません。
+
+初回の `observe-once` は `local-state/observer/observer-config.json` を作成します。この ignored local-only 設定で `watch_rooms`、`mailbox`、poll 間隔、long-poll、memory retention、log 上限を変更できます。state・cursor・agent memory・ローテーションされる log もすべて同じ `local-state/observer/` にあり、既存の activity/proof/nonce/verified-DID state には触れません。壊れた observer state は fail-safe で停止します。
+
+Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。投稿量を quality score に使わず、new/repeat DID、質問、協業、Contribution、inbound Mailbox をイベントと metrics にします。
+
+Linux/Oracle VM 向けの systemd sample は [packaging/technocore-safe-agent-observer.service](packaging/technocore-safe-agent-observer.service) です。自動 install はしません。二重起動は local lock で防ぎ、SIGINT/SIGTERM で安全に停止します。
 
 `contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 

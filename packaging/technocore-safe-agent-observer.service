@@ -1,0 +1,16 @@
+[Unit]
+Description=technocore-safe-agent read-only observer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/technocore-safe-agent
+ExecStart=/usr/local/bin/uv run --project /opt/technocore-safe-agent python -m flop_agent.cli observe
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
