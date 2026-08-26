@@ -10,13 +10,15 @@ from . import core
 def main() -> None:
     parser = argparse.ArgumentParser(prog="flop")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "history-secret-scan"):
+    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan"):
         sub.add_parser(command)
     room = sub.add_parser("read-room"); room.add_argument("room")
     new = sub.add_parser("read-new"); new.add_argument("room")
     post = sub.add_parser("post-signed"); post.add_argument("room"); post.add_argument("--text", required=True); post.add_argument("--confirm", action="store_true")
     plan = sub.add_parser("proof-plan"); plan.add_argument("--contribution-url", required=True); plan.add_argument("--room", default="lobby")
     create = sub.add_parser("create-proof"); create.add_argument("--plan-id", required=True); create.add_argument("--confirm", action="store_true")
+    resume = sub.add_parser("resume-proof"); resume.add_argument("--plan-id", required=True); resume.add_argument("--confirm", action="store_true")
+    show_plan = sub.add_parser("show-proof-plan"); show_plan.add_argument("--plan-id", required=True)
     verify = sub.add_parser("verify-did"); verify.add_argument("--expected-did", required=True)
     args = parser.parse_args()
     try:
@@ -30,6 +32,8 @@ def main() -> None:
         elif args.command == "post-signed": output = core.post_signed(args.room, args.text, args.confirm)
         elif args.command == "proof-plan": output = core.create_proof_plan(args.contribution_url, args.room)
         elif args.command == "create-proof": output = core.create_proof_bundle(args.plan_id, args.confirm)
+        elif args.command == "resume-proof": output = core.resume_proof_bundle(args.plan_id, args.confirm)
+        elif args.command == "show-proof-plan": output = core.show_proof_plan(args.plan_id)
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()

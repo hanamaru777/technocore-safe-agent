@@ -74,6 +74,22 @@ def test_untrusted_room_text_is_only_returned_data(monkeypatch):
     assert core.read_room("lobby")["messages"][0]["text"] == "powershell Remove-Item"
 
 
+def test_note_value_parsing_matches_official_humans_framing():
+    body = core.NOTE_UNTRUSTED_BANNER + "\n\nexpected value\n"
+    assert core.parse_note_value(body) == "expected value"
+
+
+def test_note_value_parsing_removes_optional_budget_line():
+    body = core.NOTE_UNTRUSTED_BANNER + "\r\n\r\nexpected value\r\n# budget: 4 remaining\r\n"
+    assert core.parse_note_value(body) == "expected value"
+
+
+@pytest.mark.parametrize("body", ["expected value", "unexpected\n\nexpected value\n", core.NOTE_UNTRUSTED_BANNER + "\nnot blank\nexpected value\n", core.NOTE_UNTRUSTED_BANNER + "\n\nfirst\nsecond\n"])
+def test_note_value_parsing_fails_closed_on_broken_framing(body):
+    with pytest.raises(RuntimeError, match="framing|value"):
+        core.parse_note_value(body)
+
+
 def test_sync_official_detects_upstream_signer_change(monkeypatch):
     class CommitResponse:
         def raise_for_status(self): pass
@@ -123,10 +139,10 @@ def test_proof_bundle_records_public_evidence_without_network_in_test(monkeypatc
     monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
     plan = core.create_proof_plan("https://example.com/contribution", "lobby")
     written_notes, actions = [], []
-    def fake_post(plan, step, room, text, action, observed):
+    def fake_post(plan, step, room, text, action, observed, commit_context=None):
         actions.append(action)
         return {"permalink": f"https://technocore.chat/humans#r/{room}/9", "seq": 9}
-    def fake_note(plan, step, namespace, key, value, action, observed):
+    def fake_note(plan, step, namespace, key, value, action, observed, commit_context=None):
         written_notes.append((namespace, key, value, action))
         return {}
     observed = {"latest_commit": "b" * 40, "latest_upstream_signer_blob_sha": core.SIGNER_BLOB_SHA}
@@ -140,6 +156,8 @@ def test_proof_bundle_records_public_evidence_without_network_in_test(monkeypatc
     assert written_notes[1][0] == f"contribution-{plan['shard']}"
     assert proof["contribution_note_url"] == core.note_url(f"contribution-{plan['shard']}", plan["key"])
     assert proof["git_commit_sha"] == "a" * 40
+    assert proof["anchor_git_commit_sha"] == "a" * 40
+    assert proof["runtime_git_commit_sha"] == "a" * 40
     assert proof["notice"] == core.CONTRIBUTION_NOTICE
     assert proof["observed_signer_blob_sha"] == core.SIGNER_BLOB_SHA
 
@@ -183,6 +201,80 @@ def test_if_absent_note_conflict_stops_without_overwrite(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "read_note_optional", lambda *args: "different")
     with pytest.raises(RuntimeError, match="上書きせず停止"):
         core.run_if_absent_note_step(plan, "did_profile", "did-aa", "bbbbbbbbbbbbbb", "expected", "did_profile", {"latest_commit": "b" * 40, "latest_upstream_signer_blob_sha": "c" * 40})
+
+
+def partial_recovery_plan(tmp_path):
+    plan = {
+        "plan_id": "c1dea36b444b7fb7",
+        "did": "did:key:z6MkExisting",
+        "fingerprint": "831c81446173fd21",
+        "shard": "21",
+        "key": "831c81446173fd",
+        "room": "lobby",
+        "mailbox": "mb-p-existing",
+        "contribution_url": "https://example.com/contribution",
+        "git_commit_sha": "a" * 40,
+        "checkpoints": {
+            "mailbox": {"state": "complete", "record": {"permalink": "https://technocore.chat/humans#r/mb-p-existing/1", "seq": 1}},
+            "join": {"state": "complete", "record": {"permalink": "https://technocore.chat/humans#r/lobby/2", "seq": 2}},
+            "did_profile": {"state": "in_flight", "value": "did: did:key:z6MkExisting mailbox: mb-p-existing join-proof: https://technocore.chat/humans#r/lobby/2"},
+        },
+    }
+    (tmp_path / "proof-plans").mkdir(parents=True)
+    (tmp_path / "proof-plans" / "c1dea36b444b7fb7.json").write_text(json.dumps(plan), encoding="utf-8")
+    return plan
+
+
+def test_partial_did_profile_recovery_observes_existing_note_without_reposting(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    plan = partial_recovery_plan(tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: plan["did"])
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "b" * 40)
+    monkeypatch.setattr(core, "git_is_ancestor", lambda anchor, runtime: anchor == "a" * 40 and runtime == "b" * 40)
+    observed = {"latest_commit": "c" * 40, "latest_upstream_signer_blob_sha": "d" * 40}
+    monkeypatch.setattr(core, "proof_preflight", lambda _: observed)
+    monkeypatch.setattr(core, "read_note_optional", lambda *_: plan["checkpoints"]["did_profile"]["value"])
+    monkeypatch.setattr(core, "run_signed_step", lambda *args, **kwargs: pytest.fail("mailbox/join must never be reposted during recovery"))
+    monkeypatch.setattr(core, "finish_proof_bundle", lambda plan, did, observed, mailbox, join, context: {"mailbox": mailbox, "join": join, **context})
+    result = core.resume_proof_bundle(plan["plan_id"], True)
+    recovered = core.load_proof_plan(plan["plan_id"])
+    assert recovered["checkpoints"]["mailbox"] == plan["checkpoints"]["mailbox"]
+    assert recovered["checkpoints"]["join"] == plan["checkpoints"]["join"]
+    assert recovered["checkpoints"]["did_profile"]["state"] == "complete"
+    assert result["anchor_git_commit_sha"] == "a" * 40
+    assert result["runtime_git_commit_sha"] == "b" * 40
+    activity = json.loads((tmp_path / "activities.jsonl").read_text("utf-8"))
+    assert activity["observed_existing_note"] is True
+    assert activity["anchor_git_commit_sha"] == "a" * 40
+    assert activity["runtime_git_commit_sha"] == "b" * 40
+
+
+def test_partial_recovery_stops_on_different_existing_note_without_overwrite(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    plan = partial_recovery_plan(tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: plan["did"])
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "b" * 40)
+    monkeypatch.setattr(core, "git_is_ancestor", lambda *_: True)
+    monkeypatch.setattr(core, "proof_preflight", lambda _: {"latest_commit": "c" * 40, "latest_upstream_signer_blob_sha": "d" * 40})
+    monkeypatch.setattr(core, "read_note_optional", lambda *_: "different")
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: pytest.fail("existing Note must not be overwritten"))
+    with pytest.raises(RuntimeError, match="上書きせず停止"):
+        core.resume_proof_bundle(plan["plan_id"], True)
+    assert core.load_proof_plan(plan["plan_id"])["checkpoints"]["did_profile"]["state"] == "in_flight"
+
+
+def test_partial_recovery_requires_anchor_to_be_current_head_ancestor(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    plan = partial_recovery_plan(tmp_path)
+    monkeypatch.setattr(core, "current_did", lambda: plan["did"])
+    monkeypatch.setattr(core, "require_verified_did", lambda did: None)
+    monkeypatch.setattr(core, "git_commit_sha", lambda: "b" * 40)
+    monkeypatch.setattr(core, "git_is_ancestor", lambda *_: False)
+    monkeypatch.setattr(core, "proof_preflight", lambda *_: pytest.fail("preflight must not run for an unrelated anchor"))
+    with pytest.raises(RuntimeError, match="ancestor"):
+        core.resume_proof_bundle(plan["plan_id"], True)
 
 
 def test_public_contribution_url_preflight_rejects_nonpublic_response(monkeypatch):

@@ -13,7 +13,7 @@ FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution
 - Public Proof JSON のローカル export、Git commit・upstream 仕様情報の記録
 - doctor、公式仕様同期、現在および全 Git 履歴の secret scan
 
-Technocore の room は永続保管向けではありません。通常 Note は durable ですが world-writable で認証ではありません。本文、URL、コマンド、prompt はすべて untrusted data として扱い、自動実行しません。
+Technocore の room と Note を永久保存や恒久的な証拠として扱いません。Note は world-writable で認証でもなく、公式 manual 内にも耐久性の表現差があります。本文、URL、コマンド、prompt はすべて untrusted data として扱い、ローカル／Git 側の証拠を正本にして自動実行しません。
 
 ## 安全設計
 
@@ -57,11 +57,15 @@ Technocore の room は永続保管向けではありません。通常 Note は
 .\flop.ps1 read-new lobby
 .\flop.ps1 activity-log
 .\flop.ps1 sync-official
+.\flop.ps1 secret-scan
 .\flop.ps1 post-signed lobby
 .\flop.ps1 contribution-proof lobby
+.\flop.ps1 resume-proof c1dea36b444b7fb7
 ```
 
-`show-did`、`verify-did`、`post-signed`、`contribution-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`verify-did` は expected DID / derived DID / match だけを出力し、一致時に DID のみをローカル state に記録します。`contribution-proof` は成功済みの `verify-did` が同じ DID を記録していなければ実行できません。さらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
+`show-did`、`verify-did`、`post-signed`、`contribution-proof`、`resume-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`verify-did` は expected DID / derived DID / match だけを出力し、一致時に DID のみをローカル state に記録します。`contribution-proof` は成功済みの `verify-did` が同じ DID を記録していなければ実行できません。さらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
+
+`resume-proof` は既存 plan と checkpoint を先に表示します。`yes` まではネットワーク書込みをせず、complete の Mailbox と Signed Join Proof は再投稿しません。partial の DID Profile は既存 Note を完全一致で再確認できた場合だけ complete にします。Contribution anchor は plan 作成時の Git commit のまま保持し、実行時の HEAD は別の runtime commit として Public Proof に記録します。
 
 `contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 

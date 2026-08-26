@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $rootPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$needsSeed = $Command -in @('show-did', 'verify-did', 'post-signed', 'contribution-proof')
+$needsSeed = $Command -in @('show-did', 'verify-did', 'post-signed', 'contribution-proof', 'resume-proof')
 $bstr = [IntPtr]::Zero
 $exitCode = 0
 $expectedDid = $null
@@ -54,6 +54,15 @@ try {
         $plan | ConvertTo-Json -Depth 5
         if ((Read-Host 'Write this Proof to Technocore? (yes/no)') -cne 'yes') { throw 'Write cancelled' }
         & $uv run --project $rootPath python -m flop_agent.cli create-proof --plan-id $plan.plan_id --confirm
+    } elseif ($Command -eq 'resume-proof') {
+        if (-not $Room) { throw 'Plan ID is required: .\flop.ps1 resume-proof c1dea36b444b7fb7' }
+        $planJson = & $uv run --project $rootPath python -m flop_agent.cli show-proof-plan --plan-id $Room
+        if ($LASTEXITCODE -ne 0) { throw 'Proof plan could not be read' }
+        $plan = $planJson | ConvertFrom-Json
+        Write-Host 'The existing plan and checkpoints follow. No Technocore write has occurred.'
+        $plan | ConvertTo-Json -Depth 8
+        if ((Read-Host 'Resume this existing Proof? (yes/no)') -cne 'yes') { throw 'Resume cancelled' }
+        & $uv run --project $rootPath python -m flop_agent.cli resume-proof --plan-id $Room --confirm
     } elseif ($Command -in @('read-room', 'read-new')) {
         if (-not $Room) { throw 'Room is required' }
         & $uv run --project $rootPath python -m flop_agent.cli $Command $Room
