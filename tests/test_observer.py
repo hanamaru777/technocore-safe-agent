@@ -75,24 +75,69 @@ def test_bootstrap_tail_and_operational_gap_are_distinct(monkeypatch, tmp_path):
     assert gap["untrusted"] is True and "text_excerpt" in gap
 
 
-def test_events_discovery_strictly_parses_server_created_rooms(monkeypatch, tmp_path):
+def test_events_discovery_uses_official_server_record_shape(monkeypatch, tmp_path):
     config = setup(monkeypatch, tmp_path, discovery_sample_limit=1)
     state = observer.default_state()
-    observer.process_message(state, config, "events", message(1, "system", "created useful-room", server_written=True), None, None)
-    observer.process_message(state, config, "events", message(2, "system", "created bad/room", server_written=True), None, None)
-    observer.process_message(state, config, "events", message(3, "anonymous", "created evil", server_written=False), None, None)
-    assert state["discovery_queue"] == [{"room": "useful-room", "event_seq": 1, "enqueued_at": state["discovery_queue"][0]["enqueued_at"]}]
+    observer.process_message(state, config, "events", {"seq": 1, "ts": "2026-08-26T00:00:00Z", "from": "server", "text": "created useful-room"}, None, None)
+    observer.process_message(state, config, "events", {"seq": 2, "ts": "now", "from": "server", "text": "created bad/room"}, None, None)
+    observer.process_message(state, config, "events", {"seq": 3, "ts": "now", "from": "anonymous", "text": "created evil"}, None, None)
+    observer.process_message(state, config, "events", {"seq": 4, "ts": "now", "from": "server", "text": "created p-private"}, None, None)
+    assert state["discovery_queue"] == ["useful-room"]
+    assert state["discovered_rooms"]["useful-room"]["sample_status"] == "queued"
     assert any(item["kind"] == "new_room" and item.get("discovered_room") == "useful-room" for item in state["opportunities"])
 
 
 def test_discovery_sampling_is_bounded(monkeypatch, tmp_path):
     config = setup(monkeypatch, tmp_path, discovery_sample_limit=1)
-    state = observer.default_state(); state["discovery_queue"] = [{"room": "one", "event_seq": 1}, {"room": "two", "event_seq": 2}]
+    state = observer.default_state(); state["discovery_queue"] = ["one", "two"]
+    state["discovered_rooms"] = {room: {"room": room, "event_seq": number, "enqueued_at": "now", "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None} for number, room in enumerate(("one", "two"), 1)}
     observer.save_state(state)
     client = Client({"one": Response({"messages": [message(1)]}), "two": Response({"messages": [message(1)]})})
     asyncio.run(observer.observe_once_async(client))
     assert [call[0].rsplit("/", 1)[-1] for call in client.calls].count("one") == 1
-    assert observer.load_state()["discovery_queue"][0]["room"] == "two"
+    assert observer.load_state()["discovery_queue"] == ["two"]
+    assert observer.load_state()["discovered_rooms"]["one"]["sample_status"] == "sampled"
+
+
+def queued_room(state, room="sample"):
+    state["discovery_queue"] = [room]
+    state["discovered_rooms"][room] = {"room": room, "event_seq": 1, "enqueued_at": "now", "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None}
+
+
+def test_discovery_acknowledges_only_success_and_retries_429(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path); state = observer.default_state(); queued_room(state)
+    async def run():
+        await observer.consume_discovery_queue(Client({"sample": Response(status=429, headers={"Retry-After": "3"})}), observer.ReadBudget(600), state, config, None, None)
+    asyncio.run(run())
+    assert state["discovery_queue"] == ["sample"]
+    assert state["discovered_rooms"]["sample"]["attempts"] == 1
+    assert state["discovered_rooms"]["sample"]["last_error"] == "rate_limited"
+
+
+def test_discovery_network_error_keeps_queue_and_does_not_starve_following_room(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path, discovery_sample_limit=2); state = observer.default_state(); queued_room(state, "bad")
+    state["discovery_queue"].append("good")
+    state["discovered_rooms"]["good"] = {"room": "good", "event_seq": 2, "enqueued_at": "now", "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None}
+    async def run():
+        await observer.consume_discovery_queue(Client({"bad": observer.httpx.ReadTimeout("offline"), "good": Response({"messages": [message(1)]})}), observer.ReadBudget(600), state, config, None, None)
+    asyncio.run(run())
+    assert state["discovery_queue"] == ["bad"]
+    assert state["discovered_rooms"]["good"]["sample_status"] == "sampled"
+
+
+def test_daemon_discovery_worker_samples_queue_once_and_restart_does_not_resample(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path); state = observer.default_state(); queued_room(state)
+    stop = asyncio.Event()
+    class OneClient:
+        calls = 0
+        async def get(self, url, **kwargs): self.calls += 1; stop.set(); return Response({"messages": [message(1)]})
+    client = OneClient()
+    asyncio.run(observer.discovery_worker(client, observer.ReadBudget(600), state, config, None, None, stop))
+    assert client.calls == 1 and state["discovery_queue"] == []
+    observer.save_state(state); restored = observer.load_state()
+    async def rerun(): await observer.consume_discovery_queue(Client({"sample": Response(status=500)}), observer.ReadBudget(600), restored, config, None, None)
+    asyncio.run(rerun())
+    assert restored["discovered_rooms"]["sample"]["sample_status"] == "sampled"
 
 
 def test_mailbox_selects_only_newest_complete_verified_plan(monkeypatch, tmp_path):

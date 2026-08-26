@@ -80,7 +80,7 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 
 初回の `observe-once` は `local-state/observer/observer-config.json` を作成します。この ignored local-only 設定で `watch_rooms`、`mailbox`、room cadence、read budget、long-poll、repeat 間隔、discovery sample 上限、memory retention、log 上限を変更できます。state・cursor・agent memory・ローテーションされる log もすべて同じ `local-state/observer/` にあり、既存の activity/proof/nonce/verified-DID state には触れません。壊れた observer state は fail-safe で停止します。
 
-各 room の初回取得は「過去全履歴」ではなく bootstrap tail として記録します。その後 `since` 以降の返却列に gap（公式上限 200 により起こり得る）があれば、missing range と推定件数を `message_gap` event に保存し、silent に cursor を進めません。`events` の discovery は、明示的に server-written と示された厳密な `created <room>` だけを queue に入れ、設定上限まで一度だけ sample します。private room の推測・探索はしません。
+各 room の初回取得は「過去全履歴」ではなく bootstrap tail として記録します。その後 `since` 以降の返却列に gap（公式上限 200 により起こり得る）があれば、missing range と推定件数を `message_gap` event に保存し、silent に cursor を進めません。`events` の discovery は公式 record 形式の `from:"server"` と完全一致する `created <room>` だけを queue に入れ、設定上限まで一度だけ sample します。429／network error は ack せず再試行し、上限到達の drop は event/metric に明記します。private `p-` room の推測・探索はしません。
 
 Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。own DID と短時間の連投を external/returning DID に数えず、repeat 間隔を超えた再会だけを returning DID として数えます。投稿量を quality score に使いません。
 

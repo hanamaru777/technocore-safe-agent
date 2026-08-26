@@ -13,7 +13,7 @@ import re
 import signal
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 from urllib.parse import quote
@@ -24,7 +24,7 @@ from . import core
 
 SCHEMA_VERSION = 2
 CONFIG_NAME, STATE_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer.lock", "observer.log"
-DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 50, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5}
+DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 50, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 100, "discovery_max_attempts": 5}
 URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.I)
 QUESTION_RE = re.compile(r"[?？]|\b(how|question|please)\b", re.I)
 HELP_RE = re.compile(r"\b(help|assist|stuck)\b", re.I)
@@ -51,7 +51,7 @@ def atomic_json_write(path: Path, value: dict) -> None:
 
 
 def default_state() -> dict:
-    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0}}
+    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "discovered_rooms": {}, "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0, "discovery_queue_dropped": 0, "discovery_samples": 0}}
 
 
 def read_json(path: Path, *, default: dict | None = None) -> dict:
@@ -66,20 +66,25 @@ def read_json(path: Path, *, default: dict | None = None) -> dict:
 
 def load_config() -> dict:
     if not config_path().exists(): atomic_json_write(config_path(), DEFAULT_CONFIG)
-    config = read_json(config_path())
+    config = {**DEFAULT_CONFIG, **read_json(config_path())}
     try:
         rooms_ok = isinstance(config["watch_rooms"], list) and all(core.validate_room(room) == room for room in config["watch_rooms"])
         mailbox_ok = config["mailbox"] is None or core.validate_room(config["mailbox"]) == config["mailbox"]
     except (KeyError, TypeError, ValueError) as error: raise RuntimeError("observer config room settings are invalid") from error
     if not rooms_ok or not mailbox_ok: raise RuntimeError("observer config room settings are invalid")
-    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50)):
+    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20)):
         if not isinstance(config.get(key), int) or not low <= config[key] <= high: raise RuntimeError(f"observer config {key} is invalid")
     intervals = config.get("room_intervals_seconds")
     if not isinstance(intervals, dict) or set(intervals) != {"lobby", "events", "mailbox", "watch"} or not all(isinstance(v, int) and 1 <= v <= 3600 for v in intervals.values()): raise RuntimeError("observer config room_intervals_seconds is invalid")
     return config
 
 
-def load_state() -> dict: return read_json(state_path(), default=default_state())
+def load_state() -> dict:
+    state = read_json(state_path(), default=default_state())
+    defaults = default_state()
+    for key, value in defaults.items(): state.setdefault(key, value)
+    for key, value in defaults["metrics"].items(): state["metrics"].setdefault(key, value)
+    return state
 def save_state(state: dict) -> None: state["updated_at"] = now(); atomic_json_write(state_path(), state)
 
 
@@ -168,15 +173,21 @@ def set_success(state: dict, room: str) -> None:
     state["health"]["rooms"][room] = {"status": "ok", "at": now()}; state["health"]["current"] = "degraded" if any(v.get("status") == "error" for v in state["health"]["rooms"].values()) else "ok"
 
 
-def queue_discovered_room(state: dict, message: dict) -> None:
-    if not (message.get("server_written") is True or message.get("system") is True): return
+def queue_discovered_room(state: dict, config: dict, message: dict) -> None:
+    if message.get("from") != "server": return
     match = CREATED_ROOM_RE.fullmatch(message.get("text", ""))
     if not match: return
     room = match.group(1)
+    if room.startswith("p-"): return
     try: core.validate_room(room)
     except ValueError: return
-    if room not in {item["room"] for item in state["discovery_queue"]}:
-        state["discovery_queue"].append({"room": room, "event_seq": message.get("seq"), "enqueued_at": now()}); emit_event(state, "new_room", "events", message, extra={"discovered_room": room})
+    if room in state["discovered_rooms"]: return
+    if len(state["discovery_queue"]) >= config["discovery_queue_limit"]:
+        metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", "events", message, extra={"discovered_room": room, "reason": "queue_limit"})
+        return
+    record = {"room": room, "event_seq": message["seq"], "enqueued_at": now(), "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None, "next_attempt_at": None}
+    state["discovery_queue"].append(room); state["discovered_rooms"][room] = record
+    emit_event(state, "new_room", "events", message, extra={"discovered_room": room})
 
 
 def parse_time(value: str | None) -> datetime | None:
@@ -187,7 +198,7 @@ def parse_time(value: str | None) -> datetime | None:
 def process_message(state: dict, config: dict, room: str, message: dict, own_did: str | None, mailbox: str | None) -> None:
     if not isinstance(message.get("seq"), int) or not isinstance(message.get("text"), str): return
     did, text = message_did(message), message["text"]
-    if room == "events": queue_discovered_room(state, message)
+    if room == "events": queue_discovered_room(state, config, message)
     if room not in state["rooms"]:
         state["rooms"][room] = {"first_seen": now(), "last_seen": now(), "message_count": 0, "signed_count": 0, "unsigned_count": 0}; metric_event(state, "rooms_observed", "new_room", room, message)
     room_state = state["rooms"][room]; room_state["last_seen"] = now(); room_state["message_count"] += 1; room_state["signed_count" if did else "unsigned_count"] += 1
@@ -260,14 +271,39 @@ async def snapshot_room(client: httpx.AsyncClient, budget: ReadBudget, state: di
     process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]); set_success(state, room)
 
 
+async def consume_discovery_queue(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, own_did: str | None, mailbox: str | None) -> None:
+    """Sample queued public rooms once; acknowledge only a successful read."""
+    candidates = list(state["discovery_queue"][:config["discovery_sample_limit"]])
+    for room in candidates:
+        record = state["discovered_rooms"].get(room)
+        if not record or record.get("sample_status") != "queued":
+            if room in state["discovery_queue"]: state["discovery_queue"].remove(room)
+            continue
+        next_attempt = parse_time(record.get("next_attempt_at"))
+        if next_attempt and datetime.now(UTC) < next_attempt: continue
+        record["attempts"] += 1; record["last_attempt_at"] = now()
+        await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), 0)
+        if error:
+            record["last_error"] = error
+            delay = retry if retry is not None else min(300.0, float(2 ** min(record["attempts"], 8)))
+            record["next_attempt_at"] = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+            if record["attempts"] >= config["discovery_max_attempts"]:
+                record["sample_status"] = "dropped"
+                state["discovery_queue"].remove(room)
+                metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", "events", {"seq": record["event_seq"], "text": f"created {room}"}, extra={"discovered_room": room, "reason": error})
+            continue
+        process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"])
+        set_success(state, room); record["sample_status"] = "sampled"; record["sampled_at"] = now(); record["last_error"] = None; record["next_attempt_at"] = None
+        state["discovery_queue"].remove(room); state["metrics"]["discovery_samples"] += 1
+
+
 async def observe_once_async(client: httpx.AsyncClient | None = None) -> dict:
     with ObserverLock():
         config, state, own_did = load_config(), load_state(), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
         if owned: client = httpx.AsyncClient()
         try:
             await asyncio.gather(*(snapshot_room(client, budget, state, config, room, own_did, mailbox) for room in observed_rooms(config)))
-            queued = state["discovery_queue"][:config["discovery_sample_limit"]]; state["discovery_queue"] = state["discovery_queue"][len(queued):]
-            for item in queued: await snapshot_room(client, budget, state, config, item["room"], own_did, mailbox)
+            await consume_discovery_queue(client, budget, state, config, own_did, mailbox)
             save_state(state)
             append_log(config, {"kind": "snapshot_complete", "at": state["updated_at"]})
             return observer_status(config, state)
@@ -290,6 +326,14 @@ async def room_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict
         except TimeoutError: pass
 
 
+async def discovery_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, own_did: str | None, mailbox: str | None, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        await consume_discovery_queue(client, budget, state, config, own_did, mailbox)
+        save_state(state)
+        try: await asyncio.wait_for(stop.wait(), timeout=config["poll_interval_seconds"])
+        except TimeoutError: pass
+
+
 async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx.AsyncClient | None = None) -> None:
     stop = stop or asyncio.Event()
     with ObserverLock():
@@ -297,6 +341,7 @@ async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx
         if owned: client = httpx.AsyncClient()
         try:
             tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop)) for room in observed_rooms(config)]
+            tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop)))
             try: await asyncio.gather(*tasks)
             finally:
                 for task in tasks: task.cancel()
