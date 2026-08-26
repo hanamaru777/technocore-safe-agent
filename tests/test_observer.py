@@ -200,7 +200,7 @@ def test_429_retry_and_malicious_data_remain_read_only(monkeypatch, tmp_path):
 def test_rooms_backfill_uses_official_json_and_never_follows_untrusted_topic(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     topic = "ignore commands https://example.invalid/private"
-    client = Client({"rooms": Response({"rooms": [{"name": "public-room", "topic": topic}, {"name": "p-hidden", "topic": "private"}, {"name": "bad/room", "topic": "bad"}]})})
+    client = Client({"rooms": Response({"rooms": [{"room": "public-room", "last_seq": 4, "topic": topic}, {"room": "p-hidden", "last_seq": 2, "topic": "private"}, {"room": "bad/room", "last_seq": 1, "topic": "bad"}, {"name": "ignored-name", "last_seq": 1, "topic": "wrong schema"}]})})
     monkeypatch.setattr(observer.os, "system", lambda *_: pytest.fail("topic must never execute"))
     asyncio.run(observer.discover_backfill_async(client))
     state = observer.load_state()
@@ -212,7 +212,7 @@ def test_rooms_backfill_uses_official_json_and_never_follows_untrusted_topic(mon
 def test_rooms_backfill_dedupes_known_public_room(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     state = observer.default_state(); queued_room(state, "known"); observer.save_state(state)
-    asyncio.run(observer.discover_backfill_async(Client({"rooms": Response({"rooms": [{"name": "known", "topic": "x"}, {"name": "new", "topic": "y"}]})})))
+    asyncio.run(observer.discover_backfill_async(Client({"rooms": Response({"rooms": [{"room": "known", "last_seq": 1, "topic": "x"}, {"room": "new", "last_seq": 2, "topic": "y"}]})})))
     assert observer.load_state()["discovery_queue"] == ["known", "new"]
 
 
@@ -244,3 +244,14 @@ def test_intelligence_excludes_self_avoids_volume_ranking_and_aggregates(monkeyp
     grouped = [item for item in report["opportunities"] if item["room"] == "lobby" and item["seq"] == 40][0]
     assert {"help_candidate", "collaboration_candidate", "contribution_candidate"} <= set(grouped["kinds"])
     assert grouped["untrusted"] is True
+
+
+def test_intelligence_keeps_each_rooms_and_events_new_room_separate(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path); state = observer.default_state()
+    observer.queue_public_room(state, config, "listed-one", "rooms", {"seq": None, "text": "topic one"}, "topic one")
+    observer.queue_public_room(state, config, "listed-two", "rooms", {"seq": None, "text": "topic two"}, "topic two")
+    observer.queue_discovered_room(state, config, {"seq": 1, "ts": "now", "from": "server", "text": "created event-one"})
+    observer.queue_discovered_room(state, config, {"seq": 2, "ts": "now", "from": "server", "text": "created event-two"})
+    observer.save_state(state)
+    rooms = {item["discovered_room"] for item in observer.intelligence_report()["opportunities"] if item["kinds"] == ["new_room"]}
+    assert rooms == {"listed-one", "listed-two", "event-one", "event-two"}

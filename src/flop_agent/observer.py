@@ -291,8 +291,8 @@ async def backfill_into_state(client: httpx.AsyncClient, budget: "ReadBudget", s
     await budget.acquire(); rooms, retry, error = await read_rooms(client)
     if error: set_error(state, "rooms", error, str(retry or "")); return
     for item in rooms or []:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str): continue
-        queue_public_room(state, config, item["name"], "rooms", {"seq": None, "text": item.get("topic", "")}, item.get("topic"))
+        if not isinstance(item, dict) or not isinstance(item.get("room"), str) or not isinstance(item.get("last_seq"), int) or not isinstance(item.get("topic"), str): continue
+        queue_public_room(state, config, item["room"], "rooms", {"seq": None, "text": item["topic"]}, item["topic"])
     set_success(state, "rooms")
 
 
@@ -440,8 +440,8 @@ def intelligence_report() -> dict:
     reportable = {"question_candidate", "help_candidate", "collaboration_candidate", "contribution_candidate", "inbound_mailbox_message", "new_did", "returning_did", "new_room", "message_gap"}
     for record in state["opportunities"]:
         if record["kind"] not in reportable: continue
-        key = (record["room"], record.get("seq"), record.get("did"))
-        group = grouped.setdefault(key, {"room": record["room"], "seq": record.get("seq"), "did": record.get("did"), "kinds": [], "text_excerpt": record["text_excerpt"], "untrusted": True})
+        key = (record["room"], record.get("seq"), record.get("did"), record.get("discovered_room") if record["kind"] == "new_room" else None)
+        group = grouped.setdefault(key, {"room": record["room"], "seq": record.get("seq"), "did": record.get("did"), "discovered_room": record.get("discovered_room"), "kinds": [], "text_excerpt": record["text_excerpt"], "untrusted": True})
         if record["kind"] not in group["kinds"]: group["kinds"].append(record["kind"])
     signals_by_did: dict[str, set[str]] = {}
     for group in grouped.values():
