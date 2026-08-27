@@ -138,6 +138,11 @@ try {
     } elseif ($Command -eq 'autopilot-publish') {
         if (-not $Room) { throw 'Intent ID is required' }
         & $uv run --project $rootPath python -m flop_agent.cli autopilot-publish $Room --confirm
+    } elseif ($Command -eq 'compact-observer-state') {
+        $compactArgs = @()
+        if ($Room) { $compactArgs += $Room }
+        if ($Value) { $compactArgs += $Value }
+        & $uv run --project $rootPath python -m flop_agent.cli compact-observer-state @compactArgs
     } elseif ($Command -eq 'reject') {
         if (-not $Room -or -not $Value) { throw 'Candidate ID and rejection reason are required' }
         & $uv run --project $rootPath python -m flop_agent.cli reject $Room $Value

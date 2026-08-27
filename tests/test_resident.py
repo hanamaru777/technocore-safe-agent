@@ -183,15 +183,16 @@ def test_discord_notification_digest_and_safe_human_response(monkeypatch, tmp_pa
 
 
 def test_resident_worker_refreshes_without_network_and_daemon_entrypoint(monkeypatch, tmp_path):
-    setup(monkeypatch, tmp_path); calls = []
+    setup(monkeypatch, tmp_path); calls = []; shared = observer.default_state()
     async def run():
         stop = asyncio.Event()
-        def refresh(): calls.append(True); stop.set(); return {}
+        def refresh(*, observed_state=None): calls.append(observed_state); stop.set(); return {}
         monkeypatch.setattr(resident, "refresh", refresh)
         monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 5})
-        await observer.resident_worker({}, stop)
+        monkeypatch.setattr(observer, "load_state", lambda: pytest.fail("daemon refresh must not reload observer state"))
+        await observer.resident_worker({}, stop, shared)
     asyncio.run(run())
-    assert calls and resident_daemon.main.__module__ == "flop_agent.resident_daemon"
+    assert calls == [shared] and resident_daemon.main.__module__ == "flop_agent.resident_daemon"
     unit = (core.ROOT / "packaging" / "oracle" / "resident.service").read_text("utf-8")
     assert "flop_agent.resident_daemon" in unit and ".venv/bin/python" in unit and "uv run" not in unit
 

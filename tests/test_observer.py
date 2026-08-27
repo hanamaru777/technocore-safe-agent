@@ -270,6 +270,43 @@ def test_state_writer_coalesces_and_final_flushes(monkeypatch, tmp_path):
     assert len(calls) == 2
 
 
+def test_hard_bound_keeps_important_agent_and_evicts_old_low_signal(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); state = observer.default_state()
+    def agent(did, last_seen, *, important=False):
+        fingerprint = core.did_note_location(did)[2]
+        state["agents"][fingerprint] = {"did": did, "fingerprint": fingerprint, "facts": {"last_seen": last_seen, "seen_count": 1, "interaction_with_us": important, "rooms": [], "message_refs": [], "recent_messages": []}, "inferences": {"repeat_seen": False, "contribution_url_candidates": [], "role_candidates": []}}
+        return fingerprint
+    old = agent("did:key:z6MkOld", "2020-01-01T00:00:00+00:00")
+    important = agent("did:key:z6MkImportant", "2020-01-01T00:00:00+00:00", important=True)
+    newest = agent("did:key:z6MkNew", "2030-01-01T00:00:00+00:00")
+    observer.compact_state(state, 2, max_agents=2, max_rooms=10, max_discovered_rooms=10, evict=True)
+    assert old not in state["agents"] and important in state["agents"] and newest in state["agents"]
+
+
+def test_explicit_compaction_dry_run_then_backup_preserves_core_evidence(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path); config["max_agents"] = 100; observer.atomic_json_write(observer.config_path(), config)
+    state = observer.default_state(); state["cursors"] = {"lobby": 99}; state["metrics"]["questions_detected"] = 7
+    for number in range(101):
+        did = f"did:key:z6MkCompact{number}"; fp = core.did_note_location(did)[2]
+        state["agents"][fp] = {"did": did, "fingerprint": fp, "facts": {"last_seen": f"2020-01-{number % 28 + 1:02d}T00:00:00+00:00", "seen_count": 1, "interaction_with_us": number == 0, "rooms": [], "message_refs": [], "recent_messages": []}, "inferences": {"repeat_seen": False, "contribution_url_candidates": [], "role_candidates": []}}
+    observer.save_state(state); before = observer.state_path().read_bytes()
+    dry = observer.compact_persisted_state()
+    assert dry["dry_run"] is True and dry["before"]["agents"] == 101 and dry["after"]["agents"] == 100 and observer.state_path().read_bytes() == before
+    applied = observer.compact_persisted_state(True); restored = observer.load_state()
+    assert applied["backup"] and __import__("pathlib").Path(applied["backup"]).is_file()
+    assert restored["cursors"] == {"lobby": 99} and restored["metrics"]["questions_detected"] == 7 and len(restored["agents"]) == 100
+    assert any(agent["facts"]["interaction_with_us"] for agent in restored["agents"].values())
+
+
+def test_healthcheck_uses_only_small_heartbeats(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); state = observer.default_state(); observer.save_state(state)
+    heartbeat = json.loads(observer.heartbeat_path().read_text("utf-8"))
+    assert heartbeat["schema_version"] == 1 and heartbeat["status"] == "ok"
+    healthcheck = (core.ROOT / "packaging" / "oracle" / "healthcheck.sh").read_text("utf-8")
+    assert "observer-heartbeat.json" in healthcheck and "resident-heartbeat.json" in healthcheck
+    assert "observer-state.json" not in healthcheck and "resident-state.json" not in healthcheck
+
+
 def test_intelligence_excludes_self_avoids_volume_ranking_and_aggregates(monkeypatch, tmp_path):
     config = setup(monkeypatch, tmp_path)
     own, noisy, useful = "did:key:z6MkOwn", "did:key:z6MkNoisy", "did:key:z6MkUseful"

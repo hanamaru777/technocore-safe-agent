@@ -151,13 +151,17 @@ def cooldown_active(state: dict, did: str, current: datetime, seconds: int) -> b
     return bool(latest and (current - latest).total_seconds() < seconds)
 
 
-def refresh() -> dict:
+def write_heartbeat(state: dict, status: str = "ok") -> None:
+    observer.atomic_json_write(observer.observer_dir() / "resident-heartbeat.json", {"schema_version": 1, "updated_at": now(), "last_refresh_at": state["daemon"]["last_refresh_at"], "status": status}, compact=True)
+
+
+def refresh(observed_state: dict | None = None) -> dict:
     config, state = load_config(), load_state()
     current = datetime.now(UTC); expire_candidates(state, current)
     paused = bool(state["control"].get("paused"))
     if paused:
-        state["daemon"]["last_refresh_at"] = now(); save_state(state); return resident_status(state)
-    observed = observer.load_state()
+        state["daemon"]["last_refresh_at"] = now(); save_state(state); write_heartbeat(state); return resident_status(state)
+    observed = observed_state if observed_state is not None else observer.load_state()
     own_did = observer.verified_did(); agents = [agent for agent in observed["agents"].values() if agent["did"] != own_did]
     frequencies = message_frequencies(agents)
     assessments = {agent["did"]: quality(agent, agents, config, frequencies) for agent in agents}
@@ -185,7 +189,7 @@ def refresh() -> dict:
         if relationship_record:
             relationship_record["interaction_history"].append({"kind": "candidate_created", "candidate_id": candidate_id, "at": now()})
             relationship_record["interaction_history"] = relationship_record["interaction_history"][-50:]
-    state["daemon"]["last_refresh_at"] = now(); save_state(state)
+    state["daemon"]["last_refresh_at"] = now(); save_state(state); write_heartbeat(state)
     return resident_status(state, observed)
 
 

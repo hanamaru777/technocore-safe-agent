@@ -176,5 +176,8 @@ def test_oracle_signer_package_separates_metadata_and_has_no_arguments():
     assert "len(sys.argv) != 1" in source and "post_signed" in source and "subprocess" not in source
     healthcheck = (root / "healthcheck.sh").read_text("utf-8")
     assert "signer-health.json" in healthcheck and "signer cycle is stale" in healthcheck and "metadata-block.service" in healthcheck
+    diagnostic = (root / "diagnostic.sh").read_text("utf-8")
+    assert "MemoryCurrent,NRestarts,MainPID" in diagnostic and "observer-state.json" not in diagnostic.split("python3", 1)[1] and "resident-state.json" not in diagnostic.split("python3", 1)[1]
+    assert "technocore-safe-agent-diagnostic" in installer and "technocore-safe-agent-diagnostic" in preparer
     assert "Type=oneshot" in metadata_unit and "RemainAfterExit=yes" in metadata_unit and "Before=network-pre.target technocore-safe-agent-resident.service technocore-safe-agent-discord.service" in metadata_unit and "technocore-signer" not in metadata_unit
     assert "/observer" not in signer_unit.split("ReadWritePaths=", 1)[1] and "/autopilot" in signer_unit.split("ReadWritePaths=", 1)[1]

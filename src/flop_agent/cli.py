@@ -14,6 +14,7 @@ def main() -> None:
         sub.add_parser(command)
     for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume"):
         sub.add_parser(command)
+    compact = sub.add_parser("compact-observer-state"); compact.add_argument("--apply", action="store_true")
     agent = sub.add_parser("agent"); agent.add_argument("identifier")
     resident_candidate = sub.add_parser("candidate"); resident_candidate.add_argument("candidate_id")
     approve = sub.add_parser("approve"); approve.add_argument("candidate_id")
@@ -69,6 +70,9 @@ def main() -> None:
         elif args.command == "discover-backfill":
             from . import observer
             output = observer.discover_backfill()
+        elif args.command == "compact-observer-state":
+            from . import observer
+            output = observer.compact_persisted_state(args.apply)
         elif args.command == "intelligence":
             from . import observer
             output = observer.intelligence_report()

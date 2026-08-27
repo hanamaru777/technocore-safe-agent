@@ -56,6 +56,7 @@ if $signer; then
   if [[ -e $state/verified-did.json ]]; then chown technocore:technocore-autopilot "$state/verified-did.json"; chmod 0640 "$state/verified-did.json"; fi
   install -o root -g root -m 0600 packaging/oracle/signer.env.example "$envdir/signer.env"
   install -o root -g root -m 0755 packaging/oracle/block-technocore-metadata.sh /usr/local/libexec/technocore-safe-agent-block-metadata
+  install -o root -g root -m 0755 packaging/oracle/diagnostic.sh /usr/local/libexec/technocore-safe-agent-diagnostic
   install -o root -g root -m 0644 packaging/oracle/technocore-safe-agent-metadata-block.service /etc/systemd/system/technocore-safe-agent-metadata-block.service
   install -o root -g root -m 0644 packaging/oracle/technocore-safe-agent-signer.service /etc/systemd/system/technocore-safe-agent-signer.service
 fi

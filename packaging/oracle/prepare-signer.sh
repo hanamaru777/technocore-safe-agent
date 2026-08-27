@@ -35,6 +35,7 @@ if [[ ! -e $envdir/signer.env ]]; then
   install -o root -g root -m 0600 "$app/packaging/oracle/signer.env.example" "$envdir/signer.env"
 fi
 install -o root -g root -m 0755 "$app/packaging/oracle/block-technocore-metadata.sh" /usr/local/libexec/technocore-safe-agent-block-metadata
+install -o root -g root -m 0755 "$app/packaging/oracle/diagnostic.sh" /usr/local/libexec/technocore-safe-agent-diagnostic
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-metadata-block.service" /etc/systemd/system/technocore-safe-agent-metadata-block.service
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-signer.service" /etc/systemd/system/technocore-safe-agent-signer.service
 # Refresh the existing resident unit from this checked-out release.  Discord

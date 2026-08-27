@@ -11,6 +11,7 @@ import json
 import os
 import re
 import signal
+import shutil
 import tempfile
 import time
 from datetime import UTC, datetime, timedelta
@@ -23,8 +24,8 @@ import httpx
 from . import core
 
 SCHEMA_VERSION = 2
-CONFIG_NAME, STATE_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer.lock", "observer.log"
-DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 8, "state_flush_interval_seconds": 30, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 500, "discovery_max_attempts": 5, "rooms_backfill_interval_seconds": 3600}
+CONFIG_NAME, STATE_NAME, HEARTBEAT_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer-heartbeat.json", "observer.lock", "observer.log"
+DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 8, "max_agents": 5000, "max_rooms": 200, "max_discovered_rooms": 1000, "state_flush_interval_seconds": 30, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 500, "discovery_max_attempts": 5, "rooms_backfill_interval_seconds": 3600}
 URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.I)
 QUESTION_RE = re.compile(r"[?？]|\b(how|question|please)\b", re.I)
 HELP_RE = re.compile(r"\b(help|assist|stuck)\b", re.I)
@@ -37,6 +38,7 @@ def now() -> str: return datetime.now(UTC).isoformat()
 def observer_dir() -> Path: core.STATE.mkdir(exist_ok=True); return core.STATE / "observer"
 def config_path() -> Path: return observer_dir() / CONFIG_NAME
 def state_path() -> Path: return observer_dir() / STATE_NAME
+def heartbeat_path() -> Path: return observer_dir() / HEARTBEAT_NAME
 
 
 def atomic_json_write(path: Path, value: dict, *, compact: bool = False, mode: int | None = None) -> None:
@@ -52,7 +54,7 @@ def atomic_json_write(path: Path, value: dict, *, compact: bool = False, mode: i
 
 
 def default_state() -> dict:
-    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "discovered_rooms": {}, "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0, "discovery_queue_dropped": 0, "discovery_samples": 0}}
+    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "compaction_acknowledged": True, "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "discovered_rooms": {}, "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0, "discovery_queue_dropped": 0, "discovery_samples": 0}}
 
 
 def read_json(path: Path, *, default: dict | None = None) -> dict:
@@ -84,14 +86,26 @@ def load_config() -> dict:
         mailbox_ok = config["mailbox"] is None or core.validate_room(config["mailbox"]) == config["mailbox"]
     except (KeyError, TypeError, ValueError) as error: raise RuntimeError("observer config room settings are invalid") from error
     if not rooms_ok or not mailbox_ok: raise RuntimeError("observer config room settings are invalid")
-    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("state_flush_interval_seconds", 5, 3600), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20), ("rooms_backfill_interval_seconds", 60, 86400)):
+    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("max_agents", 100, 5000), ("max_rooms", 10, 1000), ("max_discovered_rooms", 100, 2000), ("state_flush_interval_seconds", 5, 3600), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20), ("rooms_backfill_interval_seconds", 60, 86400)):
         if not isinstance(config.get(key), int) or not low <= config[key] <= high: raise RuntimeError(f"observer config {key} is invalid")
     intervals = config.get("room_intervals_seconds")
     if not isinstance(intervals, dict) or set(intervals) != {"lobby", "events", "mailbox", "watch"} or not all(isinstance(v, int) and 1 <= v <= 3600 for v in intervals.values()): raise RuntimeError("observer config room_intervals_seconds is invalid")
     return config
 
 
-def compact_state(state: dict, memory_retention: int) -> bool:
+def _agent_priority(agent: dict) -> tuple[int, datetime, int]:
+    facts, inference = agent.get("facts", {}), agent.get("inferences", {})
+    important = bool(facts.get("interaction_with_us") or inference.get("repeat_seen") or inference.get("contribution_url_candidates") or inference.get("role_candidates"))
+    return (1 if important else 0, parse_time(facts.get("last_seen")) or datetime.min.replace(tzinfo=UTC), int(facts.get("seen_count", 0)))
+
+
+def _trim_mapping(mapping: dict, limit: int, *, priority) -> bool:
+    if len(mapping) <= limit: return False
+    for key, _ in sorted(mapping.items(), key=lambda item: priority(item[1]))[:len(mapping) - limit]: del mapping[key]
+    return True
+
+
+def compact_state(state: dict, memory_retention: int, *, max_agents: int | None = None, max_rooms: int | None = None, max_discovered_rooms: int | None = None, evict: bool = False) -> bool:
     """Bound only volatile agent-memory fields; retain identity and durable facts."""
     changed = False
     for agent in state.get("agents", {}).values():
@@ -113,26 +127,50 @@ def compact_state(state: dict, memory_retention: int) -> bool:
             if isinstance(urls, list):
                 bounded_urls = [excerpt(url) for url in urls[-memory_retention:] if isinstance(url, str)]
                 if urls != bounded_urls: inferences["contribution_url_candidates"] = bounded_urls; changed = True
+    if evict:
+        for agent in state.get("agents", {}).values():
+            facts, inferences = agent.get("facts", {}), agent.get("inferences", {})
+            if isinstance(inferences, dict) and isinstance(inferences.get("role_candidates"), list) and len(inferences["role_candidates"]) > 8:
+                inferences["role_candidates"] = inferences["role_candidates"][-8:]; changed = True
+            if isinstance(facts, dict) and isinstance(facts.get("rooms"), list) and len(facts["rooms"]) > 16:
+                facts["rooms"] = facts["rooms"][-16:]; changed = True
+        if max_agents is not None: changed = _trim_mapping(state.get("agents", {}), max_agents, priority=lambda agent: _agent_priority(agent)) or changed
+        if max_rooms is not None: changed = _trim_mapping(state.get("rooms", {}), max_rooms, priority=lambda room: parse_time(room.get("last_seen")) or datetime.min.replace(tzinfo=UTC)) or changed
+        if max_discovered_rooms is not None:
+            rooms = state.get("discovered_rooms", {})
+            protected = {name for name, record in rooms.items() if isinstance(record, dict) and record.get("sample_status") == "queued"}
+            excess = max(0, len(rooms) - max_discovered_rooms)
+            for name, _ in sorted(((name, record) for name, record in rooms.items() if name not in protected), key=lambda item: parse_time(item[1].get("sampled_at") or item[1].get("enqueued_at")) or datetime.min.replace(tzinfo=UTC))[:excess]:
+                del rooms[name]; changed = True
+        if len(state.get("returning_dids", [])) > 1000: state["returning_dids"] = state["returning_dids"][-1000:]; changed = True
     return changed
 
 
 def load_state(memory_retention: int | None = None) -> dict:
-    state = read_json(state_path(), default=default_state())
+    existed = state_path().exists(); state = read_json(state_path(), default=default_state())
     defaults = default_state()
+    if existed and "compaction_acknowledged" not in state: state["compaction_acknowledged"] = False
     for key, value in defaults.items(): state.setdefault(key, value)
     for key, value in defaults["metrics"].items(): state["metrics"].setdefault(key, value)
     compact_state(state, memory_retention if memory_retention is not None else load_config()["memory_retention"])
     return state
-def save_state(state: dict) -> None: state["updated_at"] = now(); atomic_json_write(state_path(), state, compact=True)
+def write_heartbeat(state: dict) -> None:
+    atomic_json_write(heartbeat_path(), {"schema_version": 1, "updated_at": state["updated_at"], "status": state.get("health", {}).get("current", "degraded"), "agent_count": len(state.get("agents", {}))}, compact=True)
+
+
+def save_state(state: dict) -> None:
+    state["updated_at"] = now(); atomic_json_write(state_path(), state, compact=True); write_heartbeat(state)
 
 
 class StateWriter:
     """Single bounded writer for the daemon's shared observer state."""
-    def __init__(self, state: dict, interval_seconds: int) -> None:
-        self.state, self.interval_seconds, self.dirty, self.write_count = state, interval_seconds, False, 0
+    def __init__(self, state: dict, interval_seconds: int, config: dict | None = None) -> None:
+        self.state, self.interval_seconds, self.config, self.dirty, self.write_count = state, interval_seconds, config, False, 0
     def mark_dirty(self) -> None: self.dirty = True
     def flush(self) -> None:
         if self.dirty:
+            config = self.config or load_config()
+            compact_state(self.state, config["memory_retention"], max_agents=config["max_agents"], max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=bool(self.state.get("compaction_acknowledged")))
             save_state(self.state); self.dirty = False; self.write_count += 1
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -140,6 +178,35 @@ class StateWriter:
             except TimeoutError: pass
             self.flush()
         self.flush()
+
+
+def _state_counts(state: dict) -> dict:
+    return {"agents": len(state.get("agents", {})), "rooms": len(state.get("rooms", {})), "discovered_rooms": len(state.get("discovered_rooms", {})), "opportunities": len(state.get("opportunities", [])), "event_ids": len(state.get("event_ids", [])), "errors": len(state.get("error_history", []))}
+
+
+def _estimated_compact_size(state: dict) -> int:
+    path = state_path(); path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=".compact-estimate.", suffix=".tmp", delete=False) as handle:
+        name = handle.name; json.dump(state, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":")); handle.flush(); os.fsync(handle.fileno())
+    try: return os.path.getsize(name)
+    finally: os.unlink(name)
+
+
+def compact_persisted_state(apply: bool = False) -> dict:
+    """Explicitly compact a legacy state; apply always creates a unique backup first."""
+    path = state_path()
+    if not path.is_file(): raise RuntimeError("observer state is missing")
+    before_bytes = path.stat().st_size; state, config = load_state(), load_config(); before = _state_counts(state)
+    compact_state(state, config["memory_retention"], max_agents=config["max_agents"], max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=True)
+    state["compaction_acknowledged"] = True
+    result = {"dry_run": not apply, "before": {"bytes": before_bytes, **before}, "after": {"estimated_bytes": _estimated_compact_size(state), **_state_counts(state)}, "backup": None}
+    if not apply: return result
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"); backup = path.with_name(f"{STATE_NAME}.backup-{stamp}")
+    try:
+        with path.open("rb") as source, backup.open("xb") as target: shutil.copyfileobj(source, target)
+    except FileExistsError as error: raise RuntimeError("observer backup already exists; refusing to overwrite") from error
+    save_state(state); result["dry_run"] = False; result["backup"] = str(backup); result["after"]["bytes"] = path.stat().st_size
+    return result
 
 
 def verified_did() -> str | None:
@@ -262,6 +329,9 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     if did == own_did: state["metrics"]["self_messages"] += 1; return
     fingerprint = core.did_note_location(did)[2]; agent = state["agents"].get(fingerprint)
     if agent is None:
+        if len(state["agents"]) >= config["max_agents"] and state.get("compaction_acknowledged"):
+            compact_state(state, config["memory_retention"], max_agents=config["max_agents"] - 1, max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=True)
+        if len(state["agents"]) >= config["max_agents"]: return
         agent = {"did": did, "fingerprint": fingerprint, "facts": {"first_seen": now(), "last_seen": now(), "last_encounter_at": now(), "seen_count": 0, "rooms": [], "message_refs": [], "recent_messages": [], "signed_count": 0, "unsigned_count": 0, "interaction_with_us": False}, "inferences": {"contribution_url_candidates": [], "role_candidates": [], "repeat_seen": False}}; state["agents"][fingerprint] = agent; metric_event(state, "unique_dids_discovered", "new_did", room, message, did)
     else:
         previous = parse_time(agent["facts"].get("last_encounter_at"))
@@ -271,6 +341,7 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
         agent["facts"]["last_encounter_at"] = now()
     facts, inference = agent["facts"], agent["inferences"]; facts["last_seen"] = now(); facts["seen_count"] += 1; facts["signed_count"] += 1
     if room not in facts["rooms"]: facts["rooms"].append(room)
+    del facts["rooms"][:-16]
     ref = {"room": room, "seq": message["seq"], "ts": message.get("ts")}
     if ref not in facts["message_refs"]: facts["message_refs"].append(ref); facts["recent_messages"].append({**ref, "text": excerpt(text), "signed": True, "untrusted": True})
     if room == mailbox: facts["interaction_with_us"] = True; metric_event(state, "inbound_mailbox_messages", "inbound_mailbox_message", room, message, did)
@@ -437,12 +508,12 @@ async def backfill_worker(client: httpx.AsyncClient, budget: ReadBudget, state: 
         except TimeoutError: pass
 
 
-async def resident_worker(config: dict, stop: asyncio.Event) -> None:
+async def resident_worker(config: dict, stop: asyncio.Event, state: dict | None = None) -> None:
     """Local-only candidate refresh; deliberately has no network client."""
     from . import resident
     while not stop.is_set():
         try:
-            resident.refresh()
+            resident.refresh(observed_state=state)
             from . import autopilot
             autopilot.build_outbox()
         except RuntimeError: pass
@@ -455,13 +526,13 @@ async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx
     with ObserverLock():
         config = load_config(); state, own_did = load_state(config["memory_retention"]), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
         if owned: client = httpx.AsyncClient()
-        writer = StateWriter(state, config["state_flush_interval_seconds"]); writer.mark_dirty()
+        writer = StateWriter(state, config["state_flush_interval_seconds"], config); writer.mark_dirty()
         writer_task = asyncio.create_task(writer.run(stop))
         try:
             tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop, writer)) for room in observed_rooms(config)]
             tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop, writer)))
             tasks.append(asyncio.create_task(backfill_worker(client, budget, state, config, stop, writer)))
-            tasks.append(asyncio.create_task(resident_worker(config, stop)))
+            tasks.append(asyncio.create_task(resident_worker(config, stop, state)))
             try: await asyncio.gather(*tasks)
             finally:
                 stop.set()
