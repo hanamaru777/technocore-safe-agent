@@ -283,6 +283,20 @@ def test_hard_bound_keeps_important_agent_and_evicts_old_low_signal(monkeypatch,
     assert old not in state["agents"] and important in state["agents"] and newest in state["agents"]
 
 
+def test_retention_tiers_keep_all_strong_important_before_repeat_and_noise(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); state = observer.default_state()
+    def add(number, *, interaction=False, contribution=False, repeat=False):
+        did = f"did:key:z6MkTier{number}"; fp = core.did_note_location(did)[2]
+        state["agents"][fp] = {"did": did, "fingerprint": fp, "facts": {"last_seen": "2020-01-01T00:00:00+00:00", "seen_count": number, "interaction_with_us": interaction, "rooms": [], "message_refs": [], "recent_messages": []}, "inferences": {"repeat_seen": repeat, "contribution_url_candidates": ["https://example.invalid/x"] if contribution else [], "role_candidates": [],}}
+        return fp
+    strong = {add(number, interaction=True) for number in range(20)} | {add(number + 20, contribution=True) for number in range(20)}
+    repeats = {add(number + 40, repeat=True) for number in range(60)}
+    for number in range(100, 5200): add(number)
+    observer.compact_state(state, 8, max_agents=100, max_rooms=10, max_discovered_rooms=10, evict=True)
+    assert strong <= set(state["agents"])
+    assert not (repeats & set(state["agents"])) or len(strong) + len(repeats & set(state["agents"])) <= 100
+
+
 def test_explicit_compaction_dry_run_then_backup_preserves_core_evidence(monkeypatch, tmp_path):
     config = setup(monkeypatch, tmp_path); config["max_agents"] = 100; observer.atomic_json_write(observer.config_path(), config)
     state = observer.default_state(); state["cursors"] = {"lobby": 99}; state["metrics"]["questions_detected"] = 7
@@ -291,7 +305,7 @@ def test_explicit_compaction_dry_run_then_backup_preserves_core_evidence(monkeyp
         state["agents"][fp] = {"did": did, "fingerprint": fp, "facts": {"last_seen": f"2020-01-{number % 28 + 1:02d}T00:00:00+00:00", "seen_count": 1, "interaction_with_us": number == 0, "rooms": [], "message_refs": [], "recent_messages": []}, "inferences": {"repeat_seen": False, "contribution_url_candidates": [], "role_candidates": []}}
     observer.save_state(state); before = observer.state_path().read_bytes()
     dry = observer.compact_persisted_state()
-    assert dry["dry_run"] is True and dry["before"]["agents"] == 101 and dry["after"]["agents"] == 100 and observer.state_path().read_bytes() == before
+    assert dry["dry_run"] is True and dry["before"]["agents"] == 101 and dry["after"]["agents"] == 100 and dry["retention"]["strong_important_dropped"] == 0 and dry["retention"]["strong_important_retained"] == dry["retention"]["strong_important_total"] and "repeat_retained" in dry["retention"] and observer.state_path().read_bytes() == before
     applied = observer.compact_persisted_state(True); restored = observer.load_state()
     assert applied["backup"] and __import__("pathlib").Path(applied["backup"]).is_file()
     assert restored["cursors"] == {"lobby": 99} and restored["metrics"]["questions_detected"] == 7 and len(restored["agents"]) == 100

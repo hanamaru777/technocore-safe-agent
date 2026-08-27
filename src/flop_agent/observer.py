@@ -95,8 +95,16 @@ def load_config() -> dict:
 
 def _agent_priority(agent: dict) -> tuple[int, datetime, int]:
     facts, inference = agent.get("facts", {}), agent.get("inferences", {})
-    important = bool(facts.get("interaction_with_us") or inference.get("repeat_seen") or inference.get("contribution_url_candidates") or inference.get("role_candidates"))
-    return (1 if important else 0, parse_time(facts.get("last_seen")) or datetime.min.replace(tzinfo=UTC), int(facts.get("seen_count", 0)))
+    if facts.get("interaction_with_us"): tier = 3
+    elif inference.get("contribution_url_candidates") or inference.get("role_candidates"): tier = 2
+    elif inference.get("repeat_seen"): tier = 1
+    else: tier = 0
+    return (tier, parse_time(facts.get("last_seen")) or datetime.min.replace(tzinfo=UTC), int(facts.get("seen_count", 0)))
+
+
+def _retention_stats(agents: dict) -> dict:
+    tiers = [_agent_priority(agent)[0] for agent in agents.values() if isinstance(agent, dict)]
+    return {"strong_important_total": sum(tier >= 2 for tier in tiers), "strong_important_retained": sum(tier >= 2 for tier in tiers), "strong_important_dropped": 0, "repeat_retained": sum(tier == 1 for tier in tiers)}
 
 
 def _trim_mapping(mapping: dict, limit: int, *, priority) -> bool:
@@ -196,10 +204,11 @@ def compact_persisted_state(apply: bool = False) -> dict:
     """Explicitly compact a legacy state; apply always creates a unique backup first."""
     path = state_path()
     if not path.is_file(): raise RuntimeError("observer state is missing")
-    before_bytes = path.stat().st_size; state, config = load_state(), load_config(); before = _state_counts(state)
+    before_bytes = path.stat().st_size; state, config = load_state(), load_config(); before = _state_counts(state); retention_before = _retention_stats(state.get("agents", {}))
     compact_state(state, config["memory_retention"], max_agents=config["max_agents"], max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=True)
     state["compaction_acknowledged"] = True
-    result = {"dry_run": not apply, "before": {"bytes": before_bytes, **before}, "after": {"estimated_bytes": _estimated_compact_size(state), **_state_counts(state)}, "backup": None}
+    retention_after = _retention_stats(state.get("agents", {})); retention = {"strong_important_total": retention_before["strong_important_total"], "strong_important_retained": retention_after["strong_important_retained"], "strong_important_dropped": retention_before["strong_important_total"] - retention_after["strong_important_retained"], "repeat_retained": retention_after["repeat_retained"]}
+    result = {"dry_run": not apply, "before": {"bytes": before_bytes, **before}, "after": {"estimated_bytes": _estimated_compact_size(state), **_state_counts(state)}, "retention": retention, "backup": None}
     if not apply: return result
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"); backup = path.with_name(f"{STATE_NAME}.backup-{stamp}")
     try:
