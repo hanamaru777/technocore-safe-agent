@@ -7,9 +7,13 @@ git diff --quiet && git diff --cached --quiet || { echo "Refusing update with lo
 git fetch origin main
 git merge-base --is-ancestor HEAD origin/main || { echo "Local HEAD cannot fast-forward to origin/main." >&2; exit 1; }
 git merge --ff-only origin/main
-if systemctl is-active --quiet technocore-safe-agent-discord.service; then uv sync --frozen --group dev --extra discord; else uv sync --frozen --group dev; fi
+extras=(--group dev)
+[[ -e /etc/systemd/system/technocore-safe-agent-discord.service ]] && extras+=(--extra discord)
+[[ -e /etc/systemd/system/technocore-safe-agent-signer.service ]] && extras+=(--extra oracle-signer)
+uv sync --frozen "${extras[@]}"
 PYTHONPATH="$app/src" uv run --project "$app" pytest -q
 PYTHONPATH="$app/src" uv run --project "$app" python -m flop_agent.cli secret-scan
 PYTHONPATH="$app/src" uv run --project "$app" python -m flop_agent.cli doctor
-systemctl try-restart technocore-safe-agent-resident.service
-systemctl try-restart technocore-safe-agent-discord.service
+for service in technocore-safe-agent-resident.service technocore-safe-agent-discord.service technocore-safe-agent-signer.service; do
+  systemctl is-active --quiet "$service" && systemctl try-restart "$service"
+done

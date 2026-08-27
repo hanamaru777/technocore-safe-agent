@@ -22,6 +22,7 @@ ProtectKernelModules=true
 ProtectKernelTunables=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=169.254.169.254
 ReadWritePaths=/var/lib/technocore-safe-agent
 
 [Install]

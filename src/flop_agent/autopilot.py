@@ -36,7 +36,7 @@ def load() -> dict:
     return state
 
 
-def save(state: dict) -> None: resident.observer.atomic_json_write(path(), state)
+def save(state: dict) -> None: resident.observer.atomic_json_write(path(), state, mode=0o640)
 def audit(record: dict) -> None:
     audit_path().parent.mkdir(parents=True, exist_ok=True)
     with audit_path().open("a", encoding="utf-8", newline="\n") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")
@@ -112,23 +112,14 @@ def pause(value: bool) -> dict:
     state["paused"] = value; save(state); return status(state)
 
 
+def export_intent(item: dict) -> dict:
+    """Map an internal intent to the only signer/transport-visible schema."""
+    return {"schema_version": 1, "intent_id": item["id"], "source_fingerprint": item["fingerprint"], "room": item["room"], "seq": item["seq"], "category": item["category"], "topic": item["topic"], "public_knowledge_ids": ["public-profile:1"], "created_at": item["created_at"], "expires_at": item["expires_at"], "safety_decision": item["safety_decision"]}
+
+
 def export_pending() -> dict:
     """Oracle endpoint: expose only strict, non-reflective pending intent fields."""
-    intents = []
-    for item in load()["outbox"].values():
-        if item.get("status", "queued") != "queued":
-            continue
-        intents.append({
-            "schema_version": 1,
-            "intent_id": item["id"],
-            "source_fingerprint": item["fingerprint"],
-            "room": item["room"], "seq": item["seq"],
-            "category": item["category"], "topic": item["topic"],
-            "public_knowledge_ids": ["public-profile:1"],
-            "created_at": item["created_at"], "expires_at": item["expires_at"],
-            "safety_decision": item["safety_decision"],
-        })
-    return {"schema_version": 1, "intents": intents}
+    return {"schema_version": 1, "intents": [export_intent(item) for item in load()["outbox"].values() if item.get("status", "queued") == "queued"]}
 
 
 def acknowledge_export(payload: dict) -> dict:

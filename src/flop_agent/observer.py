@@ -39,13 +39,14 @@ def config_path() -> Path: return observer_dir() / CONFIG_NAME
 def state_path() -> Path: return observer_dir() / STATE_NAME
 
 
-def atomic_json_write(path: Path, value: dict, *, compact: bool = False) -> None:
+def atomic_json_write(path: Path, value: dict, *, compact: bool = False, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False)
     try:
         with handle:
             json.dump(value, handle, ensure_ascii=False, sort_keys=True, **({"separators": (",", ":")} if compact else {"indent": 2})); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
         os.replace(handle.name, path)
+        if mode is not None: os.chmod(path, mode)
     finally:
         if os.path.exists(handle.name): os.unlink(handle.name)
 
