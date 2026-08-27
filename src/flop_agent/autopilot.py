@@ -36,7 +36,7 @@ def load() -> dict:
     return state
 
 
-def save(state: dict) -> None: resident.observer.atomic_json_write(path(), state, mode=0o640)
+def save(state: dict) -> None: resident.observer.atomic_json_write(path(), state, mode=0o660)
 def audit(record: dict) -> None:
     audit_path().parent.mkdir(parents=True, exist_ok=True)
     with audit_path().open("a", encoding="utf-8", newline="\n") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")

@@ -1,6 +1,8 @@
 import hashlib
 import json
 import base64
+import stat
+import os
 import sys
 from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
@@ -87,6 +89,19 @@ def test_oracle_signer_requires_expected_verified_did_and_pinned_signer(monkeypa
         oracle_signer.verify_did()
 
 
+def test_shared_outbox_atomic_replace_keeps_group_read_write_mode(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    state = autopilot.load(); autopilot.save(state); autopilot.save(state)
+    mode = stat.S_IMODE(autopilot.path().stat().st_mode)
+    if os.name == "posix": assert mode == 0o660
+    else: assert "mode=0o660" in (core.ROOT / "src" / "flop_agent" / "autopilot.py").read_text("utf-8")
+    installer = (core.ROOT / "packaging" / "oracle" / "install.sh").read_text("utf-8")
+    preparer = (core.ROOT / "packaging" / "oracle" / "prepare-signer.sh").read_text("utf-8")
+    for script in (installer, preparer):
+        assert "autopilot-outbox.json" in script and "nonces.json" in script and "activities.jsonl" in script
+        assert "chmod 0660" in script
+
+
 def test_oracle_signer_package_separates_metadata_and_has_no_arguments():
     root = core.ROOT / "packaging" / "oracle"
     signer_unit = (root / "technocore-safe-agent-signer.service").read_text("utf-8")
@@ -100,5 +115,9 @@ def test_oracle_signer_package_separates_metadata_and_has_no_arguments():
     assert "technocore-signer" in installer and "--extra oracle-signer" in installer and "--extra oracle-signer" in updater
     assert '"$#" -eq 0' in preparer and "technocore-signer" in preparer and "usermod -a -G technocore," not in preparer and "systemctl daemon-reload" in preparer and "systemctl enable" not in preparer and "systemctl start" not in preparer
     assert "usermod -a -G technocore," not in installer
+    assert "usermod -a -G technocore-autopilot technocore" in installer and "usermod -a -G technocore-autopilot technocore" in preparer
+    assert "autopilot-outbox.json" in installer and "chmod 0660" in installer and "chmod 0660" in preparer
+    assert "nonces.json" in installer and "activities.jsonl" in installer
+    assert "EnvironmentFile=/etc/technocore-safe-agent/env" not in signer_unit
     source = (core.ROOT / "src" / "flop_agent" / "oracle_signer.py").read_text("utf-8")
     assert "len(sys.argv) != 1" in source and "post_signed" in source and "subprocess" not in source

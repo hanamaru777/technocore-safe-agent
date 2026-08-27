@@ -20,6 +20,7 @@ command -v uv >/dev/null || { echo "Install uv first, then rerun: https://docs.a
 id -u technocore >/dev/null 2>&1 || useradd --system --home "$state" --create-home --shell /usr/sbin/nologin technocore
 if $signer; then
   getent group technocore-autopilot >/dev/null || groupadd --system technocore-autopilot
+  usermod -a -G technocore-autopilot technocore
   id -u technocore-signer >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin technocore-signer
   usermod -a -G technocore-autopilot technocore-signer
 fi
@@ -41,7 +42,7 @@ if $signer; then
   install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer"
   chgrp technocore-autopilot "$state"; chmod 2750 "$state"
   install -d -o technocore -g technocore-autopilot -m 2770 "$state/observer"
-  if [[ -e $state/observer/autopilot-outbox.json ]]; then chgrp technocore-autopilot "$state/observer/autopilot-outbox.json"; chmod 0640 "$state/observer/autopilot-outbox.json"; fi
+  if [[ -e $state/observer/autopilot-outbox.json ]]; then chgrp technocore-autopilot "$state/observer/autopilot-outbox.json"; chmod 0660 "$state/observer/autopilot-outbox.json"; fi
   for shared_file in "$state/nonces.json" "$state/activities.jsonl"; do
     if [[ ! -e $shared_file ]]; then install -o technocore-signer -g technocore-autopilot -m 0660 /dev/null "$shared_file"; [[ $shared_file == *.json ]] && printf '{}\n' > "$shared_file"; fi
     chgrp technocore-autopilot "$shared_file"; chmod 0660 "$shared_file"
