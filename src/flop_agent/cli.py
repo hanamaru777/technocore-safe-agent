@@ -67,7 +67,7 @@ def main() -> None:
             output = observer.intelligence_report()
         elif args.command in {"resident-status", "top-agents", "candidates", "candidate", "approve", "reject", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "publish-approved"}:
             from . import observer, resident
-            if args.command == "resident-status": output = resident.refresh()
+            if args.command == "resident-status": output = resident.resident_status()
             elif args.command == "top-agents": output = {"agents": resident.refresh() and observer.intelligence_report()["interesting_agents"]}
             elif args.command == "candidates": output = resident.list_candidates()
             elif args.command == "candidate": output = resident.candidate(args.candidate_id)

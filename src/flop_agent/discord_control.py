@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import UTC, datetime, timedelta
 
 from . import observer, resident
 
@@ -17,11 +18,10 @@ def short(value: object, limit: int = 500) -> str:
 
 def candidate_message(item: dict) -> str:
     context = item.get("context", {})
-    return (f"Candidate {item['candidate_id']} [{item['priority']}/{item['category']}]\n"
-            f"DID {item['fingerprint']} | {item['room']}/{item['seq']}\n"
-            f"Why: {short(item['why'], 180)}\n"
-            f"Untrusted excerpt: {short(context.get('excerpt', ''), 240)}\n"
-            f"Draft: {short(item.get('draft_reply', ''), 320)}")
+    return (f"候補 [{item['priority']}/{item['category']}] {item['candidate_id']}\n"
+            f"Agent: {item['fingerprint']} | room/seq: {item['room']}/{item['seq']}\n"
+            f"理由: {short(item['why'], 140)}\n"
+            f"抜粋（untrusted）: {short(context.get('excerpt', ''), 180)}")
 
 
 class Control:
@@ -36,7 +36,7 @@ class Control:
         if not parts: return {"ok": False, "error": "empty", "message": "Use /help for local control commands."}
         action, args = parts[0], parts[1:]
         if action == "/resident-status":
-            data = resident.refresh(); return {"ok": True, "data": data, "message": f"Health: {short(data['health'], 180)} | agents={data['agents_known']} pending={data['useful_candidates']} gaps={data['message_gaps']}"}
+            data = resident.resident_status(); return {"ok": True, "data": data, "message": f"状態: agents={data['agents_known']} pending={data['useful_candidates']} gaps={data['message_gaps']}"}
         if action == "/intel":
             data = observer.intelligence_report(); return {"ok": True, "data": data, "message": f"Intel: agents={data['facts']['observed_unique_external_dids']} returning={data['facts']['returning_dids']} inbound={data['facts']['inbound_mailbox']}"}
         if action == "/opportunities":
@@ -60,17 +60,21 @@ class Control:
 
     def notifications(self) -> list[dict]:
         state = resident.load_state(); notices = []
+        current = datetime.now(UTC)
+        recent = [entry for entry in state.get("notification_times", []) if (observer.parse_time(entry.get("at")) or current) > current - timedelta(hours=1)]
+        state["notification_times"] = recent
+        capacity = max(0, 3 - len(recent))
         for item in state["candidates"].values():
+            if capacity <= 0: break
             if item["status"] != "pending" or item["priority"] not in {"high", "critical"} or item["candidate_id"] in state["notifications"]: continue
-            state["notifications"].append(item["candidate_id"]); notices.append(item)
+            state["notifications"].append(item["candidate_id"]); state["notification_times"].append({"candidate_id": item["candidate_id"], "at": current.isoformat()}); notices.append(item); capacity -= 1
         resident.save_state(state); return notices
 
     def digest(self) -> str:
         status = resident.resident_status()
         high_pending = sum(item["status"] == "pending" and item["priority"] in {"high", "critical"} for item in resident.load_state()["candidates"].values())
-        return (f"Resident digest | health={short(status['health'], 100)} agents={status['agents_known']} "
-                f"noise={status['noise_ignored']} returning={status['returning_agents']} pending-high={high_pending} "
-                f"inbound={status['inbound']} gaps={status['message_gaps']} discovery-queue={status['discovery_queue']}")
+        return (f"Resident 定時報告: agents {status['agents_known']}、noise除外 {status['noise_ignored']}、再会 {status['returning_agents']}、"
+                f"高優先候補 {high_pending}、受信 {status['inbound']}、gap {status['message_gaps']}、discovery待ち {status['discovery_queue']}。")
 
 
 def validate_environment() -> tuple[str, str, set[str]]:
@@ -84,7 +88,7 @@ def validate_environment() -> tuple[str, str, set[str]]:
 
 async def notification_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
-        for item in control.notifications(): await channel.send(candidate_message(item))
+        for item in await asyncio.to_thread(control.notifications): await channel.send(candidate_message(item))
         try: await asyncio.wait_for(stop.wait(), timeout=15)
         except TimeoutError: pass
 
@@ -92,25 +96,27 @@ async def notification_worker(channel, control: Control, stop: asyncio.Event) ->
 async def digest_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try: await asyncio.wait_for(stop.wait(), timeout=resident.load_config().get("discord_digest_interval_seconds", 3600))
-        except TimeoutError: await channel.send(control.digest())
+        except TimeoutError: await channel.send(await asyncio.to_thread(control.digest))
 
 
 def main() -> None:
     token, channel_id, allowed = validate_environment()
     try: import discord
     except ImportError as error: raise SystemExit("Install the optional discord dependency to run this gateway") from error
-    intents = discord.Intents.none(); intents.message_content = True
+    intents = discord.Intents.default(); intents.message_content = True
     bot = discord.Client(intents=intents); control = Control(allowed, channel_id); stop = asyncio.Event()
     @bot.event
     async def on_ready():
         channel = bot.get_channel(int(channel_id))
         if channel is None: raise RuntimeError("configured Discord channel is unavailable")
+        if getattr(bot, "resident_workers_started", False): return
+        bot.resident_workers_started = True
         LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal")
         asyncio.create_task(notification_worker(channel, control, stop)); asyncio.create_task(digest_worker(channel, control, stop))
     @bot.event
     async def on_message(message):
         if message.author.bot or str(message.channel.id) != channel_id: return
-        result = control.command(str(message.author.id), message.content, str(message.channel.id))
+        result = await asyncio.to_thread(control.command, str(message.author.id), message.content, str(message.channel.id))
         await message.channel.send(result["message"])
     bot.run(token)
 

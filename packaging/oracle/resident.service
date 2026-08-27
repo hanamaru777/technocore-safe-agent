@@ -9,7 +9,7 @@ User=technocore
 WorkingDirectory=/opt/technocore-safe-agent
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
-ExecStart=/usr/local/bin/uv run --project /opt/technocore-safe-agent python -m flop_agent.resident_daemon
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.resident_daemon
 Restart=on-failure
 RestartSec=15
 NoNewPrivileges=true

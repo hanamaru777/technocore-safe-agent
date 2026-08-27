@@ -18,7 +18,7 @@ from . import core, observer
 SCHEMA_VERSION = 1
 STATE_FILE = "resident-state.json"
 CONFIG_FILE = "resident-config.json"
-DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "candidate_cooldown_seconds": 21600, "candidate_ttl_seconds": 604800, "refresh_interval_seconds": 30, "discord_digest_interval_seconds": 3600, "generic_templates": ["notic(ed|ing) recent activity", "curious if", "collaboration synergy"], "quality_threshold": 0.35}
+DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "candidate_cooldown_seconds": 21600, "candidate_ttl_seconds": 604800, "refresh_interval_seconds": 30, "discord_digest_interval_seconds": 3600, "generic_templates": ["notic(ed|ing) your", "notic(ed|ing) recent activity", "curious if", "collaboration synergy"], "quality_threshold": 0.35}
 REJECT_REASONS = {"spam", "generic", "not_relevant", "wrong_agent", "bad_draft", "too_frequent", "unsafe", "other"}
 
 
@@ -29,7 +29,7 @@ def config_path() -> Path: return resident_dir() / CONFIG_FILE
 
 
 def default_state() -> dict:
-    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "relationships": {}, "candidates": {}, "feedback": [], "learning": {"weights": {}, "history": []}, "control": {"paused": False}, "notifications": [], "published": [], "daemon": {"started_at": now(), "last_refresh_at": None}}
+    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "relationships": {}, "candidates": {}, "feedback": [], "learning": {"weights": {}, "history": []}, "control": {"paused": False}, "notifications": [], "notification_times": [], "metrics": {"noise_ignored": 0}, "cached_observer": {"health": {}, "cursors": {}, "message_gaps": 0, "discovery_queue": 0, "agents_known": 0, "returning_agents": 0, "inbound": 0}, "published": [], "daemon": {"started_at": now(), "last_refresh_at": None}}
 
 
 def local_json(path: Path, default: dict) -> dict:
@@ -66,19 +66,35 @@ def garbled(text: str) -> bool:
     return bool(visible) and sum(not char.isalnum() and char not in ".,!?;:/_-" for char in visible) / len(visible) > 0.45
 
 
-def quality(agent: dict, all_agents: list[dict], config: dict) -> dict:
+CONCRETE_RE = re.compile(r"\b(repo|repository|issue|patch|artifact|error|test|bug|traceback|commit|pr|pull request|api|protocol)\b|https://", re.I)
+POETIC_RE = re.compile(r"\b(dreams?|stories?|melodies?|patterns?|philosoph(?:y|ical)|journey|wonder|resonance)\b", re.I)
+
+
+def message_frequencies(agents: list[dict]) -> dict[str, int]:
+    frequencies: dict[str, int] = {}
+    for agent in agents:
+        for item in agent["facts"].get("recent_messages", []):
+            value = normalized(item.get("text", ""))
+            if value: frequencies[value] = frequencies.get(value, 0) + 1
+    return frequencies
+
+
+def quality(agent: dict, all_agents: list[dict], config: dict, frequencies: dict[str, int] | None = None) -> dict:
     messages = [item.get("text", "") for item in agent["facts"].get("recent_messages", [])]
     norm = [normalized(text) for text in messages if normalized(text)]
     duplicate = len(norm) - len(set(norm))
     template = sum(any(re.search(pattern, text, re.I) for pattern in config["generic_templates"]) for text in messages)
-    cluster = sum(1 for other in all_agents if other["did"] != agent["did"] for item in other["facts"].get("recent_messages", []) if normalized(item.get("text", "")) in set(norm))
+    frequencies = frequencies or message_frequencies(all_agents)
+    cluster = sum(max(0, frequencies.get(value, 0) - 1) for value in set(norm))
     garbled_count = sum(garbled(text) for text in messages)
-    specific = sum(bool(re.search(r"\b(room|seq|issue|patch|repo|artifact|error|test)\b|https://", text, re.I)) for text in messages)
+    specific = sum(bool(CONCRETE_RE.search(text)) for text in messages)
+    poetic = sum(bool(POETIC_RE.search(text)) for text in messages)
     technical = [word for word in ("api", "python", "test", "protocol", "commit", "bug", "error") if any(re.search(rf"\b{word}\b", text, re.I) for text in messages)]
     continuity = bool(agent["inferences"].get("repeat_seen"))
     facts = agent["facts"]
-    score = 0.35 + min(0.10, 0.03 * max(0, len(facts.get("rooms", [])) - 1)) + (0.15 if continuity else 0) + min(0.20, 0.06 * specific) - min(0.45, 0.12 * (duplicate + template + garbled_count) + 0.04 * cluster)
-    return {"generic_template_probability": min(1.0, template / max(1, len(messages))), "spam_noise_probability": min(1.0, (duplicate + template + garbled_count + cluster * 0.5) / max(1, len(messages))), "useful_agent_probability": max(0.0, min(1.0, score)), "technical_depth_indicators": technical, "conversation_continuity": continuity, "artifact_evidence_indicators": specific, "facts": {"signed_message_count": facts.get("signed_count", 0), "rooms_count": len(facts.get("rooms", [])), "encounter_count": facts.get("seen_count", 0), "unique_message_count": len(set(norm)), "duplicate_count": duplicate, "near_duplicate_cluster_count": cluster, "garbled_count": garbled_count, "inbound_to_us": facts.get("interaction_with_us", False)}}
+    noise = min(1.0, (duplicate + template + poetic + garbled_count + cluster * 0.5) / max(1, len(messages)))
+    score = 0.30 + min(0.08, 0.02 * max(0, len(facts.get("rooms", [])) - 1)) + (0.15 if continuity else 0) + min(0.25, 0.09 * specific) - min(0.60, 0.12 * (duplicate + template + poetic + garbled_count) + 0.04 * cluster)
+    return {"generic_template_probability": min(1.0, template / max(1, len(messages))), "spam_noise_probability": noise, "useful_agent_probability": max(0.0, min(1.0, score)), "technical_depth_indicators": technical, "conversation_continuity": continuity, "artifact_evidence_indicators": specific, "concrete_evidence": bool(specific), "poetic_filler_count": poetic, "facts": {"signed_message_count": facts.get("signed_count", 0), "rooms_count": len(facts.get("rooms", [])), "encounter_count": facts.get("seen_count", 0), "unique_message_count": len(set(norm)), "duplicate_count": duplicate, "near_duplicate_cluster_count": cluster, "garbled_count": garbled_count, "inbound_to_us": facts.get("interaction_with_us", False)}}
 
 
 def relationship(state: dict, agent: dict, assessment: dict) -> dict:
@@ -97,10 +113,10 @@ def relationship(state: dict, agent: dict, assessment: dict) -> dict:
 
 
 def category_for(kinds: set[str], assessment: dict) -> tuple[str, str] | None:
-    if assessment["spam_noise_probability"] >= 0.6: return None
+    if assessment["spam_noise_probability"] >= 0.45: return None
     if "inbound_mailbox_message" in kinds: return "direct_inbound", "critical"
-    if "help_candidate" in kinds: return "help_request", "high"
-    if "question_candidate" in kinds: return "specific_question", "high"
+    if "help_candidate" in kinds and assessment["concrete_evidence"]: return "help_request", "high"
+    if "question_candidate" in kinds and assessment["concrete_evidence"]: return "specific_question", "high"
     if "collaboration_candidate" in kinds and assessment["useful_agent_probability"] >= 0.35: return "technical_collaboration", "medium"
     if "contribution_candidate" in kinds and assessment["useful_agent_probability"] >= 0.35: return "artifact_contribution", "medium"
     if assessment["conversation_continuity"] and assessment["useful_agent_probability"] >= 0.5: return "interesting_returning_agent", "low"
@@ -136,11 +152,17 @@ def cooldown_active(state: dict, did: str, current: datetime, seconds: int) -> b
 
 
 def refresh() -> dict:
-    config, state, observed = load_config(), load_state(), observer.load_state()
+    config, state = load_config(), load_state()
     current = datetime.now(UTC); expire_candidates(state, current)
     paused = bool(state["control"].get("paused"))
+    if paused:
+        state["daemon"]["last_refresh_at"] = now(); save_state(state); return resident_status(state)
+    observed = observer.load_state()
     own_did = observer.verified_did(); agents = [agent for agent in observed["agents"].values() if agent["did"] != own_did]
-    assessments = {agent["did"]: quality(agent, agents, config) for agent in agents}
+    frequencies = message_frequencies(agents)
+    assessments = {agent["did"]: quality(agent, agents, config, frequencies) for agent in agents}
+    state["metrics"]["noise_ignored"] = sum(item["spam_noise_probability"] >= 0.45 for item in assessments.values())
+    state["cached_observer"] = {"health": observed["health"], "cursors": observed["cursors"], "message_gaps": observed["metrics"]["message_gaps"], "discovery_queue": len(observed["discovery_queue"]), "agents_known": len(observed["agents"]), "returning_agents": observed["metrics"]["unique_returning_dids"], "inbound": observed["metrics"]["inbound_mailbox_messages"]}
     for agent in agents: relationship(state, agent, assessments[agent["did"]])
     if paused:
         state["daemon"]["last_refresh_at"] = now(); save_state(state); return resident_status(state, observed)
@@ -201,13 +223,13 @@ def pause(value: bool) -> dict:
 
 
 def resident_status(state: dict | None = None, observed: dict | None = None) -> dict:
-    state, observed = state or load_state(), observed or observer.load_state()
+    """Return cached state only; never refresh, score agents, or read the network."""
+    state = state or load_state()
+    cached = state.get("cached_observer", {})
+    if observed is not None:
+        cached = {"health": observed["health"], "cursors": observed["cursors"], "message_gaps": observed["metrics"]["message_gaps"], "discovery_queue": len(observed["discovery_queue"]), "agents_known": len(observed["agents"]), "returning_agents": observed["metrics"]["unique_returning_dids"], "inbound": observed["metrics"]["inbound_mailbox_messages"]}
     candidates = list(state["candidates"].values())
-    own_did = observer.verified_did()
-    agents = [agent for agent in observed["agents"].values() if agent["did"] != own_did]
-    config = load_config()
-    noise = sum(quality(agent, agents, config)["spam_noise_probability"] >= 0.6 for agent in agents)
-    return {"read_only": True, "uptime_started_at": state["daemon"]["started_at"], "health": observed["health"], "last_refresh_at": state["daemon"]["last_refresh_at"], "cursors": observed["cursors"], "message_gaps": observed["metrics"]["message_gaps"], "discovery_queue": len(observed["discovery_queue"]), "agents_known": len(observed["agents"]), "useful_candidates": sum(item["status"] == "pending" for item in candidates), "noise_ignored": noise, "returning_agents": observed["metrics"]["unique_returning_dids"], "inbound": observed["metrics"]["inbound_mailbox_messages"], "approved": sum(item["status"] == "approved" for item in candidates), "rejected": sum(item["status"] == "rejected" for item in candidates), "expired": sum(item["status"] == "expired" for item in candidates), "published": len(state["published"]), "paused": state["control"]["paused"], "discord_status": "not_connected"}
+    return {"read_only": True, "uptime_started_at": state["daemon"]["started_at"], "health": cached.get("health", {}), "last_refresh_at": state["daemon"]["last_refresh_at"], "cursors": cached.get("cursors", {}), "message_gaps": cached.get("message_gaps", 0), "discovery_queue": cached.get("discovery_queue", 0), "agents_known": cached.get("agents_known", 0), "useful_candidates": sum(item["status"] == "pending" for item in candidates), "noise_ignored": state.get("metrics", {}).get("noise_ignored", 0), "returning_agents": cached.get("returning_agents", 0), "inbound": cached.get("inbound", 0), "approved": sum(item["status"] == "approved" for item in candidates), "rejected": sum(item["status"] == "rejected" for item in candidates), "expired": sum(item["status"] == "expired" for item in candidates), "published": len(state["published"]), "paused": state["control"]["paused"], "discord_status": "not_connected"}
 
 
 def publish_approved(candidate_id: str, confirm: bool) -> dict:

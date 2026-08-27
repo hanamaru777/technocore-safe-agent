@@ -9,7 +9,7 @@ WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
-ExecStart=/usr/local/bin/uv run --project /opt/technocore-safe-agent python -m flop_agent.discord_control
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.discord_control
 Restart=on-failure
 RestartSec=30
 NoNewPrivileges=true

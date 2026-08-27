@@ -2,6 +2,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 
@@ -165,7 +166,8 @@ def test_pause_keeps_relationship_refresh_but_stops_candidates(monkeypatch, tmp_
     state = observer.load_state(); config = observer.load_config()
     observer.process_message(state, config, "third", msg(1, useful, "specific test artifact", "third"), own, None); observer.save_state(state)
     resident.refresh(); local = resident.load_state()
-    assert local["relationships"][core.did_note_location(useful)[2]]["rooms"] == ["lobby", "other", "third"]
+    assert local["daemon"]["last_refresh_at"] is not None
+    assert core.did_note_location(useful)[2] not in local["relationships"]
     assert not local["candidates"]
 
 
@@ -175,8 +177,8 @@ def test_discord_notification_digest_and_safe_human_response(monkeypatch, tmp_pa
     state = resident.load_state(); state["candidates"][item["candidate_id"]]["priority"] = "critical"; resident.save_state(state)
     control = discord_control.Control({"42"}, "99")
     message = control.command("42", f"/candidate {item['candidate_id']}", "99")["message"]
-    assert "Candidate" in message and "Draft:" in message and len(control.notifications()) == 1 and control.notifications() == []
-    assert "Resident digest" in control.digest()
+    assert "候補" in message and "抜粋" in message and len(control.notifications()) == 1 and control.notifications() == []
+    assert "Resident 定時報告" in control.digest()
 
 
 def test_resident_worker_refreshes_without_network_and_daemon_entrypoint(monkeypatch, tmp_path):
@@ -189,4 +191,37 @@ def test_resident_worker_refreshes_without_network_and_daemon_entrypoint(monkeyp
         await observer.resident_worker({}, stop)
     asyncio.run(run())
     assert calls and resident_daemon.main.__module__ == "flop_agent.resident_daemon"
-    assert "flop_agent.resident_daemon" in (core.ROOT / "packaging" / "oracle" / "resident.service").read_text("utf-8")
+    unit = (core.ROOT / "packaging" / "oracle" / "resident.service").read_text("utf-8")
+    assert "flop_agent.resident_daemon" in unit and ".venv/bin/python" in unit and "uv run" not in unit
+
+
+def test_generic_poetic_question_is_not_high_candidate(monkeypatch, tmp_path):
+    own, _, _ = populate(monkeypatch, tmp_path)
+    state, config = observer.load_state(), observer.load_config()
+    did = "did:key:z6MkPoetic"
+    observer.process_message(state, config, "lobby", msg(1, did, "Curious if dreams and melodies reveal collaboration synergy?"), own, None)
+    observer.save_state(state); resident.refresh()
+    assert not [item for item in resident.list_candidates()["candidates"] if item["did"] == did]
+
+
+def test_notifications_are_rate_limited_and_status_is_cached(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); state = resident.default_state()
+    for number in range(4):
+        state["candidates"][str(number)] = {"candidate_id": str(number), "status": "pending", "priority": "high", "category": "help_request", "fingerprint": "abc", "room": "lobby", "seq": number, "why": "artifact evidence", "context": {"excerpt": "test", "untrusted": True}}
+    resident.save_state(state); control = discord_control.Control({"42"}, "99")
+    assert len(control.notifications()) == 3
+    assert len(control.notifications()) == 0
+    monkeypatch.setattr(observer, "load_state", lambda: pytest.fail("status must not load observer state"))
+    assert resident.resident_status()["agents_known"] == 0
+
+
+def test_five_thousand_agent_refresh_is_linear_enough(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); own = "did:key:z6MkOwn"; (tmp_path / "verified-did.json").write_text(json.dumps({"did": own}), encoding="utf-8")
+    state = observer.default_state(); timestamp = datetime.now(UTC).isoformat()
+    for number in range(5000):
+        did = f"did:key:z6MkLoad{number}"
+        fingerprint = core.did_note_location(did)[2]
+        state["agents"][fingerprint] = {"did": did, "fingerprint": fingerprint, "facts": {"first_seen": timestamp, "last_seen": timestamp, "last_encounter_at": timestamp, "seen_count": 1, "rooms": ["lobby"], "message_refs": [], "recent_messages": [{"text": f"unique technical test artifact {number}"}], "signed_count": 1, "unsigned_count": 0, "interaction_with_us": False}, "inferences": {"contribution_url_candidates": [], "role_candidates": [], "repeat_seen": False}}
+    observer.save_state(state)
+    started = time.perf_counter(); resident.refresh(); elapsed = time.perf_counter() - started
+    assert elapsed < 10
