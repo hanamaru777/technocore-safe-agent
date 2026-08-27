@@ -390,7 +390,10 @@ async def resident_worker(config: dict, stop: asyncio.Event) -> None:
     """Local-only candidate refresh; deliberately has no network client."""
     from . import resident
     while not stop.is_set():
-        try: resident.refresh()
+        try:
+            resident.refresh()
+            from . import autopilot
+            autopilot.build_outbox()
         except RuntimeError: pass
         try: await asyncio.wait_for(stop.wait(), timeout=resident.load_config()["refresh_interval_seconds"])
         except TimeoutError: pass

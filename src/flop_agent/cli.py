@@ -12,13 +12,20 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan"):
         sub.add_parser(command)
-    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state"):
+    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-pause", "autopilot-resume"):
         sub.add_parser(command)
     agent = sub.add_parser("agent"); agent.add_argument("identifier")
     resident_candidate = sub.add_parser("candidate"); resident_candidate.add_argument("candidate_id")
     approve = sub.add_parser("approve"); approve.add_argument("candidate_id")
     reject = sub.add_parser("reject"); reject.add_argument("candidate_id"); reject.add_argument("reason")
     publish = sub.add_parser("publish-approved"); publish.add_argument("candidate_id"); publish.add_argument("--confirm", action="store_true")
+    autopilot_publish = sub.add_parser("autopilot-publish"); autopilot_publish.add_argument("intent_id"); autopilot_publish.add_argument("--confirm", action="store_true")
+    session = sub.add_parser("autopilot-session-once"); session.add_argument("--dry-run", action="store_true")
+    session_publish = sub.add_parser("autopilot-session-publish"); session_publish.add_argument("intent_id")
+    session_publish.add_argument("--did", required=True)
+    sub.add_parser("autopilot-session-verify")
+    sub.add_parser("autopilot-export")
+    sub.add_parser("autopilot-ack")
     room = sub.add_parser("read-room"); room.add_argument("room")
     new = sub.add_parser("read-new"); new.add_argument("room")
     post = sub.add_parser("post-signed"); post.add_argument("room"); post.add_argument("--text", required=True); post.add_argument("--confirm", action="store_true")
@@ -65,8 +72,8 @@ def main() -> None:
         elif args.command == "intelligence":
             from . import observer
             output = observer.intelligence_report()
-        elif args.command in {"resident-status", "top-agents", "candidates", "candidate", "approve", "reject", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "publish-approved"}:
-            from . import observer, resident
+        elif args.command in {"resident-status", "top-agents", "candidates", "candidate", "approve", "reject", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "publish-approved", "autopilot-status", "autopilot-queue", "autopilot-pause", "autopilot-resume", "autopilot-publish", "autopilot-export", "autopilot-ack", "autopilot-session-once", "autopilot-session-verify", "autopilot-session-publish"}:
+            from . import autopilot, autopilot_transport, observer, resident
             if args.command == "resident-status": output = resident.resident_status()
             elif args.command == "top-agents": output = {"agents": resident.refresh() and observer.intelligence_report()["interesting_agents"]}
             elif args.command == "candidates": output = resident.list_candidates()
@@ -79,7 +86,17 @@ def main() -> None:
             elif args.command == "resume-resident": output = resident.pause(False)
             elif args.command == "approved": output = {"candidates": [item for item in resident.list_candidates()["candidates"] if item["status"] == "approved"]}
             elif args.command == "export-resident-state": output = {"export_path": resident.export_state()}
-            else: output = resident.publish_approved(args.candidate_id, args.confirm)
+            elif args.command == "publish-approved": output = resident.publish_approved(args.candidate_id, args.confirm)
+            elif args.command == "autopilot-status": output = autopilot.status()
+            elif args.command == "autopilot-queue": output = autopilot.queue()
+            elif args.command == "autopilot-pause": output = autopilot.pause(True)
+            elif args.command == "autopilot-resume": output = autopilot.pause(False)
+            elif args.command == "autopilot-publish": output = autopilot.publish(args.intent_id, args.confirm)
+            elif args.command == "autopilot-export": output = autopilot.export_pending()
+            elif args.command == "autopilot-ack": output = autopilot.acknowledge_export(json.load(sys.stdin))
+            elif args.command == "autopilot-session-once": output = autopilot_transport.session_once(args.dry_run)
+            elif args.command == "autopilot-session-verify": output = autopilot_transport.verify_session_did()
+            else: output = autopilot_transport.publish_one(args.intent_id, args.did)
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()

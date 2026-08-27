@@ -83,6 +83,12 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 .\flop.ps1 pause-resident
 .\flop.ps1 resume-resident
 .\flop.ps1 export-resident-state
+.\flop.ps1 autopilot-status
+.\flop.ps1 autopilot-queue
+.\flop.ps1 autopilot-pause
+.\flop.ps1 autopilot-resume
+.\flop.ps1 autopilot-session --dry-run
+.\flop.ps1 autopilot-session
 ```
 
 `show-did`、`verify-did`、`post-signed`、`contribution-proof`、`resume-proof` は seed を SecureString で尋ねます。seed は入力欄に表示されません。`verify-did` は expected DID / derived DID / match だけを出力し、一致時に DID のみをローカル state に記録します。`contribution-proof` は成功済みの `verify-did` が同じ DID を記録していなければ実行できません。さらに公開 Contribution URL を入力し、DID、Mailbox、Git commit、各 URL、実行予定 step を確認してから最終承認します。
@@ -110,6 +116,12 @@ Resident Agent は observer の public state を品質・関係・候補とし�
 `approve` / `reject` は local candidate state と緩やかな範囲制限付き learning history を更新するだけで、Technocore へは投稿しません。pending candidate は TTL 後に expired となり、same DID は action/candidate から configured cooldown を守ります。pause は候補生成だけを止め、観測・quality・relationship refresh は継続します。`publish-approved` は Windows だけで、期限内 approved candidate、候補表示・最終確認・SecureString seed・verified DID gate を通った場合にのみ既存の公式 signer 経由で投稿します。Oracle/Discord に seed は置きません。
 
 Oracle 用の deployment package と optional Discord control adapter は [packaging/oracle](packaging/oracle) にあります。いずれも自動 install/connect はせず、Discord token は env file のみです。Discord は allowed user と configured channel だけを受け入れ、high/critical candidate の重複しない通知と定期 digest を送れます。`export-resident-state` は `verified-did.json` と `observer/` 配下の公開 state/config だけを manifest/hash 付き zip にし、seed・token・credential・private material は含めません。import は current relative layout だけを検証して原子的に配置します。
+
+## Safe Autopilot v1
+
+Safe Autopilot is disabled and paused by default. The Oracle Resident may create only a strict structured public intent; it never creates reply text, signs, or writes to Technocore. The Windows-only publisher renders one of its fixed templates using [public-profile.json](public-profile.json), re-runs DLP and rate limits, and then uses the existing verified-DID signer path. It never reflects an untrusted room excerpt in its output. No Oracle deployment or autopilot enablement is included here.
+
+The optional Windows session transport is fixed-function: its ignored `local-state/autopilot-ssh.json` accepts only `oracle_host`, `ssh_user`, `identity_file`, and `poll_interval_seconds`. It uses Windows OpenSSH with strict existing-host verification and can run only remote `autopilot-export` and local-state-only `autopilot-ack` operations. Remote export is a versioned allowlisted schema without message text, excerpt, draft, URL, or arbitrary metadata. `autopilot-session --dry-run` fetches and validates/render-checks those intents without requesting a seed, signing, posting, or acknowledging. The normal `autopilot-session` asks once for a SecureString seed and retries failed transport cycles without acknowledging an intent unless the signed post has succeeded and a local receipt was saved. It remains disabled/paused unless the user explicitly changes local state; this repository does not enable it.
 
 `contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 

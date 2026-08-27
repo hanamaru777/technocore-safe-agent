@@ -6,7 +6,7 @@ import logging
 import os
 from datetime import UTC, datetime, timedelta
 
-from . import observer, resident
+from . import autopilot, observer, resident
 
 LOG = logging.getLogger(__name__)
 
@@ -55,7 +55,13 @@ class Control:
         if action == "/resume": return {"ok": True, "data": resident.pause(False), "message": "Candidate generation resumed."}
         if action == "/learning":
             data = resident.feedback_status(); return {"ok": True, "data": data, "message": f"Learning: approved={data['approved']} rejected={data['rejected']} expired={data['expired']}."}
-        if action == "/help": return {"ok": True, "data": {}, "message": "Commands: /resident-status /intel /opportunities /agents /agent <id> /candidate <id> /approve <id> /reject <id> <reason> /pause /resume /learning"}
+        if action == "/autopilot-status":
+            data = autopilot.status(); return {"ok": True, "data": data, "message": f"Autopilot: enabled={data['enabled']} paused={data['paused']} queued={data['queued']}."}
+        if action == "/autopilot-queue":
+            data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
+        if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
+        if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot remains disabled until local configuration explicitly enables it."}
+        if action == "/help": return {"ok": True, "data": {}, "message": "Commands: /resident-status /intel /opportunities /agents /agent <id> /candidate <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-pause /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
 
     def notifications(self) -> list[dict]:

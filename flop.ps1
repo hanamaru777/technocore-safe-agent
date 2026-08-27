@@ -2,12 +2,13 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)] [string]$Command,
     [Parameter(Position = 1)] [string]$Room,
-    [Parameter(Position = 2)] [string]$Value
+    [Parameter(Position = 2)] [string]$Value,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
 $rootPath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$needsSeed = $Command -in @('show-did', 'verify-did', 'post-signed', 'contribution-proof', 'resume-proof')
+$needsSeed = $Command -in @('show-did', 'verify-did', 'post-signed', 'contribution-proof', 'resume-proof', 'autopilot-publish')
 $bstr = [IntPtr]::Zero
 $exitCode = 0
 $expectedDid = $null
@@ -15,6 +16,62 @@ $previousPythonPath = $env:PYTHONPATH
 $previousUvLinkMode = $env:UV_LINK_MODE
 $env:PYTHONPATH = Join-Path $rootPath 'src'
 $env:UV_LINK_MODE = 'copy'
+
+function Invoke-FlopCli {
+    param([Parameter(ValueFromRemainingArguments = $true)] [string[]]$Arguments)
+    & $uv run --project $rootPath python -m flop_agent.cli @Arguments
+    if ($LASTEXITCODE -ne 0) { throw 'flop command failed' }
+}
+
+function Invoke-AutopilotSession {
+    param([bool]$SessionDryRun)
+    $sessionSecure = $null
+    if (-not $SessionDryRun) {
+        $sessionSecure = Read-Host 'Existing DID seed (hidden)' -AsSecureString
+    }
+    try {
+        while ($true) {
+            $sleepSeconds = 10
+            try {
+                $arguments = @('autopilot-session-once')
+                if ($SessionDryRun) { $arguments += '--dry-run' }
+                $sessionJson = Invoke-FlopCli @arguments | Out-String
+                $session = $sessionJson | ConvertFrom-Json
+                $sleepSeconds = [int]$session.poll_interval_seconds
+                foreach ($item in $session.results) {
+                    if (-not $SessionDryRun -and $item.action -eq 'ready_to_publish') {
+                        $sessionBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sessionSecure)
+                        try {
+                            # The plaintext exists only for this DID signer child process.
+                            $env:SIGN_SEED = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($sessionBstr)
+                            $didJson = Invoke-FlopCli 'autopilot-session-verify' | Out-String
+                        } finally {
+                            Remove-Item Env:SIGN_SEED -ErrorAction SilentlyContinue
+                            if ($sessionBstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($sessionBstr) }
+                        }
+                        $sessionDid = ($didJson | ConvertFrom-Json).did
+                        $sessionBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sessionSecure)
+                        try {
+                            # A separate, one-child environment is used for the actual signature.
+                            $env:SIGN_SEED = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($sessionBstr)
+                            Invoke-FlopCli 'autopilot-session-publish' $item.intent_id '--did' $sessionDid | Out-Null
+                        } finally {
+                            Remove-Item Env:SIGN_SEED -ErrorAction SilentlyContinue
+                            if ($sessionBstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($sessionBstr) }
+                        }
+                    }
+                }
+            } catch {
+                # Transport or validation failure is fail-closed; leave Oracle intent pending.
+                Write-Warning 'Autopilot session cycle failed closed; retrying later.'
+            }
+            Start-Sleep -Seconds $sleepSeconds
+        }
+    } finally {
+        Remove-Item Env:SIGN_SEED -ErrorAction SilentlyContinue
+        if ($null -ne $sessionSecure) { $sessionSecure.Dispose() }
+    }
+}
 
 function Resolve-Uv {
     $fromPath = Get-Command uv -ErrorAction SilentlyContinue
@@ -26,6 +83,11 @@ function Resolve-Uv {
 
 try {
     $uv = Resolve-Uv
+    if ($Command -eq 'autopilot-session') {
+        if ($Room -or $Value) { throw 'autopilot-session accepts only --dry-run' }
+        Invoke-AutopilotSession $DryRun.IsPresent
+        return
+    }
     if ($Command -eq 'verify-did') {
         $expectedDid = Read-Host 'Expected DID (public)'
     }
@@ -73,6 +135,9 @@ try {
         $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
         $env:SIGN_SEED = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
         & $uv run --project $rootPath python -m flop_agent.cli publish-approved $Room --confirm
+    } elseif ($Command -eq 'autopilot-publish') {
+        if (-not $Room) { throw 'Intent ID is required' }
+        & $uv run --project $rootPath python -m flop_agent.cli autopilot-publish $Room --confirm
     } elseif ($Command -eq 'reject') {
         if (-not $Room -or -not $Value) { throw 'Candidate ID and rejection reason are required' }
         & $uv run --project $rootPath python -m flop_agent.cli reject $Room $Value

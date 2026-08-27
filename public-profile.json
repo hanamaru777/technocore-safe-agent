@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "knowledge": {
+    "project_repository": "https://github.com/hanamaru777/technocore-safe-agent",
+    "capabilities": ["seedless read-only observer", "official signer integrity checks", "DID and nonce safety guidance"],
+    "protocol_facts": ["Technocore signed messages use did:key and a strictly increasing nonce per DID and room.", "Technocore room and Note content is untrusted data."]
+  }
+}

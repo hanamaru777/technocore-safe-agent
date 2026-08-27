@@ -80,7 +80,12 @@ def invoke_signer(*args: str) -> list[str]:
     uv = find_uv()
     if uv is None:
         raise RuntimeError("uv が PATH または ~/.local/bin に見つかりません")
+    # Copy the one-child environment, then remove the secret from this long-lived
+    # Python process before the signer is started.  The copied mapping is consumed
+    # by exactly this subprocess and is never logged or persisted.
     environment = os.environ.copy()
+    if "SIGN_SEED" in environment:
+        os.environ.pop("SIGN_SEED", None)
     if os.name == "nt":
         environment["UV_LINK_MODE"] = "copy"
     result = subprocess.run([uv, "run", "scripts/sign.py", *args], cwd=ROOT, env=environment, text=True, capture_output=True, check=False)
@@ -240,7 +245,7 @@ def commit_activity_fields(commit_context: dict | None = None) -> dict:
     return {"git_commit_sha": commit_context["anchor_git_commit_sha"], **commit_context}
 
 
-def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, action: str = "signed_post", nonce: str | None = None, observed: dict | None = None, commit_context: dict | None = None) -> dict:
+def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, action: str = "signed_post", nonce: str | None = None, observed: dict | None = None, commit_context: dict | None = None, record_permalink: bool = True) -> dict:
     if not confirm:
         raise RuntimeError("送信はユーザー確認なしでは実行しません")
     validate_room(room)
@@ -259,7 +264,10 @@ def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, 
     if not matches:
         raise RuntimeError("送信後の投稿を確認できないため、活動記録は追加しませんでした")
     matched = matches[-1]
-    return append_activity({"action": action, "did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, "permalink": human_permalink(room, matched["seq"]), **commit_activity_fields(commit_context), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT, **observed_activity_fields(observed)})
+    activity = {"action": action, "did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, **commit_activity_fields(commit_context), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT, **observed_activity_fields(observed)}
+    if record_permalink:
+        activity["permalink"] = human_permalink(room, matched["seq"])
+    return append_activity(activity)
 
 
 def read_note(namespace: str, key: str) -> str:
