@@ -92,11 +92,13 @@ def test_oracle_signer_package_separates_metadata_and_has_no_arguments():
     signer_unit = (root / "technocore-safe-agent-signer.service").read_text("utf-8")
     resident_unit = (root / "resident.service").read_text("utf-8")
     blocker = (root / "block-technocore-metadata.sh").read_text("utf-8")
-    assert "User=technocore-signer" in signer_unit and "oracle_signer" in signer_unit and "EnvironmentFile=/etc/technocore-safe-agent/signer.env" in signer_unit
+    assert "User=technocore-signer" in signer_unit and "SupplementaryGroups=technocore-autopilot" in signer_unit and "SupplementaryGroups=technocore " not in signer_unit and "oracle_signer" in signer_unit and "EnvironmentFile=/etc/technocore-safe-agent/signer.env" in signer_unit
+    assert "EnvironmentFile=/etc/technocore-safe-agent/env" not in signer_unit and "technocore" not in signer_unit.split("SupplementaryGroups=", 1)[1].splitlines()[0].replace("technocore-autopilot", "")
     assert "IPAddressDeny=169.254.169.254" in resident_unit
     assert '"$#" -eq 0' in blocker and "--uid-owner" in blocker and "169.254.169.254" in blocker
     installer = (root / "install.sh").read_text("utf-8"); updater = (root / "update.sh").read_text("utf-8"); preparer = (root / "prepare-signer.sh").read_text("utf-8")
     assert "technocore-signer" in installer and "--extra oracle-signer" in installer and "--extra oracle-signer" in updater
-    assert '"$#" -eq 0' in preparer and "technocore-signer" in preparer and "systemctl daemon-reload" in preparer and "systemctl enable" not in preparer and "systemctl start" not in preparer
+    assert '"$#" -eq 0' in preparer and "technocore-signer" in preparer and "usermod -a -G technocore," not in preparer and "systemctl daemon-reload" in preparer and "systemctl enable" not in preparer and "systemctl start" not in preparer
+    assert "usermod -a -G technocore," not in installer
     source = (core.ROOT / "src" / "flop_agent" / "oracle_signer.py").read_text("utf-8")
     assert "len(sys.argv) != 1" in source and "post_signed" in source and "subprocess" not in source

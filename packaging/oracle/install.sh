@@ -21,7 +21,7 @@ id -u technocore >/dev/null 2>&1 || useradd --system --home "$state" --create-ho
 if $signer; then
   getent group technocore-autopilot >/dev/null || groupadd --system technocore-autopilot
   id -u technocore-signer >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin technocore-signer
-  usermod -a -G technocore,technocore-autopilot technocore-signer
+  usermod -a -G technocore-autopilot technocore-signer
 fi
 install -d -o technocore -g technocore -m 0750 "$state/observer" "$envdir"
 install -o root -g technocore -m 0640 /dev/null "$envdir/env"
@@ -39,8 +39,13 @@ install -o root -g root -m 0644 packaging/oracle/resident.service /etc/systemd/s
 if $discord; then install -o root -g root -m 0644 packaging/oracle/discord.service /etc/systemd/system/technocore-safe-agent-discord.service; fi
 if $signer; then
   install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer"
+  chgrp technocore-autopilot "$state"; chmod 2750 "$state"
   install -d -o technocore -g technocore-autopilot -m 2770 "$state/observer"
   if [[ -e $state/observer/autopilot-outbox.json ]]; then chgrp technocore-autopilot "$state/observer/autopilot-outbox.json"; chmod 0640 "$state/observer/autopilot-outbox.json"; fi
+  for shared_file in "$state/nonces.json" "$state/activities.jsonl"; do
+    if [[ ! -e $shared_file ]]; then install -o technocore-signer -g technocore-autopilot -m 0660 /dev/null "$shared_file"; [[ $shared_file == *.json ]] && printf '{}\n' > "$shared_file"; fi
+    chgrp technocore-autopilot "$shared_file"; chmod 0660 "$shared_file"
+  done
   install -o root -g root -m 0600 packaging/oracle/signer.env.example "$envdir/signer.env"
   install -o root -g root -m 0755 packaging/oracle/block-technocore-metadata.sh /usr/local/libexec/technocore-safe-agent-block-metadata
   install -o root -g root -m 0644 packaging/oracle/technocore-safe-agent-signer.service /etc/systemd/system/technocore-safe-agent-signer.service

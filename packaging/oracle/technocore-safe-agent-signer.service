@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=technocore-signer
 Group=technocore-signer
-SupplementaryGroups=technocore technocore-autopilot
+SupplementaryGroups=technocore-autopilot
 WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/signer.env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
