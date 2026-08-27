@@ -37,6 +37,12 @@ fi
 install -o root -g root -m 0755 "$app/packaging/oracle/block-technocore-metadata.sh" /usr/local/libexec/technocore-safe-agent-block-metadata
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-metadata-block.service" /etc/systemd/system/technocore-safe-agent-metadata-block.service
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-signer.service" /etc/systemd/system/technocore-safe-agent-signer.service
+# Refresh the existing resident unit from this checked-out release.  Discord
+# is refreshed only when that optional service is already installed.
+install -o root -g root -m 0644 "$app/packaging/oracle/resident.service" /etc/systemd/system/technocore-safe-agent-resident.service
+if [[ -e /etc/systemd/system/technocore-safe-agent-discord.service ]]; then
+  install -o root -g root -m 0644 "$app/packaging/oracle/discord.service" /etc/systemd/system/technocore-safe-agent-discord.service
+fi
 cd "$app"
 extras=(--extra oracle-signer)
 # A pre-existing Discord unit means its optional dependency must survive the

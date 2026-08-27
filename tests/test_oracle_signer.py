@@ -163,6 +163,10 @@ def test_oracle_signer_package_separates_metadata_and_has_no_arguments():
     assert "technocore-signer" in installer and "--extra oracle-signer" in installer and "--extra oracle-signer" in updater
     assert '"$#" -eq 0' in preparer and "technocore-signer" in preparer and "usermod -a -G technocore," not in preparer and "systemctl daemon-reload" in preparer and "systemctl enable" not in preparer and "systemctl start" not in preparer
     assert "extras=(--extra oracle-signer)" in preparer and "--extra discord" in preparer and "technocore-safe-agent-discord.service" in preparer and "! -e $envdir/signer.env" in preparer
+    assert 'install -o root -g root -m 0644 "$app/packaging/oracle/resident.service" /etc/systemd/system/technocore-safe-agent-resident.service' in preparer
+    assert 'install -o root -g root -m 0644 "$app/packaging/oracle/discord.service" /etc/systemd/system/technocore-safe-agent-discord.service' in preparer
+    assert 'if [[ -e /etc/systemd/system/technocore-safe-agent-discord.service ]]; then' in preparer
+    assert "systemctl restart" not in preparer and "systemctl start" not in preparer and "systemctl enable" not in preparer
     assert "usermod -a -G technocore," not in installer
     assert "usermod -a -G technocore-autopilot technocore" in installer and "usermod -a -G technocore-autopilot technocore" in preparer
     assert "autopilot-outbox.json" in installer and "autopilot-audit.jsonl" in installer and '"$state/autopilot"' in installer and "chmod 0660" in installer and "chmod 0660" in preparer
