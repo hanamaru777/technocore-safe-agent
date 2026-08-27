@@ -1,8 +1,8 @@
 from flop_agent import core
 
 
-def test_bundled_official_signer_hash_is_pinned():
-    assert core.signer_sha256() == core.SIGNER_SHA256
+def test_bundled_official_signer_matches_pinned_git_blob():
+    assert core.signer_matches_pinned()
 
 
 def test_no_tracked_secret_material():
