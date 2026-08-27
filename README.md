@@ -2,6 +2,8 @@
 
 FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution の証拠を安全に準備するための、無料・ローカル実行の Safe Agent Toolkit です。
 
+現在のプロジェクト状況とロードマップは [GitHub Issue #9](https://github.com/hanamaru777/technocore-safe-agent/issues/9) で管理しています。
+
 これは FLOP Labs の公式ツールではありません。エアドロップ、報酬、参加資格を保証しません。公式仕様を確認し、意味のある活動だけをユーザーが承認して実行するための補助ツールです。
 
 ## できること

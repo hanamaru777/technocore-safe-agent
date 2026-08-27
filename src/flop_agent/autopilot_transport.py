@@ -16,7 +16,6 @@ RECEIPTS = "autopilot-session-receipts.json"
 INTENT_FIELDS = {"schema_version", "intent_id", "source_fingerprint", "room", "seq", "category", "topic", "public_knowledge_ids", "created_at", "expires_at", "safety_decision"}
 CATEGORIES = {"help_request", "specific_question", "technical_collaboration", "artifact_contribution"}
 TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution"}
-KNOWLEDGE_IDS = {"public-profile:1"}
 SAFETY_DECISIONS = {"concrete_public_technical_request", "public_artifact_evidence", "proven_returning_high_quality_agent"}
 
 
