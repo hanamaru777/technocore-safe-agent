@@ -148,6 +148,7 @@ def test_ttl_cooldown_and_expired_publish_gate(monkeypatch, tmp_path):
     item = next(item for item in resident.list_candidates()["candidates"] if item["did"] == useful)
     state = resident.load_state(); state["candidates"][item["candidate_id"]]["expires_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat(); resident.save_state(state)
     resident.refresh(); assert resident.candidate(item["candidate_id"])["candidate"]["status"] == "expired"
+    monkeypatch.setattr(resident.os, "name", "nt")
     with pytest.raises(RuntimeError, match="expired"):
         resident.publish_approved(item["candidate_id"], True)
     state = resident.load_state(); config = resident.load_config()

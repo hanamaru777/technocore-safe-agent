@@ -52,6 +52,22 @@ def signer_sha256() -> str:
     return hashlib.sha256((ROOT / "scripts" / "sign.py").read_bytes()).hexdigest()
 
 
+def canonical_signer_bytes() -> bytes:
+    """Normalize only line endings before verifying the exact pinned Git blob."""
+    raw = (ROOT / "scripts" / "sign.py").read_bytes()
+    return raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def signer_blob_sha() -> str:
+    content = canonical_signer_bytes()
+    return hashlib.sha1(f"blob {len(content)}\0".encode("ascii") + content).hexdigest()
+
+
+def signer_matches_pinned() -> bool:
+    """Accept precisely the official pinned blob after CRLF/LF normalization."""
+    return hmac.compare_digest(signer_blob_sha(), SIGNER_BLOB_SHA)
+
+
 def find_uv() -> str | None:
     """Find uv even when its Windows installer directory is not on PATH."""
     return shutil.which("uv") or next(
@@ -344,7 +360,7 @@ def proof_preflight(plan: dict) -> dict:
     if not report["ok"]:
         raise RuntimeError("doctor が失敗したため Proof 書込みを停止しました")
     official = sync_official()
-    if official["upstream_signer_changed"] or not official["local_signer_matches_pinned_byte_hash"]:
+    if official["upstream_signer_changed"] or not official["local_signer_matches_pinned_blob"]:
         raise RuntimeError("公式 signer の変更またはローカル改竄を検出したため Proof 書込みを停止しました")
     public_contribution_url_preflight(plan["contribution_url"])
     return official
@@ -506,7 +522,7 @@ def sync_official() -> dict:
     signer_metadata.raise_for_status()
     latest_signer_blob = signer_metadata.json()["sha"]
     local_hash = signer_sha256()
-    return {"pinned_commit": UPSTREAM_COMMIT, "latest_commit": latest_commit, "upstream_commit_changed": latest_commit != UPSTREAM_COMMIT, "pinned_signer_blob_sha": SIGNER_BLOB_SHA, "latest_upstream_signer_blob_sha": latest_signer_blob, "upstream_signer_changed": latest_signer_blob != SIGNER_BLOB_SHA, "local_signer_byte_sha256": local_hash, "local_signer_matches_pinned_byte_hash": local_hash == SIGNER_SHA256}
+    return {"pinned_commit": UPSTREAM_COMMIT, "latest_commit": latest_commit, "upstream_commit_changed": latest_commit != UPSTREAM_COMMIT, "pinned_signer_blob_sha": SIGNER_BLOB_SHA, "latest_upstream_signer_blob_sha": latest_signer_blob, "upstream_signer_changed": latest_signer_blob != SIGNER_BLOB_SHA, "local_signer_byte_sha256": local_hash, "local_signer_canonical_blob_sha": signer_blob_sha(), "local_signer_matches_pinned_blob": signer_matches_pinned()}
 
 
 def doctor() -> dict:
@@ -518,15 +534,15 @@ def doctor() -> dict:
     activity_valid, activity_count = verify_activity_log()
     project_copy_mode = 'link-mode = "copy"' in (ROOT / "pyproject.toml").read_text("utf-8")
     checks = {
-        "windows": os.name == "nt",
+        "platform_supported": os.name in {"nt", "posix"},
         "uv_found": uv is not None,
         "uv_copy_mode": os.name != "nt" or project_copy_mode or os.environ.get("UV_LINK_MODE") == "copy",
         "official_signer_present": (ROOT / "scripts" / "sign.py").is_file(),
-        "official_signer_matches_pinned": signer_sha256() == SIGNER_SHA256,
+        "official_signer_matches_pinned": signer_matches_pinned(),
         "activity_log_valid": activity_valid,
         "git_commit_available": bool(git_commit_sha()),
     }
-    return {"ok": all(checks.values()), "checks": checks, "uv_path": uv, "uv_version": uv_version, "uv_link_mode": "copy" if os.name == "nt" else "platform-default", "python": sys.version.split()[0], "activity_count": activity_count}
+    return {"ok": all(checks.values()), "checks": checks, "platform": "windows" if os.name == "nt" else "linux-or-posix", "uv_path": uv, "uv_version": uv_version, "uv_link_mode": "copy" if os.name == "nt" else "platform-default", "python": sys.version.split()[0], "activity_count": activity_count}
 
 
 def secret_scan() -> list[str]:

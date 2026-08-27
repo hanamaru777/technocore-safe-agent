@@ -113,6 +113,31 @@ def test_sync_official_does_not_confuse_raw_line_endings_with_blob_change(monkey
     assert core.sync_official()["upstream_signer_changed"] is False
 
 
+def test_signer_blob_verification_accepts_only_lf_crlf_equivalent_content(monkeypatch, tmp_path):
+    original = (core.ROOT / "scripts" / "sign.py").read_bytes()
+    signer = tmp_path / "scripts" / "sign.py"; signer.parent.mkdir()
+    monkeypatch.setattr(core, "ROOT", tmp_path)
+    lf = original.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    signer.write_bytes(lf)
+    assert core.signer_blob_sha() == core.SIGNER_BLOB_SHA and core.signer_matches_pinned()
+    signer.write_bytes(lf.replace(b"\n", b"\r\n"))
+    assert core.signer_matches_pinned()
+    signer.write_bytes(lf + b"# changed\n")
+    assert not core.signer_matches_pinned()
+
+
+def test_doctor_uses_canonical_signer_blob_on_lf_and_crlf(monkeypatch, tmp_path):
+    original_root = core.ROOT; original = (original_root / "scripts" / "sign.py").read_bytes()
+    signer = tmp_path / "scripts" / "sign.py"; signer.parent.mkdir()
+    (tmp_path / "pyproject.toml").write_text('[tool.uv]\nlink-mode = "copy"\n', encoding="utf-8")
+    monkeypatch.setattr(core, "ROOT", tmp_path); monkeypatch.setattr(core, "find_uv", lambda: "uv"); monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
+    class Result: returncode = 0; stdout = "uv 1.0"
+    monkeypatch.setattr(core.subprocess, "run", lambda *args, **kwargs: Result())
+    for content in (original.replace(b"\r\n", b"\n").replace(b"\r", b"\n"), original.replace(b"\r\n", b"\n").replace(b"\r", b"\n").replace(b"\n", b"\r\n")):
+        signer.write_bytes(content)
+        assert core.doctor()["checks"]["official_signer_matches_pinned"] is True
+
+
 def test_proof_plan_uses_existing_did_and_sharded_profile(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     monkeypatch.setattr(core, "current_did", lambda: "did:key:z6MkExisting")
