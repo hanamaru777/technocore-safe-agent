@@ -218,13 +218,56 @@ def test_rooms_backfill_dedupes_known_public_room(monkeypatch, tmp_path):
 
 def test_old_auto_queue_default_migrates_but_explicit_value_is_preserved(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
-    old = {key: value for key, value in observer.DEFAULT_CONFIG.items() if key != "rooms_backfill_interval_seconds"}; old["discovery_queue_limit"] = 100
+    old = {key: value for key, value in observer.DEFAULT_CONFIG.items() if key not in {"rooms_backfill_interval_seconds", "state_flush_interval_seconds"}}
+    old["memory_retention"] = 50; old["discovery_queue_limit"] = 100
     observer.atomic_json_write(observer.config_path(), old)
     assert observer.load_config()["discovery_queue_limit"] == 500
     assert json.loads(observer.config_path().read_text("utf-8"))["discovery_queue_limit"] == 500
     explicit = {**old, "watch_rooms": ["lobby"]}
     observer.atomic_json_write(observer.config_path(), explicit)
     assert observer.load_config()["discovery_queue_limit"] == 100
+
+
+def test_large_compatible_state_compacts_bounded_agent_history(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path, memory_retention=3)
+    state = observer.default_state(); did = "did:key:z6MkCompact"; fingerprint = core.did_note_location(did)[2]
+    state["agents"][fingerprint] = {
+        "did": did, "fingerprint": fingerprint,
+        "facts": {"first_seen": "first", "last_seen": "last", "last_encounter_at": "last", "seen_count": 999, "rooms": ["lobby", "other"], "message_refs": [{"room": "lobby", "seq": item, "ts": "t"} for item in range(10)], "recent_messages": [{"room": "lobby", "seq": item, "ts": "t", "text": "x" * 1000, "signed": True, "untrusted": True} for item in range(10)], "signed_count": 999, "unsigned_count": 0, "interaction_with_us": True},
+        "inferences": {"contribution_url_candidates": [f"https://example.invalid/{item}/" + "x" * 1000 for item in range(10)], "role_candidates": ["developer"], "repeat_seen": True},
+    }
+    observer.atomic_json_write(observer.state_path(), state)
+    restored = observer.load_state(3); agent = restored["agents"][fingerprint]
+    assert agent["facts"]["first_seen"] == "first" and agent["facts"]["seen_count"] == 999
+    assert agent["facts"]["rooms"] == ["lobby", "other"] and agent["facts"]["interaction_with_us"] is True
+    assert len(agent["facts"]["message_refs"]) == len(agent["facts"]["recent_messages"]) == len(agent["inferences"]["contribution_url_candidates"]) == 3
+    assert all(len(item["text"]) <= 280 for item in agent["facts"]["recent_messages"])
+    assert all(len(item) <= 280 for item in agent["inferences"]["contribution_url_candidates"])
+    observer.save_state(restored)
+    assert "\n  \"agents\"" not in observer.state_path().read_text("utf-8")
+
+
+def test_message_ingestion_bounds_text_refs_and_url_candidates(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path, memory_retention=2); state = observer.default_state(); did = "did:key:z6MkBounded"
+    for seq in range(4):
+        observer.process_message(state, config, "lobby", message(seq, did, f"help? https://example.invalid/{seq}/" + "x" * 1000), None, None)
+    agent = state["agents"][core.did_note_location(did)[2]]
+    assert len(agent["facts"]["message_refs"]) == len(agent["facts"]["recent_messages"]) == len(agent["inferences"]["contribution_url_candidates"]) == 2
+    assert all(len(item["text"]) <= 280 for item in agent["facts"]["recent_messages"])
+
+
+def test_state_writer_coalesces_and_final_flushes(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); calls = []
+    monkeypatch.setattr(observer, "save_state", lambda state: calls.append(state.copy()))
+    async def run():
+        stop = asyncio.Event(); writer = observer.StateWriter(observer.default_state(), 0.01)
+        task = asyncio.create_task(writer.run(stop)); writer.mark_dirty(); writer.mark_dirty(); writer.mark_dirty()
+        await asyncio.sleep(0.02)
+        assert writer.write_count == 1
+        writer.mark_dirty(); stop.set(); await task
+        assert writer.write_count == 2
+    asyncio.run(run())
+    assert len(calls) == 2
 
 
 def test_intelligence_excludes_self_avoids_volume_ranking_and_aggregates(monkeypatch, tmp_path):

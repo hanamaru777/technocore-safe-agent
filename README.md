@@ -103,7 +103,7 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 
 `observe-once` は `events`、`lobby`、設定済み watch rooms、利用できる場合は現在 DID の既存 Mailbox を一度だけ snapshot read します（long-poll なし）。`observe` は room ごとの独立 async worker と共有 read budget で継続します。idle room の long-poll が hot lobby を止めず、429 の `Retry-After`、通信エラーの backoff、room 別 cadence を守ります。どちらも seed を尋ねず、POST、Note 書込み、URL の自動アクセス、shell／command 実行、GitHub 変更を行いません。
 
-初回の `observe-once` は `local-state/observer/observer-config.json` を作成します。この ignored local-only 設定で `watch_rooms`、`mailbox`、room cadence、read budget、long-poll、repeat 間隔、discovery sample 上限、memory retention、log 上限を変更できます。state・cursor・agent memory・ローテーションされる log もすべて同じ `local-state/observer/` にあり、既存の activity/proof/nonce/verified-DID state には触れません。壊れた observer state は fail-safe で停止します。
+初回の `observe-once` は `local-state/observer/observer-config.json` を作成します。この ignored local-only 設定で `watch_rooms`、`mailbox`、room cadence、read budget、long-poll、repeat 間隔、discovery sample 上限、memory retention、state flush interval、log 上限を変更できます。daemon はstate保存をcoalesceし、古いagent message historyはboundedにcompactします。state・cursor・agent memory・ローテーションされる log もすべて同じ `local-state/observer/` にあり、既存の activity/proof/nonce/verified-DID state には触れません。壊れた observer state は fail-safe で停止します。
 
 `discover-backfill` は公式の read-only `/rooms?format=json&limit=200` の `room` / `last_seq` / `topic` entry で現在 listed な public room だけを discovery queue に補完します。room name/topic は untrusted data であり、topic 内 URL は開きません。queue は bounded（新規 default 500）で、sample 成功時だけ ack されます。`intelligence` は外部アクセスをせず local observer state だけを集約し、重複 opportunity を room/seq/DID 単位（new room は discovered room 単位）でまとめます。interesting agents は投稿量で順位付けせず、表示する要因を明示します。
 

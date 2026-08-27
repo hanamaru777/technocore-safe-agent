@@ -24,7 +24,7 @@ from . import core
 
 SCHEMA_VERSION = 2
 CONFIG_NAME, STATE_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer.lock", "observer.log"
-DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 50, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 500, "discovery_max_attempts": 5, "rooms_backfill_interval_seconds": 3600}
+DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 8, "state_flush_interval_seconds": 30, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 500, "discovery_max_attempts": 5, "rooms_backfill_interval_seconds": 3600}
 URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.I)
 QUESTION_RE = re.compile(r"[?？]|\b(how|question|please)\b", re.I)
 HELP_RE = re.compile(r"\b(help|assist|stuck)\b", re.I)
@@ -39,12 +39,12 @@ def config_path() -> Path: return observer_dir() / CONFIG_NAME
 def state_path() -> Path: return observer_dir() / STATE_NAME
 
 
-def atomic_json_write(path: Path, value: dict) -> None:
+def atomic_json_write(path: Path, value: dict, *, compact: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False)
     try:
         with handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
+            json.dump(value, handle, ensure_ascii=False, sort_keys=True, **({"separators": (",", ":")} if compact else {"indent": 2})); handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
         os.replace(handle.name, path)
     finally:
         if os.path.exists(handle.name): os.unlink(handle.name)
@@ -67,10 +67,15 @@ def read_json(path: Path, *, default: dict | None = None) -> dict:
 def load_config() -> dict:
     if not config_path().exists(): atomic_json_write(config_path(), DEFAULT_CONFIG)
     raw = read_json(config_path())
-    old_auto = {key: value for key, value in DEFAULT_CONFIG.items() if key != "rooms_backfill_interval_seconds"}
+    legacy_default = {**DEFAULT_CONFIG, "memory_retention": 50}
+    legacy_default.pop("state_flush_interval_seconds")
+    old_auto = {key: value for key, value in legacy_default.items() if key != "rooms_backfill_interval_seconds"}
     old_auto["discovery_queue_limit"] = 100
-    if raw == old_auto:
+    previous_auto = {**old_auto, "discovery_queue_limit": 500}
+    if raw in (old_auto, previous_auto, legacy_default):
         raw["discovery_queue_limit"] = 500
+        raw["memory_retention"] = DEFAULT_CONFIG["memory_retention"]
+        raw["state_flush_interval_seconds"] = DEFAULT_CONFIG["state_flush_interval_seconds"]
         atomic_json_write(config_path(), raw)
     config = {**DEFAULT_CONFIG, **raw}
     try:
@@ -78,20 +83,62 @@ def load_config() -> dict:
         mailbox_ok = config["mailbox"] is None or core.validate_room(config["mailbox"]) == config["mailbox"]
     except (KeyError, TypeError, ValueError) as error: raise RuntimeError("observer config room settings are invalid") from error
     if not rooms_ok or not mailbox_ok: raise RuntimeError("observer config room settings are invalid")
-    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20), ("rooms_backfill_interval_seconds", 60, 86400)):
+    for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("state_flush_interval_seconds", 5, 3600), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20), ("rooms_backfill_interval_seconds", 60, 86400)):
         if not isinstance(config.get(key), int) or not low <= config[key] <= high: raise RuntimeError(f"observer config {key} is invalid")
     intervals = config.get("room_intervals_seconds")
     if not isinstance(intervals, dict) or set(intervals) != {"lobby", "events", "mailbox", "watch"} or not all(isinstance(v, int) and 1 <= v <= 3600 for v in intervals.values()): raise RuntimeError("observer config room_intervals_seconds is invalid")
     return config
 
 
-def load_state() -> dict:
+def compact_state(state: dict, memory_retention: int) -> bool:
+    """Bound only volatile agent-memory fields; retain identity and durable facts."""
+    changed = False
+    for agent in state.get("agents", {}).values():
+        if not isinstance(agent, dict): continue
+        facts, inferences = agent.get("facts"), agent.get("inferences")
+        if isinstance(facts, dict):
+            for field in ("message_refs", "recent_messages"):
+                entries = facts.get(field)
+                if isinstance(entries, list) and len(entries) > memory_retention:
+                    facts[field] = entries[-memory_retention:]; changed = True
+            messages = facts.get("recent_messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and isinstance(message.get("text"), str):
+                        bounded = excerpt(message["text"])
+                        if bounded != message["text"]: message["text"] = bounded; changed = True
+        if isinstance(inferences, dict):
+            urls = inferences.get("contribution_url_candidates")
+            if isinstance(urls, list):
+                bounded_urls = [excerpt(url) for url in urls[-memory_retention:] if isinstance(url, str)]
+                if urls != bounded_urls: inferences["contribution_url_candidates"] = bounded_urls; changed = True
+    return changed
+
+
+def load_state(memory_retention: int | None = None) -> dict:
     state = read_json(state_path(), default=default_state())
     defaults = default_state()
     for key, value in defaults.items(): state.setdefault(key, value)
     for key, value in defaults["metrics"].items(): state["metrics"].setdefault(key, value)
+    compact_state(state, memory_retention if memory_retention is not None else load_config()["memory_retention"])
     return state
-def save_state(state: dict) -> None: state["updated_at"] = now(); atomic_json_write(state_path(), state)
+def save_state(state: dict) -> None: state["updated_at"] = now(); atomic_json_write(state_path(), state, compact=True)
+
+
+class StateWriter:
+    """Single bounded writer for the daemon's shared observer state."""
+    def __init__(self, state: dict, interval_seconds: int) -> None:
+        self.state, self.interval_seconds, self.dirty, self.write_count = state, interval_seconds, False, 0
+    def mark_dirty(self) -> None: self.dirty = True
+    def flush(self) -> None:
+        if self.dirty:
+            save_state(self.state); self.dirty = False; self.write_count += 1
+    async def run(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            try: await asyncio.wait_for(stop.wait(), timeout=self.interval_seconds)
+            except TimeoutError: pass
+            self.flush()
+        self.flush()
 
 
 def verified_did() -> str | None:
@@ -224,10 +271,11 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     facts, inference = agent["facts"], agent["inferences"]; facts["last_seen"] = now(); facts["seen_count"] += 1; facts["signed_count"] += 1
     if room not in facts["rooms"]: facts["rooms"].append(room)
     ref = {"room": room, "seq": message["seq"], "ts": message.get("ts")}
-    if ref not in facts["message_refs"]: facts["message_refs"].append(ref); facts["recent_messages"].append({**ref, "text": text, "signed": True, "untrusted": True})
+    if ref not in facts["message_refs"]: facts["message_refs"].append(ref); facts["recent_messages"].append({**ref, "text": excerpt(text), "signed": True, "untrusted": True})
     if room == mailbox: facts["interaction_with_us"] = True; metric_event(state, "inbound_mailbox_messages", "inbound_mailbox_message", room, message, did)
     for url in URL_RE.findall(text):
-        if url not in inference["contribution_url_candidates"]: inference["contribution_url_candidates"].append(url)
+        candidate = excerpt(url)
+        if candidate not in inference["contribution_url_candidates"]: inference["contribution_url_candidates"].append(candidate)
     if URL_RE.search(text) or CONTRIBUTION_RE.search(text): metric_event(state, "contribution_candidates", "contribution_candidate", room, message, did)
     if COLLAB_RE.search(text): metric_event(state, "collab_candidates", "collaboration_candidate", room, message, did)
     if HELP_RE.search(text): metric_event(state, "help_candidates", "help_candidate", room, message, did)
@@ -235,6 +283,7 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     for role in ("developer", "researcher", "writer", "designer", "operator"):
         if re.search(rf"\b{role}\b", text, re.I) and role not in inference["role_candidates"]: inference["role_candidates"].append(role)
     for field in ("message_refs", "recent_messages"): del facts[field][:-config["memory_retention"]]
+    del inference["contribution_url_candidates"][:-config["memory_retention"]]
 
 
 def process_payload(state: dict, config: dict, room: str, payload: dict | list, own_did: str | None, mailbox: str | None, *, bootstrap: bool) -> None:
@@ -344,7 +393,7 @@ async def consume_discovery_queue(client: httpx.AsyncClient, budget: ReadBudget,
 
 async def observe_once_async(client: httpx.AsyncClient | None = None) -> dict:
     with ObserverLock():
-        config, state, own_did = load_config(), load_state(), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
+        config = load_config(); state, own_did = load_state(config["memory_retention"]), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
         if owned: client = httpx.AsyncClient()
         try:
             await asyncio.gather(*(snapshot_room(client, budget, state, config, room, own_did, mailbox) for room in observed_rooms(config)))
@@ -360,28 +409,29 @@ def observe_once() -> dict: return asyncio.run(observe_once_async())
 def room_interval(config: dict, room: str, mailbox: str | None) -> int: return config["room_intervals_seconds"]["lobby" if room == "lobby" else "events" if room == "events" else "mailbox" if room == mailbox else "watch"]
 
 
-async def room_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, room: str, own_did: str | None, mailbox: str | None, stop: asyncio.Event) -> None:
+async def room_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, room: str, own_did: str | None, mailbox: str | None, stop: asyncio.Event, writer: StateWriter | None = None) -> None:
     backoff = 0.0
     while not stop.is_set():
         await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), config["long_poll_seconds"])
         if error: set_error(state, room, error, str(retry or "")); backoff = retry if retry is not None else min(300.0, max(1.0, backoff * 2 or 1.0))
         else: process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]); set_success(state, room); backoff = 0.0
-        save_state(state)
+        if writer: writer.mark_dirty()
         try: await asyncio.wait_for(stop.wait(), timeout=backoff or room_interval(config, room, mailbox))
         except TimeoutError: pass
 
 
-async def discovery_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, own_did: str | None, mailbox: str | None, stop: asyncio.Event) -> None:
+async def discovery_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, own_did: str | None, mailbox: str | None, stop: asyncio.Event, writer: StateWriter | None = None) -> None:
     while not stop.is_set():
         await consume_discovery_queue(client, budget, state, config, own_did, mailbox)
-        save_state(state)
+        if writer: writer.mark_dirty()
         try: await asyncio.wait_for(stop.wait(), timeout=config["poll_interval_seconds"])
         except TimeoutError: pass
 
 
-async def backfill_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, stop: asyncio.Event) -> None:
+async def backfill_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, stop: asyncio.Event, writer: StateWriter | None = None) -> None:
     while not stop.is_set():
-        await backfill_into_state(client, budget, state, config); save_state(state)
+        await backfill_into_state(client, budget, state, config)
+        if writer: writer.mark_dirty()
         try: await asyncio.wait_for(stop.wait(), timeout=config["rooms_backfill_interval_seconds"])
         except TimeoutError: pass
 
@@ -402,17 +452,21 @@ async def resident_worker(config: dict, stop: asyncio.Event) -> None:
 async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx.AsyncClient | None = None) -> None:
     stop = stop or asyncio.Event()
     with ObserverLock():
-        config, state, own_did = load_config(), load_state(), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
+        config = load_config(); state, own_did = load_state(config["memory_retention"]), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
         if owned: client = httpx.AsyncClient()
+        writer = StateWriter(state, config["state_flush_interval_seconds"]); writer.mark_dirty()
+        writer_task = asyncio.create_task(writer.run(stop))
         try:
-            tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop)) for room in observed_rooms(config)]
-            tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop)))
-            tasks.append(asyncio.create_task(backfill_worker(client, budget, state, config, stop)))
+            tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop, writer)) for room in observed_rooms(config)]
+            tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop, writer)))
+            tasks.append(asyncio.create_task(backfill_worker(client, budget, state, config, stop, writer)))
             tasks.append(asyncio.create_task(resident_worker(config, stop)))
             try: await asyncio.gather(*tasks)
             finally:
+                stop.set()
                 for task in tasks: task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+                await writer_task
         finally:
             if owned: await client.aclose()
 
