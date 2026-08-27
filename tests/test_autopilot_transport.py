@@ -34,7 +34,7 @@ def test_ssh_command_is_fixed_with_strict_host_key(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path); config = transport.load_config()
     command = transport.ssh_command(config, "export")
     assert command[:10] == ["ssh.exe", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=10", "-i"]
-    assert command[-1] == "python3 -m flop_agent.cli autopilot-export" and "known_hosts" not in " ".join(command)
+    assert command[-1] == "sudo -n /usr/local/libexec/technocore-safe-agent-rpc export" and "known_hosts" not in " ".join(command)
     with pytest.raises(RuntimeError): transport.ssh_command(config, "anything; rm -rf /")
     config["command"] = "evil"; monkeypatch.setattr(transport, "config_path", lambda: tmp_path / "autopilot-ssh.json")
     transport.config_path().write_text(json.dumps(config), encoding="utf-8")
@@ -76,6 +76,7 @@ def test_post_then_ack_failure_retries_only_ack(monkeypatch, tmp_path):
 
 def test_export_ack_is_local_only_and_strict(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path); state = autopilot.default_state(); item = {"id": "a" * 20, "source_candidate_id": "candidate", "source_did": "did:key:z", "fingerprint": "abcdef1234567890", "room": "lobby", "seq": 9, "category": "help_request", "topic": "repo_safety", "public_evidence_ids": ["public-profile:1"], "created_at": datetime.now(UTC).isoformat(), "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "safety_decision": "concrete_public_technical_request"}; state["outbox"][item["id"]] = item; autopilot.save(state)
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("write must not run")))
     exported = autopilot.export_pending(); assert set(exported["intents"][0]) == transport.INTENT_FIELDS and "source_did" not in json.dumps(exported)
     with pytest.raises(RuntimeError): autopilot.acknowledge_export({"schema_version": 1, "intent_id": item["id"], "receipt_hash": "x"})
     assert autopilot.acknowledge_export({"schema_version": 1, "intent_id": item["id"], "receipt_hash": "b" * 64})["acknowledged"] == item["id"]
@@ -97,3 +98,22 @@ def test_oracle_platform_cannot_publish_or_persist_seed(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="Windows-only"):
         transport.publish_one("a" * 20, "did:key:z6MkOwn")
     assert not transport.receipts_path().exists()
+
+
+def test_oracle_fixed_rpc_wrapper_and_sudoers_have_no_command_escape():
+    wrapper = (core.ROOT / "packaging" / "oracle" / "technocore-safe-agent-rpc").read_text("utf-8")
+    sudoers = (core.ROOT / "packaging" / "oracle" / "technocore-safe-agent-rpc.sudoers.example").read_text("utf-8")
+    assert '"$#" -eq 1' in wrapper and 'export) command=autopilot-export' in wrapper and 'ack) command=autopilot-ack' in wrapper
+    assert 'FLOP_STATE_DIR=/var/lib/technocore-safe-agent' in wrapper and 'PYTHONPATH=/opt/technocore-safe-agent/src' in wrapper
+    assert '/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.cli "$command"' in wrapper
+    assert 'env -i' in wrapper and 'runuser -u technocore' in wrapper and 'sign.py' not in wrapper and 'post_signed' not in wrapper
+    rule = next(line for line in sudoers.splitlines() if line and not line.startswith("#"))
+    assert 'rpc export' in rule and 'rpc ack' in rule and '*' not in rule and 'SETENV' not in rule
+
+
+def test_powershell_uses_switch_dry_run_not_argument_syntax():
+    readme = (core.ROOT / "README.md").read_text("utf-8")
+    script = (core.ROOT / "flop.ps1").read_text("utf-8")
+    assert ".\\flop.ps1 autopilot-session -DryRun" in readme
+    assert ".\\flop.ps1 autopilot-session --dry-run" not in readme
+    assert "[switch]$DryRun" in script

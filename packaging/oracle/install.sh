@@ -21,7 +21,9 @@ git clone --origin origin "$source_repo" "$app"
 chown -R root:technocore "$app"
 cd "$app"
 if $discord; then uv sync --frozen --no-dev --extra discord; else uv sync --frozen --no-dev; fi
+install -d -o root -g root -m 0755 /usr/local/libexec
+install -o root -g root -m 0755 packaging/oracle/technocore-safe-agent-rpc /usr/local/libexec/technocore-safe-agent-rpc
 install -o root -g root -m 0644 packaging/oracle/resident.service /etc/systemd/system/technocore-safe-agent-resident.service
 if $discord; then install -o root -g root -m 0644 packaging/oracle/discord.service /etc/systemd/system/technocore-safe-agent-discord.service; fi
 systemctl daemon-reload
-echo "Prepared only. Review $envdir/env, then explicitly run systemctl enable --now technocore-safe-agent-resident.service if desired. No DID seed is requested or copied."
+echo "Prepared only. Review $envdir/env and packaging/oracle/technocore-safe-agent-rpc.sudoers.example, then explicitly run systemctl enable --now technocore-safe-agent-resident.service if desired. No DID seed is requested or copied."

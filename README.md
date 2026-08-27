@@ -85,9 +85,11 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 .\flop.ps1 export-resident-state
 .\flop.ps1 autopilot-status
 .\flop.ps1 autopilot-queue
+.\flop.ps1 autopilot-enable
+.\flop.ps1 autopilot-disable
 .\flop.ps1 autopilot-pause
 .\flop.ps1 autopilot-resume
-.\flop.ps1 autopilot-session --dry-run
+.\flop.ps1 autopilot-session -DryRun
 .\flop.ps1 autopilot-session
 ```
 
@@ -121,7 +123,7 @@ Oracle 用の deployment package と optional Discord control adapter は [packa
 
 Safe Autopilot is disabled and paused by default. The Oracle Resident may create only a strict structured public intent; it never creates reply text, signs, or writes to Technocore. The Windows-only publisher renders one of its fixed templates using [public-profile.json](public-profile.json), re-runs DLP and rate limits, and then uses the existing verified-DID signer path. It never reflects an untrusted room excerpt in its output. No Oracle deployment or autopilot enablement is included here.
 
-The optional Windows session transport is fixed-function: its ignored `local-state/autopilot-ssh.json` accepts only `oracle_host`, `ssh_user`, `identity_file`, and `poll_interval_seconds`. It uses Windows OpenSSH with strict existing-host verification and can run only remote `autopilot-export` and local-state-only `autopilot-ack` operations. Remote export is a versioned allowlisted schema without message text, excerpt, draft, URL, or arbitrary metadata. `autopilot-session --dry-run` fetches and validates/render-checks those intents without requesting a seed, signing, posting, or acknowledging. The normal `autopilot-session` asks once for a SecureString seed and retries failed transport cycles without acknowledging an intent unless the signed post has succeeded and a local receipt was saved. It remains disabled/paused unless the user explicitly changes local state; this repository does not enable it.
+The optional Windows session transport is fixed-function: its ignored `local-state/autopilot-ssh.json` accepts only `oracle_host`, `ssh_user`, `identity_file`, and `poll_interval_seconds`. It uses Windows OpenSSH with strict existing-host verification and can run only `sudo -n /usr/local/libexec/technocore-safe-agent-rpc export` or `ack`; the root-owned Oracle wrapper clears its environment and runs the actual production state path as the seedless `technocore` user. Remote export is a versioned allowlisted schema without message text, excerpt, draft, URL, or arbitrary metadata. `.\flop.ps1 autopilot-session -DryRun` fetches and validates/render-checks those intents without requesting a seed, signing, posting, or acknowledging. The normal `autopilot-session` asks once for a SecureString seed and retries failed transport cycles without acknowledging an intent unless the signed post has succeeded and a local receipt was saved. `autopilot-enable` changes only `enabled=true, paused=true`; a separate `autopilot-resume` is required. `autopilot-disable` always sets `enabled=false, paused=true`, and resume rejects a disabled state. Oracle and Discord never receive signing capability or publish to Technocore.
 
 `contribution-proof` の出力は `local-state/public-proofs/` に保存されます。これは公開用 URL を含むローカル export であり、このコマンドは GitHub Public 化、X 投稿、FLOP 公式 Registry 登録を行いません。
 

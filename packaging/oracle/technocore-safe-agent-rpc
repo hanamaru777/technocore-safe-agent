@@ -1,0 +1,18 @@
+#!/bin/sh
+# Root-owned fixed RPC entrypoint. Install mode must be root:root 0755.
+set -eu
+
+[ "$#" -eq 1 ] || { echo "usage: fixed RPC operation required" >&2; exit 64; }
+case "$1" in
+  export) command=autopilot-export ;;
+  ack) command=autopilot-ack ;;
+  *) echo "unsupported fixed RPC operation" >&2; exit 64 ;;
+esac
+
+# Do not inherit caller environment. The unprivileged service user has no seed
+# and these two CLI operations only read/update the production local outbox.
+exec /usr/sbin/runuser -u technocore -- /usr/bin/env -i \
+  FLOP_STATE_DIR=/var/lib/technocore-safe-agent \
+  PYTHONPATH=/opt/technocore-safe-agent/src \
+  PATH=/usr/bin:/bin \
+  /opt/technocore-safe-agent/.venv/bin/python -m flop_agent.cli "$command"

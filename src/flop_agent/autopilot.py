@@ -97,8 +97,19 @@ def status(state: dict | None = None) -> dict:
     state = state or load()
     return {"enabled": state["enabled"], "paused": state["paused"], "queued": sum(item.get("status", "queued") == "queued" for item in state["outbox"].values()), "receipts": len(state["receipts"]), "migration_complete": bool(state["migrated_at"])}
 def queue() -> dict: return {"outbox": list(load()["outbox"].values())}
+def enable() -> dict:
+    state = load(); state["enabled"] = True; state["paused"] = True; save(state); return status(state)
+
+
+def disable() -> dict:
+    state = load(); state["enabled"] = False; state["paused"] = True; save(state); return status(state)
+
+
 def pause(value: bool) -> dict:
-    state = load(); state["paused"] = value; save(state); return status(state)
+    state = load()
+    if not value and not state["enabled"]:
+        raise RuntimeError("autopilot must be enabled before it can resume")
+    state["paused"] = value; save(state); return status(state)
 
 
 def export_pending() -> dict:

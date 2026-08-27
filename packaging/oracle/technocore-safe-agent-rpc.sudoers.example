@@ -1,0 +1,4 @@
+# Replace technocore-ssh with the restricted SSH login account provisioned separately.
+# This package does not create that login account. Install with visudo as root;
+# do not use wildcards, SETENV, editors, or a shell.
+technocore-ssh ALL=(root) NOPASSWD: /usr/local/libexec/technocore-safe-agent-rpc export, /usr/local/libexec/technocore-safe-agent-rpc ack

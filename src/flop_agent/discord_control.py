@@ -60,7 +60,7 @@ class Control:
         if action == "/autopilot-queue":
             data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
         if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
-        if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot remains disabled until local configuration explicitly enables it."}
+        if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot outbox generation resumed locally; Discord cannot publish."}
         if action == "/help": return {"ok": True, "data": {}, "message": "Commands: /resident-status /intel /opportunities /agents /agent <id> /candidate <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-pause /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
 

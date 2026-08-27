@@ -38,7 +38,7 @@ def load_config() -> dict:
 
 
 def ssh_command(config: dict, operation: str) -> list[str]:
-    remote = {"export": "python3 -m flop_agent.cli autopilot-export", "ack": "python3 -m flop_agent.cli autopilot-ack"}.get(operation)
+    remote = {"export": "sudo -n /usr/local/libexec/technocore-safe-agent-rpc export", "ack": "sudo -n /usr/local/libexec/technocore-safe-agent-rpc ack"}.get(operation)
     if remote is None: raise RuntimeError("unsupported fixed SSH operation")
     return ["ssh.exe", "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=10", "-i", config["identity_file"], f"{config['ssh_user']}@{config['oracle_host']}", remote]
 
