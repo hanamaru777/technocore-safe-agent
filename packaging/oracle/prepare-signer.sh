@@ -22,10 +22,18 @@ for shared_file in "$state/nonces.json" "$state/activities.jsonl"; do
   chgrp technocore-autopilot "$shared_file"; chmod 0660 "$shared_file"
 done
 install -d -o root -g root -m 0755 /usr/local/libexec "$envdir"
-install -o root -g root -m 0600 "$app/packaging/oracle/signer.env.example" "$envdir/signer.env"
+# Preserve an operator-configured Vault OCID/DID on repeat preparation.  The
+# example is installed only once; this script never enables or starts a unit.
+if [[ ! -e $envdir/signer.env ]]; then
+  install -o root -g root -m 0600 "$app/packaging/oracle/signer.env.example" "$envdir/signer.env"
+fi
 install -o root -g root -m 0755 "$app/packaging/oracle/block-technocore-metadata.sh" /usr/local/libexec/technocore-safe-agent-block-metadata
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-signer.service" /etc/systemd/system/technocore-safe-agent-signer.service
 cd "$app"
-uv sync --frozen --no-dev --extra oracle-signer
+extras=(--extra oracle-signer)
+# A pre-existing Discord unit means its optional dependency must survive the
+# signer dependency sync.  Do not infer this from untrusted configuration.
+if [[ -e /etc/systemd/system/technocore-safe-agent-discord.service ]]; then extras+=(--extra discord); fi
+uv sync --frozen --no-dev "${extras[@]}"
 systemctl daemon-reload
 echo "Prepared only. Fill $envdir/signer.env, review IAM and run the metadata blocker explicitly. The signer service remains disabled and stopped."

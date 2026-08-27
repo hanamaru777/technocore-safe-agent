@@ -21,13 +21,42 @@ from threading import Event
 from . import autopilot, autopilot_transport, core, observer
 
 RECEIPT_NAME = "oracle-signer-receipts.json"
+HEALTH_NAME = "signer-health.json"
 HEX_SEED = re.compile(rb"[0-9a-f]{64}")
 EXPECTED_DID = re.compile(r"did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{20,128}")
+ERROR_CODES = {"did_failure", "intent_invalid", "rate_limited", "submission_unknown", "vault_failure"}
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
 def receipt_path() -> Path: return core.STATE / "signer" / RECEIPT_NAME
+def health_path() -> Path: return core.STATE / "signer" / HEALTH_NAME
 def receipt_hash(intent: dict, did: str, nonce: str, text: str) -> str: return hashlib.sha256(f"{intent['intent_id']}|{did}|{nonce}|{text}".encode()).hexdigest()
+
+
+def default_health() -> dict:
+    return {"schema_version": 1, "last_cycle_at": None, "last_success_at": None, "last_error_code": None, "consecutive_failures": 0, "status": "starting"}
+
+
+def load_health() -> dict:
+    path = health_path()
+    if not path.exists(): return default_health()
+    try: data = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as error: raise RuntimeError("signer health state is corrupt") from error
+    if not isinstance(data, dict) or set(data) != set(default_health()) or data.get("schema_version") != 1 or data.get("status") not in {"starting", "ok", "degraded"} or data.get("last_error_code") not in ERROR_CODES | {None} or not isinstance(data.get("consecutive_failures"), int) or data["consecutive_failures"] < 0:
+        raise RuntimeError("signer health state is invalid")
+    return data
+
+
+def save_health(data: dict) -> None: observer.atomic_json_write(health_path(), data, mode=0o600)
+
+
+def record_health(error_code: str | None = None) -> dict:
+    health = load_health(); health["last_cycle_at"] = now()
+    if error_code is None:
+        health["last_success_at"] = health["last_cycle_at"]; health["last_error_code"] = None; health["consecutive_failures"] = 0; health["status"] = "ok"
+    else:
+        health["last_error_code"] = error_code if error_code in ERROR_CODES else "intent_invalid"; health["consecutive_failures"] += 1; health["status"] = "degraded"
+    save_health(health); return health
 
 
 def load_receipts() -> dict:
@@ -85,10 +114,13 @@ def with_vault_seed(operation):
 
 
 def verify_did() -> str:
-    did = with_vault_seed(core.current_did)
-    if not hmac.compare_digest(did, expected_did()): raise RuntimeError("signer DID does not match configured expected DID")
-    core.require_verified_did(did)
-    if not core.signer_matches_pinned(): raise RuntimeError("official signer integrity check failed")
+    try: did = with_vault_seed(core.current_did)
+    except RuntimeError as error: raise RuntimeError("vault_failure") from error
+    try:
+        if not hmac.compare_digest(did, expected_did()): raise RuntimeError("mismatch")
+        core.require_verified_did(did)
+        if not core.signer_matches_pinned(): raise RuntimeError("unpinned")
+    except RuntimeError as error: raise RuntimeError("did_failure") from error
     return did
 
 
@@ -116,13 +148,37 @@ def reconcile_or_skip(state: dict, receipts: dict, intent: dict, text: str) -> s
         if state["outbox"].get(intent["intent_id"], {}).get("status") == "queued": mark_posted(state, receipts, intent, receipt)
         return "already_posted"
     if not hmac.compare_digest(receipt["text_hash"], hashlib.sha256(text.encode()).hexdigest()): raise RuntimeError("prepared receipt text mismatch")
-    if message_exists(receipt, intent, text):
+    try: exists = message_exists(receipt, intent, text)
+    except Exception as error: raise RuntimeError("submission_unknown") from error
+    if exists:
         mark_posted(state, receipts, intent, receipt); return "reconciled"
-    return "pending_reconciliation"
+    return None
+
+
+def submit_prepared(state: dict, receipts: dict, intent: dict, text: str, receipt: dict) -> str:
+    try:
+        did = verify_did()
+        if not hmac.compare_digest(did, receipt["did"]): raise RuntimeError("did_failure")
+        with_vault_seed(lambda: core.post_signed(intent["room"], text, True, did=did, nonce=receipt["nonce"], action="oracle_isolated_signer_publish", record_permalink=False))
+    except RuntimeError as error:
+        try:
+            if message_exists(receipt, intent, text): mark_posted(state, receipts, intent, receipt); return "reconciled"
+        except Exception:
+            pass
+        receipt["attempts"] = int(receipt.get("attempts", 0)) + 1; receipt["last_attempt_at"] = now(); receipt["last_error_code"] = str(error) if str(error) in ERROR_CODES else "submission_unknown"; save_receipts(receipts)
+        raise RuntimeError(receipt["last_error_code"]) from error
+    # A resumed prepared intent always gets an after-submit read.  A definite
+    # successful HTTP response remains authoritative for idempotency, while
+    # this read records the normal eventual-consistency reconciliation path.
+    try: message_exists(receipt, intent, text)
+    except Exception: pass
+    mark_posted(state, receipts, intent, receipt)
+    return "posted"
 
 
 def process_intent(state: dict, receipts: dict, intent: dict) -> str:
-    autopilot_transport.validate_intent(intent)
+    try: autopilot_transport.validate_intent(intent)
+    except RuntimeError as error: raise RuntimeError("intent_invalid") from error
     internal = state["outbox"].get(intent["intent_id"])
     if not isinstance(internal, dict) or autopilot.export_intent(internal) != intent: raise RuntimeError("signer internal intent mismatch")
     text = autopilot.render(internal)
@@ -131,13 +187,13 @@ def process_intent(state: dict, receipts: dict, intent: dict) -> str:
     if existing: return existing
     if intent["intent_id"] in state["receipts"]: return "already_posted"
     allowed, reason = autopilot.rate_ok(state, {"fingerprint": intent["source_fingerprint"], "room": intent["room"]})
-    if not allowed: raise RuntimeError(f"autopilot rate limit blocked publish: {reason}")
-    did = verify_did(); nonce = core.make_nonce(intent["room"], did)
-    receipt = {"state": "prepared", "did": did, "nonce": nonce, "text_hash": hashlib.sha256(text.encode()).hexdigest(), "receipt_hash": receipt_hash(intent, did, nonce, text), "prepared_at": now()}
-    receipts["receipts"][intent["intent_id"]] = receipt; save_receipts(receipts)
-    with_vault_seed(lambda: core.post_signed(intent["room"], text, True, did=did, nonce=nonce, action="oracle_isolated_signer_publish", record_permalink=False))
-    mark_posted(state, receipts, intent, receipt)
-    return "posted"
+    if not allowed: raise RuntimeError("rate_limited")
+    receipt = receipts["receipts"].get(intent["intent_id"])
+    if receipt is None:
+        did = verify_did(); nonce = core.make_nonce(intent["room"], did)
+        receipt = {"state": "prepared", "did": did, "nonce": nonce, "text_hash": hashlib.sha256(text.encode()).hexdigest(), "receipt_hash": receipt_hash(intent, did, nonce, text), "prepared_at": now(), "attempts": 0, "last_attempt_at": None, "last_error_code": None}
+        receipts["receipts"][intent["intent_id"]] = receipt; save_receipts(receipts)
+    return submit_prepared(state, receipts, intent, text, receipt)
 
 
 def run_once() -> dict:
@@ -147,6 +203,13 @@ def run_once() -> dict:
     for intent in autopilot.export_pending()["intents"]:
         processed.append({"intent_id": intent["intent_id"], "action": process_intent(state, receipts, intent)})
     return {"enabled": True, "paused": False, "processed": processed}
+
+
+def run_cycle() -> dict:
+    try:
+        result = run_once(); record_health(); return result
+    except RuntimeError as error:
+        record_health(str(error)); return {"processed": [], "status": "degraded"}
 
 
 def poll_seconds() -> int:
@@ -161,8 +224,7 @@ def main() -> None:
     def request_stop(*_: object) -> None: stop.set()
     for number in (signal.SIGINT, signal.SIGTERM): signal.signal(number, request_stop)
     while not stop.is_set():
-        try: run_once()
-        except RuntimeError: pass  # Fail closed for this cycle; no untrusted error data is logged.
+        run_cycle()
         stop.wait(poll_seconds())
 
 
