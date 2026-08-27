@@ -15,12 +15,19 @@ id -u technocore-signer >/dev/null 2>&1 || useradd --system --home /nonexistent 
 usermod -a -G technocore-autopilot technocore-signer
 install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer"
 chgrp technocore-autopilot "$state"; chmod 2750 "$state"
-install -d -o technocore -g technocore-autopilot -m 2770 "$state/observer"
-if [[ -e $state/observer/autopilot-outbox.json ]]; then chgrp technocore-autopilot "$state/observer/autopilot-outbox.json"; chmod 0660 "$state/observer/autopilot-outbox.json"; fi
+install -d -o technocore -g technocore -m 0750 "$state/observer"
+install -d -o technocore -g technocore-autopilot -m 2770 "$state/autopilot"
+for shared_name in autopilot-outbox.json autopilot-audit.jsonl; do
+  legacy=$state/observer/$shared_name; shared=$state/autopilot/$shared_name
+  if [[ -e $legacy && -e $shared ]]; then echo "both legacy and dedicated $shared_name exist; refusing to lose state" >&2; exit 1; fi
+  if [[ -e $legacy ]]; then [[ -f $legacy ]] || { echo "legacy $shared_name is not a regular file" >&2; exit 1; }; mv -- "$legacy" "$shared"; fi
+  if [[ -e $shared ]]; then [[ -f $shared ]] || { echo "shared $shared_name is not a regular file" >&2; exit 1; }; chown technocore:technocore-autopilot "$shared"; chmod 0660 "$shared"; fi
+done
 for shared_file in "$state/nonces.json" "$state/activities.jsonl"; do
   if [[ ! -e $shared_file ]]; then install -o technocore-signer -g technocore-autopilot -m 0660 /dev/null "$shared_file"; [[ $shared_file == *.json ]] && printf '{}\n' > "$shared_file"; fi
   chgrp technocore-autopilot "$shared_file"; chmod 0660 "$shared_file"
 done
+if [[ -e $state/verified-did.json ]]; then chown technocore:technocore-autopilot "$state/verified-did.json"; chmod 0640 "$state/verified-did.json"; fi
 install -d -o root -g root -m 0755 /usr/local/libexec "$envdir"
 # Preserve an operator-configured Vault OCID/DID on repeat preparation.  The
 # example is installed only once; this script never enables or starts a unit.
@@ -28,6 +35,7 @@ if [[ ! -e $envdir/signer.env ]]; then
   install -o root -g root -m 0600 "$app/packaging/oracle/signer.env.example" "$envdir/signer.env"
 fi
 install -o root -g root -m 0755 "$app/packaging/oracle/block-technocore-metadata.sh" /usr/local/libexec/technocore-safe-agent-block-metadata
+install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-metadata-block.service" /etc/systemd/system/technocore-safe-agent-metadata-block.service
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-signer.service" /etc/systemd/system/technocore-safe-agent-signer.service
 cd "$app"
 extras=(--extra oracle-signer)
@@ -36,4 +44,4 @@ extras=(--extra oracle-signer)
 if [[ -e /etc/systemd/system/technocore-safe-agent-discord.service ]]; then extras+=(--extra discord); fi
 uv sync --frozen --no-dev "${extras[@]}"
 systemctl daemon-reload
-echo "Prepared only. Fill $envdir/signer.env, review IAM and run the metadata blocker explicitly. The signer service remains disabled and stopped."
+echo "Prepared only. Fill $envdir/signer.env and review IAM. No service or metadata blocker unit was enabled or started."

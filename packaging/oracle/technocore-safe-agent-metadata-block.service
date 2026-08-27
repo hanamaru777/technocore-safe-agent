@@ -1,0 +1,14 @@
+[Unit]
+Description=technocore-safe-agent metadata isolation
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target technocore-safe-agent-resident.service technocore-safe-agent-discord.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/technocore-safe-agent-block-metadata
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -12,6 +12,7 @@ from . import core, observer, resident
 
 OUTBOX_FILE = "autopilot-outbox.json"
 AUDIT_FILE = "autopilot-audit.jsonl"
+SHARED_DIR = "autopilot"
 PROFILE = core.ROOT / "public-profile.json"
 PUBLIC_ROOMS = re.compile(r"^(?!p-|mb-)[a-z0-9][a-z0-9_-]{0,47}$")
 ALLOWED_TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution"}
@@ -19,8 +20,21 @@ DLP = re.compile(r"(?ix)(?:sign_seed|private[ _-]?key|\bseed\b|api[ _-]?key|toke
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
-def path() -> Path: return resident.resident_dir() / OUTBOX_FILE
-def audit_path() -> Path: return resident.resident_dir() / AUDIT_FILE
+def shared_dir() -> Path: return core.STATE / SHARED_DIR
+def path() -> Path: return shared_dir() / OUTBOX_FILE
+def audit_path() -> Path: return shared_dir() / AUDIT_FILE
+def legacy_path() -> Path: return resident.resident_dir() / OUTBOX_FILE
+def legacy_audit_path() -> Path: return resident.resident_dir() / AUDIT_FILE
+
+
+def migrate_legacy_shared_state() -> None:
+    """Move the former observer-local shared files once, without merging data."""
+    for old, current in ((legacy_path(), path()), (legacy_audit_path(), audit_path())):
+        if not old.exists(): continue
+        if not old.is_file(): raise RuntimeError("legacy autopilot state is not a regular file")
+        if current.exists(): raise RuntimeError("legacy and dedicated autopilot state both exist; refusing to lose data")
+        current.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
+        os.replace(old, current)
 
 
 def default_state() -> dict:
@@ -28,6 +42,7 @@ def default_state() -> dict:
 
 
 def load() -> dict:
+    migrate_legacy_shared_state()
     if not path().exists(): return default_state()
     try: state = json.loads(path().read_text("utf-8"))
     except (OSError, json.JSONDecodeError) as error: raise RuntimeError("autopilot state is corrupt; refusing to continue") from error
@@ -36,10 +51,14 @@ def load() -> dict:
     return state
 
 
-def save(state: dict) -> None: resident.observer.atomic_json_write(path(), state, mode=0o660)
+def save(state: dict) -> None:
+    migrate_legacy_shared_state()
+    resident.observer.atomic_json_write(path(), state, mode=0o660)
 def audit(record: dict) -> None:
-    audit_path().parent.mkdir(parents=True, exist_ok=True)
+    migrate_legacy_shared_state()
+    audit_path().parent.mkdir(parents=True, exist_ok=True, mode=0o770)
     with audit_path().open("a", encoding="utf-8", newline="\n") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")
+    os.chmod(audit_path(), 0o660)
 
 
 def public_knowledge() -> dict:

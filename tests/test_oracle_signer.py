@@ -36,8 +36,8 @@ def test_oracle_signer_uses_prepared_receipt_and_fixed_template_only(monkeypatch
     result = oracle_signer.run_once()
     assert result["processed"] == [{"intent_id": item["id"], "action": "posted"}]
     assert observed[0][0] == "lobby" and "candidate" not in observed[0][1] and "seed" not in observed[0][1]
-    assert oracle_signer.load_receipts()["receipts"][item["id"]]["state"] == "posted"
-    assert autopilot.load()["outbox"][item["id"]]["status"] == "posted"
+    assert oracle_signer.load_receipts()["receipts"][item["id"]]["state"] == "acknowledged"
+    assert autopilot.load()["outbox"][item["id"]]["status"] == "acknowledged"
 
 
 def prepared_receipt(item, text):
@@ -64,7 +64,7 @@ def test_oracle_signer_retries_unposted_prepared_intent_with_same_nonce(monkeypa
     monkeypatch.setattr(core, "post_signed", lambda room, text, confirm, **kwargs: posted.append(kwargs["nonce"]) or {"seq": 1})
     assert oracle_signer.run_once()["processed"][0]["action"] == "posted"
     assert posted == ["123"] and len(reads) == 2
-    assert oracle_signer.load_receipts()["receipts"][item["id"]]["state"] == "posted"
+    assert oracle_signer.load_receipts()["receipts"][item["id"]]["state"] == "acknowledged"
 
 
 def test_oracle_signer_retries_vault_presubmit_failure_and_recovers_health(monkeypatch, tmp_path):
@@ -81,6 +81,21 @@ def test_oracle_signer_retries_vault_presubmit_failure_and_recovers_health(monke
     assert oracle_signer.run_cycle()["processed"][0]["action"] == "posted"
     health = oracle_signer.load_health(); assert health["status"] == "ok" and health["last_error_code"] is None and health["consecutive_failures"] == 0 and health["last_success_at"]
     assert calls == ["123"]
+
+
+def test_oracle_signer_expires_first_intent_then_posts_second(monkeypatch, tmp_path):
+    state, first = setup(monkeypatch, tmp_path)
+    first["expires_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat(); state["outbox"][first["id"]] = first
+    second = dict(first); second["id"] = "b" * 20; second["source_candidate_id"] = "candidate-2"; second["expires_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat(); state["outbox"][second["id"]] = second; autopilot.save(state)
+    posts = []
+    monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
+    monkeypatch.setattr(core, "make_nonce", lambda room, did: "123")
+    monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
+    monkeypatch.setattr(core, "read_room", lambda room: {"messages": []})
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: posts.append(kwargs["nonce"]) or {"seq": 1})
+    result = oracle_signer.run_once()
+    assert result["processed"] == [{"intent_id": first["id"], "action": "expired"}, {"intent_id": second["id"], "action": "posted"}]
+    loaded = autopilot.load(); assert loaded["outbox"][first["id"]]["status"] == "expired" and loaded["outbox"][second["id"]]["status"] == "acknowledged" and posts == ["123"]
 
 
 def test_oracle_signer_rejects_internal_injection_and_keeps_seed_ephemeral(monkeypatch, tmp_path):
@@ -139,9 +154,10 @@ def test_oracle_signer_package_separates_metadata_and_has_no_arguments():
     signer_unit = (root / "technocore-safe-agent-signer.service").read_text("utf-8")
     resident_unit = (root / "resident.service").read_text("utf-8")
     blocker = (root / "block-technocore-metadata.sh").read_text("utf-8")
+    metadata_unit = (root / "technocore-safe-agent-metadata-block.service").read_text("utf-8")
     assert "User=technocore-signer" in signer_unit and "SupplementaryGroups=technocore-autopilot" in signer_unit and "SupplementaryGroups=technocore " not in signer_unit and "oracle_signer" in signer_unit and "EnvironmentFile=/etc/technocore-safe-agent/signer.env" in signer_unit
     assert "EnvironmentFile=/etc/technocore-safe-agent/env" not in signer_unit and "technocore" not in signer_unit.split("SupplementaryGroups=", 1)[1].splitlines()[0].replace("technocore-autopilot", "")
-    assert "IPAddressDeny=169.254.169.254" in resident_unit
+    assert "IPAddressDeny=169.254.169.254" in resident_unit and "Requires=technocore-safe-agent-metadata-block.service" in resident_unit
     assert '"$#" -eq 0' in blocker and "--uid-owner" in blocker and "169.254.169.254" in blocker and "technocore technocore-rpc" in blocker and "else continue" in blocker
     installer = (root / "install.sh").read_text("utf-8"); updater = (root / "update.sh").read_text("utf-8"); preparer = (root / "prepare-signer.sh").read_text("utf-8")
     assert "technocore-signer" in installer and "--extra oracle-signer" in installer and "--extra oracle-signer" in updater
@@ -149,10 +165,12 @@ def test_oracle_signer_package_separates_metadata_and_has_no_arguments():
     assert "extras=(--extra oracle-signer)" in preparer and "--extra discord" in preparer and "technocore-safe-agent-discord.service" in preparer and "! -e $envdir/signer.env" in preparer
     assert "usermod -a -G technocore," not in installer
     assert "usermod -a -G technocore-autopilot technocore" in installer and "usermod -a -G technocore-autopilot technocore" in preparer
-    assert "autopilot-outbox.json" in installer and "chmod 0660" in installer and "chmod 0660" in preparer
-    assert "nonces.json" in installer and "activities.jsonl" in installer
+    assert "autopilot-outbox.json" in installer and "autopilot-audit.jsonl" in installer and '"$state/autopilot"' in installer and "chmod 0660" in installer and "chmod 0660" in preparer
+    assert "nonces.json" in installer and "activities.jsonl" in installer and "verified-did.json" in installer and "chmod 0640" in installer
     assert "EnvironmentFile=/etc/technocore-safe-agent/env" not in signer_unit
     source = (core.ROOT / "src" / "flop_agent" / "oracle_signer.py").read_text("utf-8")
     assert "len(sys.argv) != 1" in source and "post_signed" in source and "subprocess" not in source
     healthcheck = (root / "healthcheck.sh").read_text("utf-8")
-    assert "signer-health.json" in healthcheck and "signer cycle is stale" in healthcheck
+    assert "signer-health.json" in healthcheck and "signer cycle is stale" in healthcheck and "metadata-block.service" in healthcheck
+    assert "Type=oneshot" in metadata_unit and "RemainAfterExit=yes" in metadata_unit and "Before=network-pre.target technocore-safe-agent-resident.service technocore-safe-agent-discord.service" in metadata_unit and "technocore-signer" not in metadata_unit
+    assert "/observer" not in signer_unit.split("ReadWritePaths=", 1)[1] and "/autopilot" in signer_unit.split("ReadWritePaths=", 1)[1]

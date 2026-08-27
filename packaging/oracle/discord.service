@@ -1,6 +1,7 @@
 [Unit]
 Description=technocore-safe-agent Discord control
-After=network-online.target
+After=network-online.target technocore-safe-agent-metadata-block.service
+Requires=technocore-safe-agent-metadata-block.service
 
 [Service]
 Type=simple

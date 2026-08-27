@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 state=${FLOP_STATE_DIR:-/var/lib/technocore-safe-agent}
+systemctl is-active --quiet technocore-safe-agent-metadata-block.service || { echo "metadata isolation is not active" >&2; exit 1; }
 systemctl is-active --quiet technocore-safe-agent-resident.service
 python3 - "$state" <<'PY'
 import json, sys

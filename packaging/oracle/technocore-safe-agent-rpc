@@ -9,6 +9,11 @@ case "$1" in
   *) echo "unsupported fixed RPC operation" >&2; exit 64 ;;
 esac
 
+# The RPC account is denied metadata at egress before it may read the outbox.
+systemctl is-active --quiet technocore-safe-agent-metadata-block.service || {
+  echo "metadata isolation is not active" >&2; exit 1;
+}
+
 # Do not inherit caller environment. The unprivileged service user has no seed
 # and these two CLI operations only read/update the production local outbox.
 exec /usr/sbin/runuser -u technocore -- /usr/bin/env -i \

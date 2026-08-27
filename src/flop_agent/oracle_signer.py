@@ -68,7 +68,7 @@ def load_receipts() -> dict:
         raise RuntimeError("signer receipt state is invalid")
     for intent_id, item in data["receipts"].items():
         required = {"state", "did", "nonce", "text_hash", "receipt_hash", "prepared_at"}
-        if not re.fullmatch(r"[a-f0-9]{20}", intent_id) or not isinstance(item, dict) or not required <= set(item) or item["state"] not in {"prepared", "posted"} or not EXPECTED_DID.fullmatch(str(item["did"])) or not str(item["nonce"]).isdigit() or not re.fullmatch(r"[a-f0-9]{64}", str(item["text_hash"])) or not re.fullmatch(r"[a-f0-9]{64}", str(item["receipt_hash"])):
+        if not re.fullmatch(r"[a-f0-9]{20}", intent_id) or not isinstance(item, dict) or not required <= set(item) or item["state"] not in {"prepared", "posted", "acknowledged"} or not EXPECTED_DID.fullmatch(str(item["did"])) or not str(item["nonce"]).isdigit() or not re.fullmatch(r"[a-f0-9]{64}", str(item["text_hash"])) or not re.fullmatch(r"[a-f0-9]{64}", str(item["receipt_hash"])):
             raise RuntimeError("signer receipt state is invalid")
     return data
 
@@ -130,28 +130,28 @@ def message_exists(receipt: dict, intent: dict, text: str) -> bool:
     return isinstance(messages, list) and any(isinstance(item, dict) and item.get("from") == receipt["did"] and str(item.get("nonce")) == receipt["nonce"] and item.get("text") == text for item in messages)
 
 
-def mark_posted(state: dict, receipts: dict, intent: dict, receipt: dict) -> None:
-    receipt["state"] = "posted"; receipt["posted_at"] = now(); save_receipts(receipts)
+def mark_acknowledged(state: dict, receipts: dict, intent: dict, receipt: dict) -> None:
+    receipt["state"] = "acknowledged"; receipt["posted_at"] = receipt.get("posted_at", now()); receipt["acknowledged_at"] = now(); save_receipts(receipts)
     item = state["outbox"].get(intent["intent_id"])
     if item is None: raise RuntimeError("signer intent disappeared")
-    item["status"] = "posted"; item["receipt_hash"] = receipt["receipt_hash"]; item["posted_at"] = now()
+    item["status"] = "acknowledged"; item["receipt_hash"] = receipt["receipt_hash"]; item["posted_at"] = receipt["posted_at"]; item["acknowledged_at"] = now()
     state["receipts"][intent["intent_id"]] = {"at": now(), "receipt_hash": receipt["receipt_hash"]}
     state["rate_history"].append({"at": now(), "fingerprint": intent["source_fingerprint"], "room": intent["room"], "text_hash": receipt["text_hash"]})
     autopilot.save(state)
-    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": True, "why": item["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "pass", "action": "oracle_signer_posted"})
+    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": True, "why": item["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "pass", "action": "oracle_signer_acknowledged"})
 
 
 def reconcile_or_skip(state: dict, receipts: dict, intent: dict, text: str) -> str | None:
     receipt = receipts["receipts"].get(intent["intent_id"])
     if receipt is None: return None
-    if receipt["state"] == "posted":
-        if state["outbox"].get(intent["intent_id"], {}).get("status") == "queued": mark_posted(state, receipts, intent, receipt)
+    if receipt["state"] in {"posted", "acknowledged"}:
+        if state["outbox"].get(intent["intent_id"], {}).get("status") in {"queued", "posted"}: mark_acknowledged(state, receipts, intent, receipt)
         return "already_posted"
     if not hmac.compare_digest(receipt["text_hash"], hashlib.sha256(text.encode()).hexdigest()): raise RuntimeError("prepared receipt text mismatch")
     try: exists = message_exists(receipt, intent, text)
     except Exception as error: raise RuntimeError("submission_unknown") from error
     if exists:
-        mark_posted(state, receipts, intent, receipt); return "reconciled"
+        mark_acknowledged(state, receipts, intent, receipt); return "reconciled"
     return None
 
 
@@ -162,7 +162,7 @@ def submit_prepared(state: dict, receipts: dict, intent: dict, text: str, receip
         with_vault_seed(lambda: core.post_signed(intent["room"], text, True, did=did, nonce=receipt["nonce"], action="oracle_isolated_signer_publish", record_permalink=False))
     except RuntimeError as error:
         try:
-            if message_exists(receipt, intent, text): mark_posted(state, receipts, intent, receipt); return "reconciled"
+            if message_exists(receipt, intent, text): mark_acknowledged(state, receipts, intent, receipt); return "reconciled"
         except Exception:
             pass
         receipt["attempts"] = int(receipt.get("attempts", 0)) + 1; receipt["last_attempt_at"] = now(); receipt["last_error_code"] = str(error) if str(error) in ERROR_CODES else "submission_unknown"; save_receipts(receipts)
@@ -172,7 +172,7 @@ def submit_prepared(state: dict, receipts: dict, intent: dict, text: str, receip
     # this read records the normal eventual-consistency reconciliation path.
     try: message_exists(receipt, intent, text)
     except Exception: pass
-    mark_posted(state, receipts, intent, receipt)
+    mark_acknowledged(state, receipts, intent, receipt)
     return "posted"
 
 
@@ -196,11 +196,24 @@ def process_intent(state: dict, receipts: dict, intent: dict) -> str:
     return submit_prepared(state, receipts, intent, text, receipt)
 
 
+def expire_queued_intent(state: dict, intent: dict) -> bool:
+    item = state["outbox"].get(intent.get("intent_id"))
+    if not isinstance(item, dict) or item.get("status", "queued") != "queued": return False
+    expires_at = observer.parse_time(item.get("expires_at"))
+    if expires_at is None or expires_at > datetime.now(UTC): return False
+    item["status"] = "expired"; item["expired_at"] = now(); item["expiration_reason"] = "intent_ttl_elapsed"
+    autopilot.save(state)
+    autopilot.audit({"at": now(), "source_candidate": item.get("source_candidate_id"), "eligible": False, "why": "intent_ttl_elapsed", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_expired"})
+    return True
+
+
 def run_once() -> dict:
     state = autopilot.load()
     if not state["enabled"] or state["paused"]: return {"enabled": state["enabled"], "paused": state["paused"], "processed": []}
     receipts, processed = load_receipts(), []
     for intent in autopilot.export_pending()["intents"]:
+        if expire_queued_intent(state, intent):
+            processed.append({"intent_id": intent["intent_id"], "action": "expired"}); continue
         processed.append({"intent_id": intent["intent_id"], "action": process_intent(state, receipts, intent)})
     return {"enabled": True, "paused": False, "processed": processed}
 

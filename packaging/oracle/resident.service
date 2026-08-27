@@ -1,6 +1,7 @@
 [Unit]
 Description=technocore-safe-agent resident observer
-After=network-online.target
+After=network-online.target technocore-safe-agent-metadata-block.service
+Requires=technocore-safe-agent-metadata-block.service
 Wants=network-online.target
 
 [Service]

@@ -26,7 +26,7 @@ ProtectKernelTunables=true
 ProtectKernelLogs=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/technocore-safe-agent/observer /var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json /var/lib/technocore-safe-agent/activities.jsonl
+ReadWritePaths=/var/lib/technocore-safe-agent/autopilot /var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json /var/lib/technocore-safe-agent/activities.jsonl
 
 [Install]
 WantedBy=multi-user.target
