@@ -84,8 +84,8 @@ def expected_did() -> str:
 
 def vault_seed() -> bytearray:
     """Fetch exactly one hex seed through the instance-principal Vault route."""
-    secret_id = os.environ.get("OCI_VAULT_SECRET_OCID", "")
-    if not re.fullmatch(r"ocid1\.vaultsecret\.[a-z0-9.-]+", secret_id): raise RuntimeError("signer Vault secret identifier is invalid")
+    secret_id = os.environ.get("OCI_VAULT_SECRET_OCID", "").strip()
+    if not re.fullmatch(r"ocid1\.vaultsecret\.oc[1-9][0-9]?\.[0-9A-Za-z_-]*\.[0-9A-Za-z_-]+", secret_id): raise RuntimeError("signer Vault secret identifier is invalid")
     try:
         import oci
         signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
