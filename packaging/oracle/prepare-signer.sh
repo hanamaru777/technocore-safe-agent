@@ -14,6 +14,7 @@ usermod -a -G technocore-autopilot technocore
 id -u technocore-signer >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin technocore-signer
 usermod -a -G technocore-autopilot technocore-signer
 install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer"
+install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer/uv-cache"
 chgrp technocore-autopilot "$state"; chmod 2750 "$state"
 install -d -o technocore -g technocore -m 0750 "$state/observer"
 install -d -o technocore -g technocore-autopilot -m 2770 "$state/autopilot"
