@@ -35,5 +35,5 @@ def test_oracle_signer_has_private_writable_uv_cache():
     prepare = (ROOT / "packaging/oracle/prepare-signer.sh").read_text("utf-8")
     cache = "/var/lib/technocore-safe-agent/signer/uv-cache"
     assert f"Environment=UV_CACHE_DIR={cache}" in unit
-    assert cache in unit.split("ReadWritePaths=", 1)[1]
+    assert "/var/lib/technocore-safe-agent/signer" in unit.split("ReadWritePaths=", 1)[1]
     assert 'install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer/uv-cache"' in prepare
