@@ -12,6 +12,7 @@ WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/signer.env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+Environment=UV_CACHE_DIR=/var/lib/technocore-safe-agent/signer/uv-cache
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.oracle_signer
 Restart=on-failure
 RestartSec=30
