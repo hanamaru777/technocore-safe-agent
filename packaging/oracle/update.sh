@@ -15,5 +15,7 @@ PYTHONPATH="$app/src" uv run --project "$app" pytest -q
 PYTHONPATH="$app/src" uv run --project "$app" python -m flop_agent.cli secret-scan
 PYTHONPATH="$app/src" uv run --project "$app" python -m flop_agent.cli doctor
 for service in technocore-safe-agent-resident.service technocore-safe-agent-discord.service technocore-safe-agent-signer.service; do
-  systemctl is-active --quiet "$service" && systemctl try-restart "$service"
+  if systemctl is-active --quiet "$service"; then
+    systemctl try-restart "$service"
+  fi
 done
