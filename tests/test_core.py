@@ -59,11 +59,25 @@ def test_confirmed_post_records_human_permalink_and_git_sha(monkeypatch, tmp_pat
     monkeypatch.setattr(core, "git_commit_sha", lambda: "a" * 40)
     class Response:
         def raise_for_status(self): pass
+        def json(self): return {"posted": {"from": "did:key:z6MkA", "nonce": "1", "text": "useful", "sig": "x" * 86, "seq": 8, "ts": "2026-08-26T00:00:00Z"}}
     monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: Response())
-    monkeypatch.setattr(core, "read_room", lambda room: {"messages": [{"from": "did:key:z6MkA", "nonce": "1", "text": "useful", "seq": 8, "ts": "2026-08-26T00:00:00Z"}]})
+    monkeypatch.setattr(core, "read_room", lambda room: pytest.fail("POST receipt must avoid busy-room readback"))
     record = core.post_signed("lobby", "useful", True)
     assert record["git_commit_sha"] == "a" * 40
     assert record["permalink"] == "https://technocore.chat/humans#r/lobby/8"
+
+
+def test_signed_post_rejects_missing_or_mismatched_receipt(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "1")
+    monkeypatch.setattr(core, "invoke_signer", lambda *_: ["did:key:z6MkA", "x" * 86])
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return {"posted": {"from": "did:key:z6MkA", "nonce": "1", "text": "different", "sig": "x" * 86, "seq": 8, "ts": "2026-08-26T00:00:00Z"}}
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="POST receipt"):
+        core.post_signed("lobby", "useful", True, did="did:key:z6MkA")
+    assert not (tmp_path / "activities.jsonl").exists()
 
 
 def test_untrusted_room_text_is_only_returned_data(monkeypatch):

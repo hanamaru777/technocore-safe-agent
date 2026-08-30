@@ -256,14 +256,21 @@ def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, 
     if len(signed) != 2 or signed[0] != did:
         raise RuntimeError("公式 signer の出力を検証できませんでした")
     body = {"did": did, "sig": signed[1], "nonce": nonce, "text": cleaned}
-    response = httpx.post(f"{BASE_URL}/r/{quote(room, safe='')}", json=body, timeout=20)
+    response = httpx.post(f"{BASE_URL}/r/{quote(room, safe='')}?format=json", json=body, timeout=20)
     response.raise_for_status()
-    payload = read_room(room)
-    messages = payload.get("messages", payload if isinstance(payload, list) else [])
-    matches = [m for m in messages if m.get("from") == did and str(m.get("nonce")) == nonce and m.get("text") == cleaned]
-    if not matches:
-        raise RuntimeError("送信後の投稿を確認できないため、活動記録は追加しませんでした")
-    matched = matches[-1]
+    try:
+        payload = response.json()
+    except (ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError("POST receipt を検証できないため、活動記録は追加しませんでした") from error
+    matched = payload.get("posted") if isinstance(payload, dict) else None
+    if not isinstance(matched, dict) or not isinstance(matched.get("seq"), int) or matched["seq"] < 0 or not isinstance(matched.get("ts"), str) or not isinstance(matched.get("sig"), str):
+        raise RuntimeError("POST receipt を検証できないため、活動記録は追加しませんでした")
+    try:
+        datetime.fromisoformat(matched["ts"].replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RuntimeError("POST receipt を検証できないため、活動記録は追加しませんでした") from error
+    if matched.get("from") != did or str(matched.get("nonce")) != nonce or matched.get("text") != cleaned or matched["sig"] != signed[1]:
+        raise RuntimeError("POST receipt が署名済み投稿と一致しないため、活動記録は追加しませんでした")
     activity = {"action": action, "did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, **commit_activity_fields(commit_context), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT, **observed_activity_fields(observed)}
     if record_permalink:
         activity["permalink"] = human_permalink(room, matched["seq"])

@@ -36,8 +36,18 @@ def test_manual_post_reuses_preflight_did_and_rejects_mismatch(monkeypatch, tmp_
     assert "SIGN_SEED" not in os.environ
     monkeypatch.setenv("SIGN_SEED", dummy_seed)  # separate CLI child in the Windows flow
     monkeypatch.setattr(core, "make_nonce", lambda *_: "1")
-    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: type("Response", (), {"raise_for_status": lambda self: None})())
-    monkeypatch.setattr(core, "read_room", lambda room: {"messages": [{"from": did, "nonce": "1", "text": "manual test", "seq": 1, "ts": "2026-08-30T00:00:00Z"}]})
+    # Return the real signer result captured by the HTTP fake without a second
+    # signer invocation, preserving the one-child manual-post invariant.
+    signed = []
+    real_invoke = core.invoke_signer
+    def invoke(*args):
+        result = real_invoke(*args); signed[:] = result; return result
+    monkeypatch.setattr(core, "invoke_signer", invoke)
+    class Receipt:
+        def raise_for_status(self): pass
+        def json(self): return {"posted": {"from": did, "nonce": "1", "text": "manual test", "sig": signed[1], "seq": 1, "ts": "2026-08-30T00:00:00Z"}}
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: Receipt())
+    monkeypatch.setattr(core, "read_room", lambda room: pytest.fail("manual signed post must use the POST receipt"))
     assert core.post_signed("lobby", "manual test", True, did=did)["did"] == did
     assert "SIGN_SEED" not in os.environ
     monkeypatch.setenv("SIGN_SEED", dummy_seed)
