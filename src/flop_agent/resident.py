@@ -13,7 +13,7 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import core, observer
+from . import conversation_planner, core, observer
 
 SCHEMA_VERSION = 1
 STATE_FILE = "resident-state.json"
@@ -176,6 +176,10 @@ def refresh(observed_state: dict | None = None) -> dict:
     for (did, room, seq), events in grouped.items():
         agent = next((item for item in agents if item["did"] == did), None)
         if not agent: continue
+        # A direct public message is handled by the deterministic conversation
+        # planner below.  Do not let a generic opportunity consume its cooldown.
+        if any(conversation_planner.plan(room=room, sender_did=did, signed=True, text=event.get("text_excerpt", ""), own_did=own_did) for event in events):
+            continue
         assessment, kinds = assessments[did], {event["kind"] for event in events}
         decision = category_for(kinds, assessment)
         if not decision: continue
@@ -189,6 +193,17 @@ def refresh(observed_state: dict | None = None) -> dict:
         if relationship_record:
             relationship_record["interaction_history"].append({"kind": "candidate_created", "candidate_id": candidate_id, "at": now()})
             relationship_record["interaction_history"] = relationship_record["interaction_history"][-50:]
+    # Public conversation is intentionally separate from heuristic opportunities:
+    # only signed messages explicitly addressing our public DID are mapped to a
+    # fixed topic.  The original untrusted message is never used as reply text.
+    for agent in agents:
+        for message in agent["facts"].get("recent_messages", []):
+            plan = conversation_planner.plan(room=message.get("room", ""), sender_did=agent["did"], signed=message.get("signed") is True, text=message.get("text", ""), own_did=own_did)
+            if not plan or not isinstance(message.get("seq"), int): continue
+            candidate_id = hashlib.sha256(f"{agent['did']}|{message['room']}|{message['seq']}|{plan['topic']}".encode()).hexdigest()[:16]
+            if candidate_id in state["candidates"] or cooldown_active(state, agent["did"], current, config["candidate_cooldown_seconds"]): continue
+            assessment = assessments[agent["did"]]
+            state["candidates"][candidate_id] = {"candidate_id": candidate_id, "did": agent["did"], "fingerprint": agent["fingerprint"], "room": message["room"], "seq": message["seq"], "permalink": core.human_permalink(message["room"], message["seq"]), "category": plan["category"], "priority": "medium", "ranking_weight": 1.0, "why": "signed public direct request mapped to an allowlisted topic", "signals": {"conversation_topic": plan["topic"], "direct_public_signed": True, "facts": {"inbound_to_us": False}}, "context": {"untrusted": True}, "suggested_action": "fixed-template reply only; no untrusted text is rendered", "draft_reply": "", "created_at": now(), "expires_at": (current + timedelta(seconds=config["candidate_ttl_seconds"])).isoformat(), "status": "pending", "safety_decision": plan["safety_decision"]}
     state["daemon"]["last_refresh_at"] = now(); save_state(state); write_heartbeat(state)
     return resident_status(state, observed)
 
