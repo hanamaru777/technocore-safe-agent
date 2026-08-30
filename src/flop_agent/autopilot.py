@@ -27,8 +27,11 @@ def legacy_path() -> Path: return resident.resident_dir() / OUTBOX_FILE
 def legacy_audit_path() -> Path: return resident.resident_dir() / AUDIT_FILE
 
 
-def migrate_legacy_shared_state() -> None:
+def migrate_legacy_shared_state(*, allow_legacy: bool = True) -> None:
     """Move the former observer-local shared files once, without merging data."""
+    if not allow_legacy:
+        if path().exists(): return
+        raise RuntimeError("dedicated autopilot state is missing and legacy observer state is inaccessible")
     for old, current in ((legacy_path(), path()), (legacy_audit_path(), audit_path())):
         if not old.exists(): continue
         if not old.is_file(): raise RuntimeError("legacy autopilot state is not a regular file")
@@ -41,8 +44,8 @@ def default_state() -> dict:
     return {"schema_version": 1, "enabled": False, "paused": True, "outbox": {}, "receipts": {}, "rate_history": [], "migrated_at": None}
 
 
-def load() -> dict:
-    migrate_legacy_shared_state()
+def load(*, allow_legacy: bool = True) -> dict:
+    migrate_legacy_shared_state(allow_legacy=allow_legacy)
     if not path().exists(): return default_state()
     try: state = json.loads(path().read_text("utf-8"))
     except (OSError, json.JSONDecodeError) as error: raise RuntimeError("autopilot state is corrupt; refusing to continue") from error
@@ -51,11 +54,11 @@ def load() -> dict:
     return state
 
 
-def save(state: dict) -> None:
-    migrate_legacy_shared_state()
+def save(state: dict, *, allow_legacy: bool = True) -> None:
+    migrate_legacy_shared_state(allow_legacy=allow_legacy)
     resident.observer.atomic_json_write(path(), state, mode=0o660)
-def audit(record: dict) -> None:
-    migrate_legacy_shared_state()
+def audit(record: dict, *, allow_legacy: bool = True) -> None:
+    migrate_legacy_shared_state(allow_legacy=allow_legacy)
     audit_path().parent.mkdir(parents=True, exist_ok=True, mode=0o770)
     with audit_path().open("a", encoding="utf-8", newline="\n") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")
     os.chmod(audit_path(), 0o660)
@@ -136,9 +139,9 @@ def export_intent(item: dict) -> dict:
     return {"schema_version": 1, "intent_id": item["id"], "source_fingerprint": item["fingerprint"], "room": item["room"], "seq": item["seq"], "category": item["category"], "topic": item["topic"], "public_knowledge_ids": ["public-profile:1"], "created_at": item["created_at"], "expires_at": item["expires_at"], "safety_decision": item["safety_decision"]}
 
 
-def export_pending() -> dict:
+def export_pending(*, allow_legacy: bool = True) -> dict:
     """Oracle endpoint: expose only strict, non-reflective pending intent fields."""
-    return {"schema_version": 1, "intents": [export_intent(item) for item in load()["outbox"].values() if item.get("status", "queued") == "queued"]}
+    return {"schema_version": 1, "intents": [export_intent(item) for item in load(allow_legacy=allow_legacy)["outbox"].values() if item.get("status", "queued") == "queued"]}
 
 
 def acknowledge_export(payload: dict) -> dict:

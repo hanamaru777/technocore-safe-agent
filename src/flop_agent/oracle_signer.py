@@ -137,8 +137,8 @@ def mark_acknowledged(state: dict, receipts: dict, intent: dict, receipt: dict) 
     item["status"] = "acknowledged"; item["receipt_hash"] = receipt["receipt_hash"]; item["posted_at"] = receipt["posted_at"]; item["acknowledged_at"] = now()
     state["receipts"][intent["intent_id"]] = {"at": now(), "receipt_hash": receipt["receipt_hash"]}
     state["rate_history"].append({"at": now(), "fingerprint": intent["source_fingerprint"], "room": intent["room"], "text_hash": receipt["text_hash"]})
-    autopilot.save(state)
-    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": True, "why": item["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "pass", "action": "oracle_signer_acknowledged"})
+    autopilot.save(state, allow_legacy=False)
+    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": True, "why": item["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "pass", "action": "oracle_signer_acknowledged"}, allow_legacy=False)
 
 
 def reconcile_or_skip(state: dict, receipts: dict, intent: dict, text: str) -> str | None:
@@ -208,10 +208,10 @@ def expire_queued_intent(state: dict, intent: dict) -> bool:
 
 
 def run_once() -> dict:
-    state = autopilot.load()
+    state = autopilot.load(allow_legacy=False)
     if not state["enabled"] or state["paused"]: return {"enabled": state["enabled"], "paused": state["paused"], "processed": []}
     receipts, processed = load_receipts(), []
-    for intent in autopilot.export_pending()["intents"]:
+    for intent in autopilot.export_pending(allow_legacy=False)["intents"]:
         if expire_queued_intent(state, intent):
             processed.append({"intent_id": intent["intent_id"], "action": "expired"}); continue
         processed.append({"intent_id": intent["intent_id"], "action": process_intent(state, receipts, intent)})
