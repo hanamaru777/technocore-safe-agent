@@ -103,10 +103,13 @@ try {
         if (-not $Room) { throw 'Room is required: .\flop.ps1 post-signed lobby' }
         $text = Read-Host 'Post text'
         Write-Host "Room: $Room"
-        & $uv run --project $rootPath python -m flop_agent.cli show-did
+        $didJson = & $uv run --project $rootPath python -m flop_agent.cli show-did | Out-String
+        if ($LASTEXITCODE -ne 0) { throw 'DID preflight failed' }
+        $preflightDid = ($didJson | ConvertFrom-Json).did
+        if (-not $preflightDid) { throw 'DID preflight returned no DID' }
         Write-Host "Text: $text"
         if ((Read-Host 'Send to Technocore? (yes/no)') -cne 'yes') { throw 'Send cancelled' }
-        & $uv run --project $rootPath python -m flop_agent.cli post-signed $Room --text $text --confirm
+        & $uv run --project $rootPath python -m flop_agent.cli post-signed $Room --text $text --did $preflightDid --confirm
     } elseif ($Command -eq 'contribution-proof') {
         $contributionUrl = Read-Host 'Public Contribution URL (https://...)'
         $proofRoom = if ($Room) { $Room } else { 'lobby' }
