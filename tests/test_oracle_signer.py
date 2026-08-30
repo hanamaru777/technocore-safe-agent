@@ -3,6 +3,7 @@ import json
 import base64
 import stat
 import os
+import re
 import sys
 from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
@@ -48,7 +49,7 @@ def test_oracle_signer_reconciles_ambiguous_result_without_repost(monkeypatch, t
     _, item = setup(monkeypatch, tmp_path); text = autopilot.render(item)
     receipt = prepared_receipt(item, text)
     receipts = {"schema_version": 1, "receipts": {item["id"]: receipt}}; oracle_signer.save_receipts(receipts)
-    monkeypatch.setattr(core, "read_room", lambda room: {"messages": [{"from": SIGNER_DID, "nonce": "123", "text": text}]})
+    monkeypatch.setattr(core, "read_room", lambda room, **kwargs: {"messages": [{"from": SIGNER_DID, "nonce": "123", "text": text}]})
     monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("reconciled receipt must never repost"))
     assert oracle_signer.run_once()["processed"][0]["action"] == "reconciled"
 
@@ -60,10 +61,10 @@ def test_oracle_signer_retries_unposted_prepared_intent_with_same_nonce(monkeypa
     monkeypatch.setattr(core, "make_nonce", lambda *args: pytest.fail("prepared intent must not create a nonce"))
     monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
     monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
-    monkeypatch.setattr(core, "read_room", lambda room: reads.append(room) or {"messages": []})
+    monkeypatch.setattr(core, "read_room", lambda room, **kwargs: reads.append(kwargs) or {"messages": []})
     monkeypatch.setattr(core, "post_signed", lambda room, text, confirm, **kwargs: posted.append(kwargs["nonce"]) or {"seq": 1})
     assert oracle_signer.run_once()["processed"][0]["action"] == "posted"
-    assert posted == ["123"] and len(reads) == 2
+    assert posted == ["123"] and len(reads) == 1 and reads[0]["limit"] == 200 and re.fullmatch(r"[a-f0-9]{32}", reads[0]["cache_buster"])
     assert oracle_signer.load_receipts()["receipts"][item["id"]]["state"] == "acknowledged"
 
 
@@ -76,7 +77,7 @@ def test_oracle_signer_retries_vault_presubmit_failure_and_recovers_health(monke
     monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
     monkeypatch.setattr(core, "make_nonce", lambda room, did: "123")
     monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
-    monkeypatch.setattr(core, "read_room", lambda room: {"messages": []})
+    monkeypatch.setattr(core, "read_room", lambda room, **kwargs: {"messages": []})
     monkeypatch.setattr(core, "post_signed", lambda room, text, confirm, **kwargs: calls.append(kwargs["nonce"]) or {"seq": 1})
     assert oracle_signer.run_cycle()["processed"][0]["action"] == "posted"
     health = oracle_signer.load_health(); assert health["status"] == "ok" and health["last_error_code"] is None and health["consecutive_failures"] == 0 and health["last_success_at"]
@@ -91,7 +92,7 @@ def test_oracle_signer_expires_first_intent_then_posts_second(monkeypatch, tmp_p
     monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
     monkeypatch.setattr(core, "make_nonce", lambda room, did: "123")
     monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
-    monkeypatch.setattr(core, "read_room", lambda room: {"messages": []})
+    monkeypatch.setattr(core, "read_room", lambda room, **kwargs: {"messages": []})
     monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: posts.append(kwargs["nonce"]) or {"seq": 1})
     result = oracle_signer.run_once()
     assert result["processed"] == [{"intent_id": first["id"], "action": "expired"}, {"intent_id": second["id"], "action": "posted"}]
@@ -106,6 +107,23 @@ def test_isolated_signer_expires_queued_intent_without_legacy_access(monkeypatch
     monkeypatch.setattr(autopilot, "legacy_audit_path", lambda: (_ for _ in ()).throw(PermissionError("observer denied")))
     assert oracle_signer.run_once()["processed"] == [{"intent_id": item["id"], "action": "expired"}]
     assert autopilot.load(allow_legacy=False)["outbox"][item["id"]]["status"] == "expired"
+
+
+def test_quarantine_ambiguous_controlled_e2e_preserves_receipt_and_allows_v2(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    observer.atomic_json_write(observer.config_path(), observer.DEFAULT_CONFIG)
+    autopilot.enable(); first = autopilot.stage_e2e(); state = autopilot.load()
+    item, text = state["outbox"][first["intent_id"]], autopilot.render(state["outbox"][first["intent_id"]])
+    receipt = prepared_receipt(item, text); receipt["last_error_code"] = "submission_unknown"
+    oracle_signer.save_receipts({"schema_version": 1, "receipts": {first["intent_id"]: receipt}})
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("quarantine must never post"))
+    monkeypatch.setattr(core, "invoke_signer", lambda *args: pytest.fail("quarantine must never sign"))
+    assert oracle_signer.quarantine_controlled_e2e() == {"intent_id": first["intent_id"], "status": "quarantined"}
+    assert oracle_signer.load_receipts()["receipts"][first["intent_id"]] == receipt
+    autopilot.pause(False)
+    assert oracle_signer.run_once()["processed"] == []
+    autopilot.pause(True); second = autopilot.stage_e2e_v2()
+    assert second["staged"] is True and second["intent_id"] != first["intent_id"]
 
 
 def test_oracle_signer_rejects_internal_injection_and_keeps_seed_ephemeral(monkeypatch, tmp_path):

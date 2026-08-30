@@ -67,6 +67,27 @@ def test_confirmed_post_records_human_permalink_and_git_sha(monkeypatch, tmp_pat
     assert record["permalink"] == "https://technocore.chat/humans#r/lobby/8"
 
 
+def test_scoped_git_preflight_fails_before_signed_post_http(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "1")
+    monkeypatch.setattr(core, "invoke_signer", lambda *_: ["did:key:z6MkA", "x" * 86])
+    calls = []
+    monkeypatch.setattr(core, "git_commit_sha", lambda: (_ for _ in ()).throw(RuntimeError("git preflight failed")))
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(RuntimeError, match="git preflight"):
+        core.post_signed("lobby", "useful", True, did="did:key:z6MkA")
+    assert calls == []
+
+
+def test_git_commit_uses_scoped_safe_directory_without_global_config(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "ROOT", tmp_path); calls = []
+    class Result:
+        returncode = 0; stdout = "a" * 40
+    monkeypatch.setattr(core.subprocess, "run", lambda args, **kwargs: calls.append(args) or Result())
+    assert core.git_commit_sha() == "a" * 40
+    assert calls == [["git", "-c", f"safe.directory={tmp_path}", "rev-parse", "HEAD"]]
+
+
 def test_signed_post_rejects_missing_or_mismatched_receipt(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     monkeypatch.setattr(core, "make_nonce", lambda *_: "1")

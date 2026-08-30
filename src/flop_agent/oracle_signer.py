@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import signal
 import sys
 from datetime import UTC, datetime
@@ -125,7 +126,7 @@ def verify_did() -> str:
 
 
 def message_exists(receipt: dict, intent: dict, text: str) -> bool:
-    payload = core.read_room(intent["room"])
+    payload = core.read_room(intent["room"], limit=200, cache_buster=secrets.token_hex(16))
     messages = payload.get("messages", payload if isinstance(payload, list) else [])
     return isinstance(messages, list) and any(isinstance(item, dict) and item.get("from") == receipt["did"] and str(item.get("nonce")) == receipt["nonce"] and item.get("text") == text for item in messages)
 
@@ -167,11 +168,6 @@ def submit_prepared(state: dict, receipts: dict, intent: dict, text: str, receip
             pass
         receipt["attempts"] = int(receipt.get("attempts", 0)) + 1; receipt["last_attempt_at"] = now(); receipt["last_error_code"] = str(error) if str(error) in ERROR_CODES else "submission_unknown"; save_receipts(receipts)
         raise RuntimeError(receipt["last_error_code"]) from error
-    # A resumed prepared intent always gets an after-submit read.  A definite
-    # successful HTTP response remains authoritative for idempotency, while
-    # this read records the normal eventual-consistency reconciliation path.
-    try: message_exists(receipt, intent, text)
-    except Exception: pass
     mark_acknowledged(state, receipts, intent, receipt)
     return "posted"
 
@@ -216,6 +212,24 @@ def run_once() -> dict:
             processed.append({"intent_id": intent["intent_id"], "action": "expired"}); continue
         processed.append({"intent_id": intent["intent_id"], "action": process_intent(state, receipts, intent)})
     return {"enabled": True, "paused": False, "processed": processed}
+
+
+def quarantine_controlled_e2e() -> dict:
+    """Terminally quarantine only the known ambiguous v1 controlled test intent."""
+    state = autopilot.load(allow_legacy=False)
+    if not state["enabled"] or not state["paused"]:
+        raise RuntimeError("controlled E2E quarantine requires enabled autopilot paused=true")
+    intent_id = autopilot.controlled_e2e_id("v1")
+    item = state["outbox"].get(intent_id)
+    if not isinstance(item, dict) or item.get("status", "queued") != "queued" or item.get("category") != "controlled_e2e" or item.get("topic") != "prompt_injection_safety":
+        raise RuntimeError("controlled E2E v1 queued intent is required for quarantine")
+    receipt = load_receipts()["receipts"].get(intent_id)
+    if not isinstance(receipt, dict) or receipt.get("state") != "prepared" or receipt.get("last_error_code") != "submission_unknown":
+        raise RuntimeError("controlled E2E quarantine requires an ambiguous prepared receipt")
+    item["status"] = "quarantined"; item["quarantined_at"] = now(); item["quarantine_reason"] = "submission_unknown"
+    autopilot.save(state, allow_legacy=False)
+    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": False, "why": "submission_unknown", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "controlled_e2e_quarantined"}, allow_legacy=False)
+    return {"intent_id": intent_id, "status": "quarantined"}
 
 
 def run_cycle() -> dict:

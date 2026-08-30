@@ -144,7 +144,7 @@ def make_nonce(room: str, did: str) -> str:
     return str(value)
 
 
-def read_room(room: str, since: int | None = None, wait: int | None = None, limit: int | None = None) -> dict:
+def read_room(room: str, since: int | None = None, wait: int | None = None, limit: int | None = None, cache_buster: str | None = None) -> dict:
     params: dict[str, int | str] = {"format": "json"}
     if since is not None:
         params["since"] = since
@@ -152,6 +152,10 @@ def read_room(room: str, since: int | None = None, wait: int | None = None, limi
         params["wait"] = min(max(wait, 0), 10)
     if limit is not None:
         params["limit"] = min(max(limit, 1), 200)
+    if cache_buster is not None:
+        if not re.fullmatch(r"[a-f0-9]{16,64}", cache_buster):
+            raise ValueError("invalid room cache buster")
+        params["n"] = cache_buster
     response = httpx.get(f"{BASE_URL}/r/{quote(room, safe='')}", params=params, timeout=20)
     response.raise_for_status()
     return response.json()
@@ -201,7 +205,7 @@ def append_activity(record: dict) -> dict:
 
 
 def git_commit_sha() -> str:
-    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True, check=False)
+    result = subprocess.run(["git", "-c", f"safe.directory={ROOT}", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True, check=False)
     if result.returncode:
         raise RuntimeError("活動証拠に記録する Git commit SHA を取得できませんでした")
     return result.stdout.strip()
@@ -256,6 +260,10 @@ def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, 
     if len(signed) != 2 or signed[0] != did:
         raise RuntimeError("公式 signer の出力を検証できませんでした")
     body = {"did": did, "sig": signed[1], "nonce": nonce, "text": cleaned}
+    # This must be complete before the irreversible HTTP write.  In particular,
+    # an isolated signer must not discover a Git safe-directory failure after
+    # Technocore has accepted the post.
+    activity_metadata = {**commit_activity_fields(commit_context), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT, **observed_activity_fields(observed)}
     response = httpx.post(f"{BASE_URL}/r/{quote(room, safe='')}?format=json", json=body, timeout=20)
     response.raise_for_status()
     try:
@@ -271,7 +279,7 @@ def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, 
         raise RuntimeError("POST receipt を検証できないため、活動記録は追加しませんでした") from error
     if matched.get("from") != did or str(matched.get("nonce")) != nonce or matched.get("text") != cleaned or matched["sig"] != signed[1]:
         raise RuntimeError("POST receipt が署名済み投稿と一致しないため、活動記録は追加しませんでした")
-    activity = {"action": action, "did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, **commit_activity_fields(commit_context), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT, **observed_activity_fields(observed)}
+    activity = {"action": action, "did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, **activity_metadata}
     if record_permalink:
         activity["permalink"] = human_permalink(room, matched["seq"])
     return append_activity(activity)

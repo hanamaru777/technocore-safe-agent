@@ -134,23 +134,39 @@ def disable() -> dict:
     state = load(); state["enabled"] = False; state["paused"] = True; save(state); return status(state)
 
 
-def stage_e2e() -> dict:
+def controlled_e2e_id(version: str) -> str:
+    if version not in {"v1", "v2"}: raise ValueError("invalid controlled E2E version")
+    return hashlib.sha256(f"controlled-e2e-{version}".encode()).hexdigest()[:20]
+
+
+def _stage_e2e(version: str) -> dict:
     """Stage one fixed, pause-only signer smoke-test intent without any I/O."""
     state = load()
     if not state["enabled"] or not state["paused"]:
         raise RuntimeError("controlled E2E staging requires enabled autopilot paused=true")
-    intent_id = hashlib.sha256(b"controlled-e2e-v1").hexdigest()[:20]
+    intent_id = controlled_e2e_id(version)
     existing = state["outbox"].get(intent_id)
     if existing is not None:
         return {"intent_id": intent_id, "staged": False, "status": existing.get("status", "queued")}
     if any(item.get("status", "queued") == "queued" for item in state["outbox"].values()):
         raise RuntimeError("controlled E2E staging refuses a nonempty queued outbox")
     created = now()
-    intent = {"id": intent_id, "source_candidate_id": "controlled-e2e-v1", "source_did": "did:key:controlled-e2e", "fingerprint": hashlib.sha256(b"controlled-e2e-fingerprint").hexdigest()[:16], "room": "lobby", "seq": 0, "category": "controlled_e2e", "topic": "prompt_injection_safety", "public_evidence_ids": ["public-profile:1"], "created_at": created, "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "safety_decision": "controlled_pause_only_e2e"}
+    intent = {"id": intent_id, "source_candidate_id": f"controlled-e2e-{version}", "source_did": "did:key:controlled-e2e", "fingerprint": hashlib.sha256(f"controlled-e2e-{version}-fingerprint".encode()).hexdigest()[:16], "room": "lobby", "seq": 0, "category": "controlled_e2e", "topic": "prompt_injection_safety", "public_evidence_ids": ["public-profile:1"], "created_at": created, "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "safety_decision": "controlled_pause_only_e2e"}
     render(intent)  # fixed tracked template + DLP validation; never persist text.
     state["outbox"][intent_id] = intent; save(state)
     audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "not_applicable", "action": "controlled_e2e_staged"})
     return {"intent_id": intent_id, "staged": True, "status": "queued"}
+
+
+def stage_e2e() -> dict: return _stage_e2e("v1")
+
+
+def stage_e2e_v2() -> dict:
+    state = load()
+    prior = state["outbox"].get(controlled_e2e_id("v1"))
+    if not isinstance(prior, dict) or prior.get("status") != "quarantined":
+        raise RuntimeError("controlled E2E v2 requires quarantined v1")
+    return _stage_e2e("v2")
 
 
 def pause(value: bool) -> dict:
