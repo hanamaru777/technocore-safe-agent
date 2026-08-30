@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from flop_agent import autopilot, core, observer, resident
+from flop_agent import autopilot, autopilot_transport, core, observer, resident
 
 
 def setup(monkeypatch, tmp_path):
@@ -33,6 +33,29 @@ def test_autopilot_enable_disable_requires_explicit_resume(monkeypatch, tmp_path
     assert autopilot.enable()["enabled"] is True and autopilot.status()["paused"] is True
     assert autopilot.pause(False)["paused"] is False
     assert autopilot.disable() == {"enabled": False, "paused": True, "queued": 0, "receipts": 0, "migration_complete": False}
+
+
+def test_pause_only_controlled_e2e_staging_is_idempotent_and_exportable(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); autopilot.enable()
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("staging must never post"))
+    monkeypatch.setattr(core, "invoke_signer", lambda *args: pytest.fail("staging must never sign"))
+    first = autopilot.stage_e2e(); second = autopilot.stage_e2e()
+    assert first["staged"] is True and second == {"intent_id": first["intent_id"], "staged": False, "status": "queued"}
+    exported = autopilot.export_pending()["intents"]
+    assert len(exported) == 1 and autopilot_transport.validate_intent(exported[0]) == exported[0]
+    assert autopilot.status()["enabled"] is True and autopilot.status()["paused"] is True
+
+
+def test_controlled_e2e_staging_fails_closed_for_invalid_state_or_queue(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="requires"):
+        autopilot.stage_e2e()
+    autopilot.enable(); autopilot.pause(False)
+    with pytest.raises(RuntimeError, match="requires"):
+        autopilot.stage_e2e()
+    autopilot.pause(True); state = autopilot.load(); state["outbox"]["a" * 20] = {"status": "queued"}; autopilot.save(state)
+    with pytest.raises(RuntimeError, match="nonempty"):
+        autopilot.stage_e2e()
 
 
 def test_autopilot_migrates_legacy_outbox_and_audit_without_losing_receipts(monkeypatch, tmp_path):

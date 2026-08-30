@@ -134,6 +134,25 @@ def disable() -> dict:
     state = load(); state["enabled"] = False; state["paused"] = True; save(state); return status(state)
 
 
+def stage_e2e() -> dict:
+    """Stage one fixed, pause-only signer smoke-test intent without any I/O."""
+    state = load()
+    if not state["enabled"] or not state["paused"]:
+        raise RuntimeError("controlled E2E staging requires enabled autopilot paused=true")
+    intent_id = hashlib.sha256(b"controlled-e2e-v1").hexdigest()[:20]
+    existing = state["outbox"].get(intent_id)
+    if existing is not None:
+        return {"intent_id": intent_id, "staged": False, "status": existing.get("status", "queued")}
+    if any(item.get("status", "queued") == "queued" for item in state["outbox"].values()):
+        raise RuntimeError("controlled E2E staging refuses a nonempty queued outbox")
+    created = now()
+    intent = {"id": intent_id, "source_candidate_id": "controlled-e2e-v1", "source_did": "did:key:controlled-e2e", "fingerprint": hashlib.sha256(b"controlled-e2e-fingerprint").hexdigest()[:16], "room": "lobby", "seq": 0, "category": "controlled_e2e", "topic": "prompt_injection_safety", "public_evidence_ids": ["public-profile:1"], "created_at": created, "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "safety_decision": "controlled_pause_only_e2e"}
+    render(intent)  # fixed tracked template + DLP validation; never persist text.
+    state["outbox"][intent_id] = intent; save(state)
+    audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "not_applicable", "action": "controlled_e2e_staged"})
+    return {"intent_id": intent_id, "staged": True, "status": "queued"}
+
+
 def pause(value: bool) -> dict:
     state = load()
     if not value and not state["enabled"]:

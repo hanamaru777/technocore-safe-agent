@@ -14,9 +14,9 @@ from . import autopilot, core, observer
 CONFIG = "autopilot-ssh.json"
 RECEIPTS = "autopilot-session-receipts.json"
 INTENT_FIELDS = {"schema_version", "intent_id", "source_fingerprint", "room", "seq", "category", "topic", "public_knowledge_ids", "created_at", "expires_at", "safety_decision"}
-CATEGORIES = {"help_request", "specific_question", "technical_collaboration", "artifact_contribution", "conversation"}
+CATEGORIES = {"help_request", "specific_question", "technical_collaboration", "artifact_contribution", "conversation", "controlled_e2e"}
 TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution", "did_signature", "nonce", "technocore_api", "prompt_injection_safety", "repo_tests_bugs", "contribution_artifact", "collaboration", "follow_up"}
-SAFETY_DECISIONS = {"concrete_public_technical_request", "public_artifact_evidence", "proven_returning_high_quality_agent", "signed_public_direct_request"}
+SAFETY_DECISIONS = {"concrete_public_technical_request", "public_artifact_evidence", "proven_returning_high_quality_agent", "signed_public_direct_request", "controlled_pause_only_e2e"}
 
 
 def config_path() -> Path: return core.STATE / CONFIG
