@@ -39,7 +39,9 @@ def main() -> None:
     try:
         if args.command == "status":
             valid, count = core.verify_activity_log(); output = {"phase": "2 useful-agent foundation", "activity_log_valid": valid, "activity_count": count, "signer_matches_pinned_hash": core.signer_sha256() == core.SIGNER_SHA256}
-        elif args.command == "show-did": output = {"did": core.current_did(), "did_note": dict(zip(("shard", "key", "fingerprint"), core.did_note_location(core.current_did()))), "warning": "DID Note は公開・world-writable の慣習であり認証ではありません。"}
+        elif args.command == "show-did":
+            did = core.current_did()
+            output = {"did": did, "did_note": dict(zip(("shard", "key", "fingerprint"), core.did_note_location(did))), "warning": "DID Note は公開・world-writable の慣習であり認証ではありません。"}
         elif args.command == "verify-did":
             output = core.verify_did(args.expected_did)
         elif args.command == "read-room": output = core.read_room(args.room)
