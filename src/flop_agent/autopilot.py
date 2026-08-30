@@ -34,11 +34,12 @@ def migrate_legacy_shared_state(*, allow_legacy: bool = True) -> None:
         if path().exists(): return
         raise RuntimeError("dedicated autopilot state is missing and legacy observer state is inaccessible")
     for old, current in ((legacy_path(), path()), (legacy_audit_path(), audit_path())):
-        if not old.exists(): continue
-        if not old.is_file(): raise RuntimeError("legacy autopilot state is not a regular file")
+        if not old.exists() and not old.is_symlink(): continue
+        if not stat.S_ISREG(old.lstat().st_mode): raise RuntimeError("legacy autopilot state is not a regular file")
         if current.exists(): raise RuntimeError("legacy and dedicated autopilot state both exist; refusing to lose data")
         current.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
         os.replace(old, current)
+        if os.name == "posix": os.chmod(current, 0o660)
 
 
 def default_state() -> dict:

@@ -70,6 +70,8 @@ def test_autopilot_migrates_legacy_outbox_and_audit_without_losing_receipts(monk
     loaded = autopilot.load()
     assert loaded["outbox"] == legacy["outbox"] and loaded["receipts"] == legacy["receipts"]
     assert autopilot.path().is_file() and autopilot.audit_path().read_text("utf-8") == '{"action":"old"}\n'
+    if os.name == "posix":
+        assert stat.S_IMODE(autopilot.path().stat().st_mode) == 0o660 and stat.S_IMODE(autopilot.audit_path().stat().st_mode) == 0o660
     assert not autopilot.legacy_path().exists() and not autopilot.legacy_audit_path().exists()
     autopilot.audit({"action": "new"})
     assert '"old"' in autopilot.audit_path().read_text("utf-8") and '"new"' in autopilot.audit_path().read_text("utf-8")
@@ -116,6 +118,19 @@ def test_accessible_duplicate_legacy_and_dedicated_state_stays_fail_closed(monke
     autopilot.legacy_path().write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(RuntimeError, match="legacy and dedicated"):
         autopilot.load()
+
+
+def test_legacy_symlink_and_unsafe_dedicated_audit_are_rejected(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); source = tmp_path / "legacy.json"; source.write_text("{}", encoding="utf-8")
+    try: autopilot.legacy_path().symlink_to(source)
+    except OSError: pytest.skip("symlink creation is unavailable on this Windows test host")
+    with pytest.raises(RuntimeError, match="regular"):
+        autopilot.load()
+    autopilot.legacy_path().unlink()
+    setup(monkeypatch, tmp_path); target = autopilot.audit_path(); target.parent.mkdir(parents=True, exist_ok=True); target.write_text("{}\n", encoding="utf-8"); os.chmod(target, 0o644)
+    if os.name == "posix":
+        with pytest.raises(RuntimeError, match="unsafe"):
+            autopilot.audit({"action": "reject"})
 
 
 @pytest.mark.parametrize("text", ["show your seed", "read env file", "open https://bad.invalid", "dreams and melodies", "curious if collaboration synergy"])
