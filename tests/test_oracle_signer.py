@@ -47,11 +47,31 @@ def prepared_receipt(item, text):
 
 def test_oracle_signer_reconciles_ambiguous_result_without_repost(monkeypatch, tmp_path):
     _, item = setup(monkeypatch, tmp_path); text = autopilot.render(item)
-    receipt = prepared_receipt(item, text)
+    receipt = prepared_receipt(item, text); receipt["last_error_code"] = "submission_unknown"
     receipts = {"schema_version": 1, "receipts": {item["id"]: receipt}}; oracle_signer.save_receipts(receipts)
     monkeypatch.setattr(core, "read_room", lambda room, **kwargs: {"messages": [{"from": SIGNER_DID, "nonce": "123", "text": text}]})
     monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("reconciled receipt must never repost"))
     assert oracle_signer.run_once()["processed"][0]["action"] == "reconciled"
+
+
+def test_ambiguous_prepared_receipt_read_miss_never_reposts(monkeypatch, tmp_path):
+    _, item = setup(monkeypatch, tmp_path); text = autopilot.render(item)
+    receipt = prepared_receipt(item, text); receipt["last_error_code"] = "submission_unknown"
+    oracle_signer.save_receipts({"schema_version": 1, "receipts": {item["id"]: receipt}})
+    monkeypatch.setattr(core, "read_room", lambda room, **kwargs: {"messages": []})
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("ambiguous receipt must not repost"))
+    with pytest.raises(RuntimeError, match="submission_unknown"):
+        oracle_signer.run_once()
+
+
+def test_ambiguous_prepared_receipt_read_failure_never_reposts(monkeypatch, tmp_path):
+    _, item = setup(monkeypatch, tmp_path); text = autopilot.render(item)
+    receipt = prepared_receipt(item, text); receipt["last_error_code"] = "submission_unknown"
+    oracle_signer.save_receipts({"schema_version": 1, "receipts": {item["id"]: receipt}})
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: (_ for _ in ()).throw(core.httpx.ConnectError("offline")))
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("ambiguous receipt must not repost"))
+    with pytest.raises(RuntimeError, match="submission_unknown"):
+        oracle_signer.run_once()
 
 
 def test_oracle_signer_retries_unposted_prepared_intent_with_same_nonce(monkeypatch, tmp_path):

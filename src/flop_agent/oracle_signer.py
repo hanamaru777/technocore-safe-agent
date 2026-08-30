@@ -153,6 +153,8 @@ def reconcile_or_skip(state: dict, receipts: dict, intent: dict, text: str) -> s
     except Exception as error: raise RuntimeError("submission_unknown") from error
     if exists:
         mark_acknowledged(state, receipts, intent, receipt); return "reconciled"
+    if receipt.get("last_error_code") == "submission_unknown":
+        raise RuntimeError("submission_unknown")
     return None
 
 
