@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -81,6 +83,25 @@ def test_isolated_signer_uses_dedicated_state_without_touching_inaccessible_lega
     assert autopilot.load(allow_legacy=False) == state
     autopilot.audit({"action": "isolated"}, allow_legacy=False)
     assert autopilot.audit_path().is_file()
+
+
+def test_shared_audit_appends_existing_secure_file_without_chmod(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); target = autopilot.audit_path(); target.parent.mkdir(parents=True); target.write_text('{"old":true}\n', encoding="utf-8")
+    os.chmod(target, 0o660)
+    monkeypatch.setattr(autopilot.os, "chmod", lambda *args: pytest.fail("existing shared audit must not chmod"))
+    autopilot.audit({"action": "append"})
+    assert '"old"' in target.read_text("utf-8") and '"append"' in target.read_text("utf-8")
+
+
+def test_new_shared_audit_ends_0660_and_unsafe_existing_file_fails(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); old = os.umask(0o077)
+    try: autopilot.audit({"action": "new"})
+    finally: os.umask(old)
+    target = autopilot.audit_path()
+    if os.name == "posix": assert stat.S_IMODE(target.stat().st_mode) == 0o660
+    target.unlink(); target.mkdir()
+    with pytest.raises(RuntimeError, match="unsafe"):
+        autopilot.audit({"action": "unsafe"})
 
 
 def test_isolated_signer_fails_closed_without_dedicated_state(monkeypatch, tmp_path):

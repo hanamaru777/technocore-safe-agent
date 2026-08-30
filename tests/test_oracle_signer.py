@@ -136,6 +136,7 @@ def test_quarantine_ambiguous_controlled_e2e_preserves_receipt_and_allows_v2(mon
     item, text = state["outbox"][first["intent_id"]], autopilot.render(state["outbox"][first["intent_id"]])
     receipt = prepared_receipt(item, text); receipt["last_error_code"] = "submission_unknown"
     oracle_signer.save_receipts({"schema_version": 1, "receipts": {first["intent_id"]: receipt}})
+    audit = autopilot.audit_path(); audit.parent.mkdir(parents=True, exist_ok=True); audit.write_text('{"existing":true}\n', encoding="utf-8"); os.chmod(audit, 0o660)
     monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("quarantine must never post"))
     monkeypatch.setattr(core, "invoke_signer", lambda *args: pytest.fail("quarantine must never sign"))
     assert oracle_signer.quarantine_controlled_e2e() == {"intent_id": first["intent_id"], "status": "quarantined"}

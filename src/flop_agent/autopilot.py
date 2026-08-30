@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -59,9 +60,30 @@ def save(state: dict, *, allow_legacy: bool = True) -> None:
     resident.observer.atomic_json_write(path(), state, mode=0o660)
 def audit(record: dict, *, allow_legacy: bool = True) -> None:
     migrate_legacy_shared_state(allow_legacy=allow_legacy)
-    audit_path().parent.mkdir(parents=True, exist_ok=True, mode=0o770)
-    with audit_path().open("a", encoding="utf-8", newline="\n") as handle: handle.write(json.dumps(record, sort_keys=True) + "\n")
-    os.chmod(audit_path(), 0o660)
+    target = audit_path(); target.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
+    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    created = False
+    if target.exists() or target.is_symlink():
+        info = target.lstat()
+        if not stat.S_ISREG(info.st_mode) or (os.name == "posix" and stat.S_IMODE(info.st_mode) != 0o660):
+            raise RuntimeError("autopilot audit file is unsafe")
+        descriptor = os.open(target, flags)
+    else:
+        try:
+            descriptor = os.open(target, flags | os.O_CREAT | os.O_EXCL, 0o660); created = True
+        except FileExistsError:
+            info = target.lstat()
+            if not stat.S_ISREG(info.st_mode) or (os.name == "posix" and stat.S_IMODE(info.st_mode) != 0o660):
+                raise RuntimeError("autopilot audit file is unsafe")
+            descriptor = os.open(target, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode): raise RuntimeError("autopilot audit file is unsafe")
+        if created: os.fchmod(descriptor, 0o660)
+        with os.fdopen(descriptor, "a", encoding="utf-8", newline="\n") as handle:
+            descriptor = -1; handle.write(json.dumps(record, sort_keys=True) + "\n")
+    finally:
+        if descriptor != -1: os.close(descriptor)
 
 
 def public_knowledge() -> dict:
