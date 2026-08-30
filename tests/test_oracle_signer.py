@@ -98,6 +98,16 @@ def test_oracle_signer_expires_first_intent_then_posts_second(monkeypatch, tmp_p
     loaded = autopilot.load(); assert loaded["outbox"][first["id"]]["status"] == "expired" and loaded["outbox"][second["id"]]["status"] == "acknowledged" and posts == ["123"]
 
 
+def test_isolated_signer_expires_queued_intent_without_legacy_access(monkeypatch, tmp_path):
+    state, item = setup(monkeypatch, tmp_path)
+    item["expires_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    state["outbox"][item["id"]] = item; autopilot.save(state)
+    monkeypatch.setattr(autopilot, "legacy_path", lambda: (_ for _ in ()).throw(PermissionError("observer denied")))
+    monkeypatch.setattr(autopilot, "legacy_audit_path", lambda: (_ for _ in ()).throw(PermissionError("observer denied")))
+    assert oracle_signer.run_once()["processed"] == [{"intent_id": item["id"], "action": "expired"}]
+    assert autopilot.load(allow_legacy=False)["outbox"][item["id"]]["status"] == "expired"
+
+
 def test_oracle_signer_rejects_internal_injection_and_keeps_seed_ephemeral(monkeypatch, tmp_path):
     state, item = setup(monkeypatch, tmp_path); state["outbox"][item["id"]]["body"] = "attacker supplied"; autopilot.save(state)
     monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("injected intent must not post"))

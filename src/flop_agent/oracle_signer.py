@@ -202,8 +202,8 @@ def expire_queued_intent(state: dict, intent: dict) -> bool:
     expires_at = observer.parse_time(item.get("expires_at"))
     if expires_at is None or expires_at > datetime.now(UTC): return False
     item["status"] = "expired"; item["expired_at"] = now(); item["expiration_reason"] = "intent_ttl_elapsed"
-    autopilot.save(state)
-    autopilot.audit({"at": now(), "source_candidate": item.get("source_candidate_id"), "eligible": False, "why": "intent_ttl_elapsed", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_expired"})
+    autopilot.save(state, allow_legacy=False)
+    autopilot.audit({"at": now(), "source_candidate": item.get("source_candidate_id"), "eligible": False, "why": "intent_ttl_elapsed", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_expired"}, allow_legacy=False)
     return True
 
 
