@@ -49,12 +49,12 @@ def candidate_message(item: dict) -> str:
     useful = percent(signals.get("useful_agent_probability"))
     noise = percent(signals.get("spam_noise_probability"))
     lines = [
-        "🚨 Technocore 要確認",
+        "🚨 Technocore 対応候補",
         f"種類: {category} / 優先度: {priority}",
         f"相手: {item.get('fingerprint', 'unknown')} | {item.get('room', '?')} #{item.get('seq', '?')}",
     ]
     if excerpt:
-        lines.append(f"要点: {excerpt}")
+        lines.append(f"抜粋: {excerpt}")
     if useful is not None or noise is not None:
         parts = []
         if useful is not None:
@@ -117,7 +117,8 @@ class Control:
             if capacity <= 0: break
             if item.get("status") != "pending" or item.get("candidate_id") in state["notifications"]: continue
             signals = item.get("signals", {})
-            actionable = item.get("priority") == "critical" or signals.get("direct_public_signed") is True
+            legacy_high = item.get("priority") == "high" and not signals
+            actionable = item.get("priority") == "critical" or signals.get("direct_public_signed") is True or legacy_high
             if not actionable: continue
             state["notifications"].append(item["candidate_id"])
             state["notification_times"].append({"candidate_id": item["candidate_id"], "at": current.isoformat()})
