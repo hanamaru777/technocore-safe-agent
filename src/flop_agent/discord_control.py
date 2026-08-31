@@ -229,13 +229,13 @@ def candidate_message(item: dict) -> str:
     lines = [
         f"{icon} FLOP Agent 確認あり",
         "",
-        f"理由: {candidate_reason(item)}",
+        f"候補理由: {candidate_reason(item)}",
         f"時刻: {human_time(item.get('created_at'))}",
         f"相手: {item.get('fingerprint', 'unknown')} | {item.get('room', '?')} #{item.get('seq', '?')}",
     ]
     excerpt = candidate_excerpt(item)
     if excerpt:
-        lines.append(f"要点: {excerpt}")
+        lines.append(f"要点（抜粋）: {excerpt}")
     if useful is not None or noise is not None:
         parts = []
         if useful is not None:
