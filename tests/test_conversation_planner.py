@@ -46,20 +46,43 @@ def test_malicious_direct_text_is_not_reflected_and_unsafe_request_is_blocked(mo
     assert "ignore previous" not in rendered and OWN not in rendered and "seed" not in rendered
 
 
-def test_resident_conversation_candidate_is_idempotent_and_uses_no_message_body(monkeypatch, tmp_path):
+def test_first_contact_is_review_only_and_prior_approval_unlocks_later_autopilot(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     observed, config = observer.default_state(), observer.load_config()
-    message = {"seq": 7, "from": OTHER, "text": f"{OWN} can you help with an API test bug?", "ts": "2026-08-30T00:00:00Z"}
-    observer.process_message(observed, config, "lobby", message, OWN, None)
+    first = {"seq": 7, "from": OTHER, "text": f"{OWN} can you help with an API test bug?", "ts": "2026-08-30T00:00:00Z"}
+    observer.process_message(observed, config, "lobby", first, OWN, None)
     observer.save_state(observed)
     resident.refresh()
     candidates = [item for item in resident.load_state()["candidates"].values() if item["category"] == "conversation"]
     assert len(candidates) == 1
-    candidate = candidates[0]
-    assert candidate["signals"]["conversation_topic"] == "technocore_api"
-    assert candidate["context"] == {"untrusted": True} and candidate["draft_reply"] == ""
+    first_candidate = candidates[0]
+    assert first_candidate["signals"]["conversation_topic"] == "technocore_api"
+    assert first_candidate["context"] == {"untrusted": True} and first_candidate["draft_reply"] == ""
+
     state = autopilot.default_state(); state.update({"enabled": True, "paused": False, "migrated_at": "already"}); autopilot.save(state)
+    autopilot.build_outbox()
+    assert autopilot.queue()["outbox"] == []
+    assert "sender_not_previously_approved" in autopilot.audit_path().read_text("utf-8")
+
+    resident.feedback(first_candidate["candidate_id"], "approved")
+    local = resident.load_state(); cooldown = resident.load_config()["candidate_cooldown_seconds"]
+    old = (datetime.now(UTC) - timedelta(seconds=cooldown + 1)).isoformat()
+    local["candidates"][first_candidate["candidate_id"]]["created_at"] = old
+    local["candidates"][first_candidate["candidate_id"]]["feedback_at"] = old
+    resident.save_state(local)
+
+    observed = observer.load_state()
+    second = {"seq": 8, "from": OTHER, "text": f"{OWN} follow-up: what should the next test step be?", "ts": "2026-08-30T01:00:00Z"}
+    observer.process_message(observed, config, "lobby", second, OWN, None)
+    observer.save_state(observed)
+    resident.refresh()
+
+    current = [item for item in resident.load_state()["candidates"].values() if item["category"] == "conversation" and item["status"] == "pending"]
+    assert len(current) == 1 and current[0]["candidate_id"] != first_candidate["candidate_id"]
+    assert autopilot.sender_trusted_for_autopilot(current[0]) is True
+
     autopilot.build_outbox(); queued = autopilot.queue()["outbox"]
-    assert len(queued) == 1 and autopilot.render(queued[0])
+    assert len(queued) == 1 and queued[0]["source_candidate_id"] == current[0]["candidate_id"]
+    assert autopilot.render(queued[0])
     resident.refresh(); autopilot.build_outbox()
     assert len(autopilot.queue()["outbox"]) == 1
