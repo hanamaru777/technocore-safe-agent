@@ -28,14 +28,21 @@ def test_public_trigger_rules_cannot_make_first_contact_autonomous():
     assert autopilot.sender_trusted_for_autopilot(current, state) is True
 
 
-def test_metadata_firewall_is_default_deny_for_non_signer_users():
+def test_metadata_firewall_is_default_deny_for_non_signer_users_on_imds_only():
     script = (ROOT / "packaging/oracle/block-technocore-metadata.sh").read_text("utf-8")
 
     assert "chain=TECHNOCORE_METADATA" in script
     assert 'iptables -A "$chain" -m owner --uid-owner 0 -j RETURN' in script
     assert 'iptables -A "$chain" -m owner --uid-owner "$signer_uid" -j RETURN' in script
     assert 'iptables -A "$chain" -j REJECT' in script
-    assert 'iptables -I OUTPUT 1 -d "$metadata" -j "$chain"' in script
+
+    # OCI shares 169.254.169.254 between IMDS HTTP (:80), DNS (:53), and NTP
+    # (:123). The OUTPUT jump must therefore be port-scoped to IMDS, not a broad
+    # destination-IP block that breaks name resolution for systemd-resolved.
+    assert 'iptables -I OUTPUT 1 -p tcp -d "$metadata" --dport 80 -j "$chain"' in script
+    assert 'while iptables -C OUTPUT -d "$metadata" -j "$chain"' in script
+    assert 'iptables -D OUTPUT -d "$metadata" -j "$chain"' in script
+    assert 'iptables -I OUTPUT 1 -d "$metadata" -j "$chain"' not in script
 
 
 def test_public_security_doc_states_residual_boundaries():
