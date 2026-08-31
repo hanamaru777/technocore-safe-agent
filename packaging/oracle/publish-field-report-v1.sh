@@ -35,6 +35,11 @@ runuser -u technocore -- env \
 # The queue is empty and cannot refill while paused, so the signer is idle-safe to stop.
 systemctl stop "$signer_service"
 
+# Create only the dedicated one-time public-evidence state directory. The parent state
+# directory is intentionally not group-writable.
+install -d -o technocore-signer -g technocore-signer -m 0700 "$state/contributions"
+install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer/uv-cache"
+
 # Load only the existing signer service environment; never print it.
 set -a
 # shellcheck disable=SC1090
@@ -44,6 +49,7 @@ set +a
 runuser -u technocore-signer -- env \
   FLOP_STATE_DIR="$state" \
   PYTHONPATH="$app/src" \
+  UV_CACHE_DIR="$state/signer/uv-cache" \
   TECHNOCORE_SIGNER_EXPECTED_DID="$TECHNOCORE_SIGNER_EXPECTED_DID" \
   OCI_VAULT_SECRET_OCID="$OCI_VAULT_SECRET_OCID" \
   PATH="/usr/local/bin:/usr/bin:/bin" \
