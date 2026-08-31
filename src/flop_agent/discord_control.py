@@ -18,6 +18,7 @@ MENTION_RE = re.compile(r"<@!?&?\d+>|@everyone|@here", re.I)
 DISPLAY_TZ = ZoneInfo(os.environ.get("DISCORD_DISPLAY_TIMEZONE", "Asia/Tokyo"))
 NORMAL_DIGEST_SECONDS = 6 * 60 * 60
 UI_STATE_FILE = "discord-ui-state.json"
+INTERACTION_HISTORY_LIMIT = 1000
 CATEGORY_LABELS = {
     "direct_inbound": "直接受信",
     "help_request": "具体的な支援依頼",
@@ -94,6 +95,7 @@ def default_ui_state() -> dict:
         "last_gap_count": None,
         "last_health_problem": None,
         "interactions": [],
+        "notified_interactions": [],
     }
 
 
@@ -138,6 +140,10 @@ def _find_message(observed: dict, fingerprint: str, room: object, seq: object) -
     return None
 
 
+def _is_controlled_test_intent(intent: dict) -> bool:
+    return intent.get("category") == "controlled_e2e" or intent.get("safety_decision") == "controlled_pause_only_e2e"
+
+
 def sync_interactions() -> list[dict]:
     """Persist a bounded, human-facing record of real inbound/outbound interactions."""
     ui = load_ui_state()
@@ -156,7 +162,8 @@ def sync_interactions() -> list[dict]:
         if identifier in records:
             continue
         message = _find_message(observed, str(item.get("fingerprint", "")), item.get("room"), item.get("seq"))
-        summary = message.get("text", "") if message else f"署名付き直接リクエスト topic={signals.get('conversation_topic', '不明')}"
+        context_text = item.get("context", {}).get("excerpt", "")
+        summary = (message or {}).get("text") or context_text or f"署名付き直接リクエスト topic={signals.get('conversation_topic', '不明')}"
         records[identifier] = {
             "id": identifier,
             "direction": "受信",
@@ -175,12 +182,13 @@ def sync_interactions() -> list[dict]:
         auto_state = {"outbox": {}, "receipts": {}}
     for intent_id, receipt in auto_state.get("receipts", {}).items():
         intent = auto_state.get("outbox", {}).get(intent_id)
-        if not isinstance(intent, dict):
+        if not isinstance(intent, dict) or _is_controlled_test_intent(intent):
             continue
         identifier = f"out:{intent_id}"
         if identifier in records:
             continue
         topic = intent.get("topic", "不明")
+        actual_text = intent.get("fixed_text") or f"{topic}について安全な固定テンプレートで返信"
         records[identifier] = {
             "id": identifier,
             "direction": "送信",
@@ -190,10 +198,10 @@ def sync_interactions() -> list[dict]:
             "room": intent.get("room"),
             "seq": intent.get("seq"),
             "kind": "自動返信",
-            "summary": f"{topic}について安全な固定テンプレートで返信",
+            "summary": safe_excerpt(actual_text, 240),
         }
 
-    ordered = sorted(records.values(), key=lambda item: _parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC))[-200:]
+    ordered = sorted(records.values(), key=lambda item: _parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC))[-INTERACTION_HISTORY_LIMIT:]
     if ordered != ui.get("interactions", []):
         ui["interactions"] = ordered
         save_ui_state(ui)
@@ -245,6 +253,16 @@ def candidate_message(item: dict) -> str:
         lines.append("判定: " + " / ".join(parts))
     lines.extend(["", f"次にやること: /candidate {item.get('candidate_id', '')}"])
     return "\n".join(lines)
+
+
+def outbound_interaction_message(item: dict) -> str:
+    return (
+        "🔵 FLOP Agent 自動返信完了\n\n"
+        f"時刻: {human_time(item.get('at'))}\n"
+        f"相手: {item.get('fingerprint') or 'unknown'} | {item.get('room', '?')} #{item.get('seq', '?')}\n"
+        f"内容: {safe_excerpt(item.get('summary', ''), 180)}\n\n"
+        f"履歴を見る: /history {item.get('fingerprint') or ''}"
+    ).rstrip()
 
 
 def _pending_counts(state: dict) -> tuple[int, int]:
@@ -402,12 +420,14 @@ class Control:
         resident.save_state(state); return notices
 
     def ensure_baseline(self) -> None:
-        sync_interactions()
+        interactions = sync_interactions()
         ui = load_ui_state()
         if ui.get("digest_baseline") is None:
             ui["digest_baseline"] = {**_observer_metrics(), "at": datetime.now(UTC).isoformat()}
         if ui.get("last_gap_count") is None:
             ui["last_gap_count"] = _observer_metrics()["message_gaps"]
+        if not ui.get("notified_interactions"):
+            ui["notified_interactions"] = [item["id"] for item in interactions if item.get("direction") == "送信"][-INTERACTION_HISTORY_LIMIT:]
         save_ui_state(ui)
 
     def system_notices(self) -> list[str]:
@@ -442,6 +462,22 @@ class Control:
         elif not problem and previous_problem:
             notices.append("🟢 FLOP Agent 復旧\n\n監視とAutopilotが正常状態へ戻りました。\n結論: 対応不要。そのまま稼働中。")
         ui["last_health_problem"] = problem
+        save_ui_state(ui)
+        return notices
+
+    def interaction_notices(self) -> list[str]:
+        interactions = sync_interactions()
+        ui = load_ui_state()
+        notified = set(ui.get("notified_interactions", []))
+        notices = []
+        for item in interactions:
+            identifier = item.get("id")
+            if not identifier or item.get("direction") != "送信" or identifier in notified:
+                continue
+            notified.add(identifier)
+            notices.append(outbound_interaction_message(item))
+        ordered_ids = [item.get("id") for item in interactions if item.get("id") in notified]
+        ui["notified_interactions"] = ordered_ids[-INTERACTION_HISTORY_LIMIT:]
         save_ui_state(ui)
         return notices
 
@@ -491,6 +527,8 @@ async def notification_worker(channel, control: Control, stop: asyncio.Event) ->
             await channel.send(notice, suppress_embeds=True)
         for item in await asyncio.to_thread(control.notifications):
             await channel.send(candidate_message(item), suppress_embeds=True)
+        for notice in await asyncio.to_thread(control.interaction_notices):
+            await channel.send(notice, suppress_embeds=True)
         try: await asyncio.wait_for(stop.wait(), timeout=15)
         except TimeoutError: pass
 
