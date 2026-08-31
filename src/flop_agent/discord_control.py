@@ -137,7 +137,7 @@ class Control:
         auto_label = "ON" if auto.get("enabled") and not auto.get("paused") else "停止/一時停止"
         conclusion = "今すぐ対応不要。24時間監視を継続中。" if healthy and not critical_pending and not direct_pending else "要確認項目あり。上の件数を確認してください。"
         return (
-            f"{icon} FLOP Agent 1時間レポート\n"
+            f"{icon} FLOP Agent 1時間レポート（Resident 定時報告）\n"
             f"稼働: {health} / Autopilot {auto_label} / queue {auto.get('queued', 0)}\n"
             f"監視: Agent {status['agents_known']} / ノイズ除外 {status['noise_ignored']} / 再会 {status['returning_agents']}\n"
             f"要対応: 緊急 {critical_pending} / 直接リクエスト {direct_pending} / 投稿記録 {auto.get('receipts', 0)}\n"
