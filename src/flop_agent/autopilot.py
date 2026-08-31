@@ -126,6 +126,26 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     return False, "category_not_allowlisted", None
 
 
+def sender_trusted_for_autopilot(candidate: dict, local_state: dict | None = None) -> bool:
+    """Require a prior explicit human approval before a DID may consume autopilot writes.
+
+    Public code and the public DID make first-contact trigger rules observable.  A
+    fresh DID must therefore remain review-only even when its signed message is
+    otherwise useful.  Approval of the *current* candidate does not count; only a
+    previous approved interaction establishes trust for a later candidate.
+    """
+    state = local_state or resident.load_state()
+    relationship = state.get("relationships", {}).get(candidate.get("fingerprint"), {})
+    history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []
+    current_id = candidate.get("candidate_id")
+    return any(
+        isinstance(item, dict)
+        and item.get("decision") == "approved"
+        and item.get("candidate_id") != current_id
+        for item in history
+    )
+
+
 def make_intent(candidate: dict, topic: str, reason: str) -> dict:
     intent_id = hashlib.sha256(f"{candidate['candidate_id']}|{topic}".encode()).hexdigest()[:20]
     return {"id": intent_id, "source_candidate_id": candidate["candidate_id"], "source_did": candidate["did"], "fingerprint": candidate["fingerprint"], "room": candidate["room"], "seq": candidate["seq"], "category": candidate["category"], "topic": topic, "public_evidence_ids": ["public-profile:1", f"candidate:{candidate['candidate_id']}"], "created_at": now(), "expires_at": candidate["expires_at"], "safety_decision": reason}
@@ -138,6 +158,8 @@ def build_outbox() -> dict:
     local = resident.load_state()
     for candidate in local["candidates"].values():
         allowed, reason, topic = eligible(candidate)
+        if allowed and not sender_trusted_for_autopilot(candidate, local):
+            allowed, reason, topic = False, "sender_not_previously_approved", None
         audit({"at": now(), "source_candidate": candidate.get("candidate_id"), "eligible": allowed, "why": reason, "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_created" if allowed else "ignored"})
         if not allowed or not topic: continue
         intent = make_intent(candidate, topic, reason)
