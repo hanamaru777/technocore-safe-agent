@@ -4,11 +4,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from datetime import UTC, datetime, timedelta
 
 from . import autopilot, observer, resident
 
 LOG = logging.getLogger(__name__)
+URL_RE = re.compile(r"https?://\S+", re.I)
+CATEGORY_LABELS = {
+    "direct_inbound": "直接受信",
+    "help_request": "具体的な支援依頼",
+    "specific_question": "具体的な質問",
+    "technical_collaboration": "技術コラボ候補",
+    "artifact_contribution": "Contribution候補",
+    "interesting_returning_agent": "再会した有用Agent",
+    "new_high_quality_agent": "新しい有用Agent",
+}
+PRIORITY_LABELS = {"critical": "緊急", "high": "高", "medium": "中", "low": "低"}
 
 
 def short(value: object, limit: int = 500) -> str:
@@ -16,12 +28,42 @@ def short(value: object, limit: int = 500) -> str:
     return str(value).replace("\n", " ")[:limit]
 
 
+def safe_excerpt(value: object, limit: int = 180) -> str:
+    """Make an untrusted excerpt readable without creating clickable URL previews."""
+    text = URL_RE.sub("[URL省略]", str(value)).replace("\n", " ")
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def percent(value: object) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    return f"{max(0, min(100, round(float(value) * 100)))}%"
+
+
 def candidate_message(item: dict) -> str:
     context = item.get("context", {})
-    return (f"候補 [{item['priority']}/{item['category']}] {item['candidate_id']}\n"
-            f"Agent: {item['fingerprint']} | room/seq: {item['room']}/{item['seq']}\n"
-            f"理由: {short(item['why'], 140)}\n"
-            f"抜粋（untrusted）: {short(context.get('excerpt', ''), 180)}")
+    signals = item.get("signals", {})
+    category = CATEGORY_LABELS.get(item.get("category"), item.get("category", "不明"))
+    priority = PRIORITY_LABELS.get(item.get("priority"), item.get("priority", "不明"))
+    excerpt = safe_excerpt(context.get("excerpt", ""), 180)
+    useful = percent(signals.get("useful_agent_probability"))
+    noise = percent(signals.get("spam_noise_probability"))
+    lines = [
+        "🚨 Technocore 対応候補",
+        f"種類: {category} / 優先度: {priority}",
+        f"相手: {item.get('fingerprint', 'unknown')} | {item.get('room', '?')} #{item.get('seq', '?')}",
+    ]
+    if excerpt:
+        lines.append(f"抜粋: {excerpt}")
+    if useful is not None or noise is not None:
+        parts = []
+        if useful is not None:
+            parts.append(f"有用度 {useful}")
+        if noise is not None:
+            parts.append(f"ノイズ {noise}")
+        lines.append("判定: " + " / ".join(parts))
+    lines.append(f"確認: /candidate {item.get('candidate_id', '')}")
+    return "\n".join(lines)
 
 
 class Control:
@@ -65,6 +107,7 @@ class Control:
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
 
     def notifications(self) -> list[dict]:
+        """Return only genuinely actionable notices, not every heuristic high candidate."""
         state = resident.load_state(); notices = []
         current = datetime.now(UTC)
         recent = [entry for entry in state.get("notification_times", []) if (observer.parse_time(entry.get("at")) or current) > current - timedelta(hours=1)]
@@ -72,15 +115,34 @@ class Control:
         capacity = max(0, 3 - len(recent))
         for item in state["candidates"].values():
             if capacity <= 0: break
-            if item["status"] != "pending" or item["priority"] not in {"high", "critical"} or item["candidate_id"] in state["notifications"]: continue
-            state["notifications"].append(item["candidate_id"]); state["notification_times"].append({"candidate_id": item["candidate_id"], "at": current.isoformat()}); notices.append(item); capacity -= 1
+            if item.get("status") != "pending" or item.get("candidate_id") in state["notifications"]: continue
+            signals = item.get("signals", {})
+            legacy_high = item.get("priority") == "high" and not signals
+            actionable = item.get("priority") == "critical" or signals.get("direct_public_signed") is True or legacy_high
+            if not actionable: continue
+            state["notifications"].append(item["candidate_id"])
+            state["notification_times"].append({"candidate_id": item["candidate_id"], "at": current.isoformat()})
+            notices.append(item); capacity -= 1
         resident.save_state(state); return notices
 
     def digest(self) -> str:
         status = resident.resident_status()
-        high_pending = sum(item["status"] == "pending" and item["priority"] in {"high", "critical"} for item in resident.load_state()["candidates"].values())
-        return (f"Resident 定時報告: agents {status['agents_known']}、noise除外 {status['noise_ignored']}、再会 {status['returning_agents']}、"
-                f"高優先候補 {high_pending}、受信 {status['inbound']}、gap {status['message_gaps']}、discovery待ち {status['discovery_queue']}。")
+        state = resident.load_state()
+        auto = autopilot.status()
+        critical_pending = sum(item.get("status") == "pending" and item.get("priority") == "critical" for item in state["candidates"].values())
+        direct_pending = sum(item.get("status") == "pending" and item.get("signals", {}).get("direct_public_signed") is True for item in state["candidates"].values())
+        health = status.get("health", {}).get("current", "unknown") if isinstance(status.get("health"), dict) else "unknown"
+        healthy = health == "ok" and not status.get("paused") and auto.get("enabled") and not auto.get("paused")
+        icon = "🟢" if healthy else "🟠"
+        auto_label = "ON" if auto.get("enabled") and not auto.get("paused") else "停止/一時停止"
+        conclusion = "今すぐ対応不要。24時間監視を継続中。" if healthy and not critical_pending and not direct_pending else "要確認項目あり。上の件数を確認してください。"
+        return (
+            f"{icon} FLOP Agent 1時間レポート（Resident 定時報告）\n"
+            f"稼働: {health} / Autopilot {auto_label} / queue {auto.get('queued', 0)}\n"
+            f"監視: Agent {status['agents_known']} / ノイズ除外 {status['noise_ignored']} / 再会 {status['returning_agents']}\n"
+            f"要対応: 緊急 {critical_pending} / 直接リクエスト {direct_pending} / 投稿記録 {auto.get('receipts', 0)}\n"
+            f"結論: {conclusion}"
+        )
 
 
 def validate_environment() -> tuple[str, str, set[str]]:
@@ -94,7 +156,8 @@ def validate_environment() -> tuple[str, str, set[str]]:
 
 async def notification_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
-        for item in await asyncio.to_thread(control.notifications): await channel.send(candidate_message(item))
+        for item in await asyncio.to_thread(control.notifications):
+            await channel.send(candidate_message(item), suppress_embeds=True)
         try: await asyncio.wait_for(stop.wait(), timeout=15)
         except TimeoutError: pass
 
@@ -102,7 +165,7 @@ async def notification_worker(channel, control: Control, stop: asyncio.Event) ->
 async def digest_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
         try: await asyncio.wait_for(stop.wait(), timeout=resident.load_config().get("discord_digest_interval_seconds", 3600))
-        except TimeoutError: await channel.send(await asyncio.to_thread(control.digest))
+        except TimeoutError: await channel.send(await asyncio.to_thread(control.digest), suppress_embeds=True)
 
 
 def main() -> None:
@@ -123,7 +186,7 @@ def main() -> None:
     async def on_message(message):
         if message.author.bot or str(message.channel.id) != channel_id: return
         result = await asyncio.to_thread(control.command, str(message.author.id), message.content, str(message.channel.id))
-        await message.channel.send(result["message"])
+        await message.channel.send(result["message"], suppress_embeds=True)
     bot.run(token)
 
 
