@@ -179,7 +179,7 @@ def test_discord_notification_digest_and_safe_human_response(monkeypatch, tmp_pa
     control = discord_control.Control({"42"}, "99")
     message = control.command("42", f"/candidate {item['candidate_id']}", "99")["message"]
     assert "候補" in message and "抜粋" in message and len(control.notifications()) == 1 and control.notifications() == []
-    assert "Resident 定時報告" in control.digest()
+    assert "6時間レポート" in control.digest()
 
 
 def test_resident_worker_refreshes_without_network_and_daemon_entrypoint(monkeypatch, tmp_path):
