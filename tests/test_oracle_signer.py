@@ -74,6 +74,23 @@ def test_ambiguous_prepared_receipt_read_failure_never_reposts(monkeypatch, tmp_
         oracle_signer.run_once()
 
 
+@pytest.mark.parametrize("failure", [
+    lambda: core.httpx.HTTPStatusError("503", request=core.httpx.Request("POST", "https://technocore.chat/r/lobby"), response=core.httpx.Response(503)),
+    lambda: core.httpx.ConnectError("offline"),
+    lambda: core.httpx.TimeoutException("timeout"),
+])
+def test_http_post_failure_becomes_persisted_ambiguous_receipt(monkeypatch, tmp_path, failure):
+    _, item = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "123")
+    monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: (_ for _ in ()).throw(failure()))
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: {"messages": []})
+    assert oracle_signer.run_cycle()["status"] == "degraded"
+    receipt = oracle_signer.load_receipts()["receipts"][item["id"]]
+    assert receipt["attempts"] == 1 and receipt["last_attempt_at"] and receipt["last_error_code"] == "submission_unknown"
+
+
 def test_oracle_signer_retries_unposted_prepared_intent_with_same_nonce(monkeypatch, tmp_path):
     _, item = setup(monkeypatch, tmp_path); text = autopilot.render(item)
     receipts = {"schema_version": 1, "receipts": {item["id"]: prepared_receipt(item, text)}}; oracle_signer.save_receipts(receipts)
@@ -145,6 +162,23 @@ def test_quarantine_ambiguous_controlled_e2e_preserves_receipt_and_allows_v2(mon
     assert oracle_signer.run_once()["processed"] == []
     autopilot.pause(True); second = autopilot.stage_e2e_v2()
     assert second["staged"] is True and second["intent_id"] != first["intent_id"]
+
+
+def test_quarantine_legacy_v2_preserves_forensics_and_allows_v3(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path); observer.atomic_json_write(observer.config_path(), observer.DEFAULT_CONFIG)
+    autopilot.enable(); first = autopilot.stage_e2e(); state = autopilot.load(); first_item = state["outbox"][first["intent_id"]]
+    first_receipt = prepared_receipt(first_item, autopilot.render(first_item)); first_receipt["last_error_code"] = "submission_unknown"
+    oracle_signer.save_receipts({"schema_version": 1, "receipts": {first["intent_id"]: first_receipt}}); oracle_signer.quarantine_controlled_e2e()
+    second = autopilot.stage_e2e_v2(); state = autopilot.load(); second_item = state["outbox"][second["intent_id"]]
+    second_receipt = prepared_receipt(second_item, autopilot.render(second_item)); second_receipt["attempts"] = 0; second_receipt["last_error_code"] = None
+    oracle_signer.save_receipts({"schema_version": 1, "receipts": {first["intent_id"]: first_receipt, second["intent_id"]: second_receipt}})
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("v2 quarantine must never post"))
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: pytest.fail("v2 quarantine must not reconcile"))
+    assert oracle_signer.quarantine_controlled_e2e("v2") == {"intent_id": second["intent_id"], "status": "quarantined"}
+    assert oracle_signer.load_receipts()["receipts"][second["intent_id"]] == second_receipt
+    assert second["intent_id"] not in {item["intent_id"] for item in autopilot.export_pending(allow_legacy=False)["intents"]}
+    third = autopilot.stage_e2e_v3()
+    assert third["staged"] is True and third["intent_id"] not in {first["intent_id"], second["intent_id"]}
 
 
 def test_oracle_signer_rejects_internal_injection_and_keeps_seed_ephemeral(monkeypatch, tmp_path):

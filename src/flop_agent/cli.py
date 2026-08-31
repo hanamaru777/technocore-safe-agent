@@ -12,7 +12,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan"):
         sub.add_parser(command)
-    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-quarantine-e2e"):
+    for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-stage-e2e-v3", "autopilot-quarantine-e2e", "autopilot-quarantine-e2e-v2"):
         sub.add_parser(command)
     compact = sub.add_parser("compact-observer-state"); compact.add_argument("--apply", action="store_true")
     agent = sub.add_parser("agent"); agent.add_argument("identifier")
@@ -78,7 +78,7 @@ def main() -> None:
         elif args.command == "intelligence":
             from . import observer
             output = observer.intelligence_report()
-        elif args.command in {"resident-status", "top-agents", "candidates", "candidate", "approve", "reject", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "publish-approved", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-quarantine-e2e", "autopilot-publish", "autopilot-export", "autopilot-ack", "autopilot-session-once", "autopilot-session-verify", "autopilot-session-publish"}:
+        elif args.command in {"resident-status", "top-agents", "candidates", "candidate", "approve", "reject", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "publish-approved", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-stage-e2e-v3", "autopilot-quarantine-e2e", "autopilot-quarantine-e2e-v2", "autopilot-publish", "autopilot-export", "autopilot-ack", "autopilot-session-once", "autopilot-session-verify", "autopilot-session-publish"}:
             from . import autopilot, autopilot_transport, observer, oracle_signer, resident
             if args.command == "resident-status": output = resident.resident_status()
             elif args.command == "top-agents": output = {"agents": resident.refresh() and observer.intelligence_report()["interesting_agents"]}
@@ -101,7 +101,9 @@ def main() -> None:
             elif args.command == "autopilot-resume": output = autopilot.pause(False)
             elif args.command == "autopilot-stage-e2e": output = autopilot.stage_e2e()
             elif args.command == "autopilot-stage-e2e-v2": output = autopilot.stage_e2e_v2()
+            elif args.command == "autopilot-stage-e2e-v3": output = autopilot.stage_e2e_v3()
             elif args.command == "autopilot-quarantine-e2e": output = oracle_signer.quarantine_controlled_e2e()
+            elif args.command == "autopilot-quarantine-e2e-v2": output = oracle_signer.quarantine_controlled_e2e("v2")
             elif args.command == "autopilot-publish": output = autopilot.publish(args.intent_id, args.confirm)
             elif args.command == "autopilot-export": output = autopilot.export_pending()
             elif args.command == "autopilot-ack": output = autopilot.acknowledge_export(json.load(sys.stdin))

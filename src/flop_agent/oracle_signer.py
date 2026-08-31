@@ -163,7 +163,7 @@ def submit_prepared(state: dict, receipts: dict, intent: dict, text: str, receip
         did = verify_did()
         if not hmac.compare_digest(did, receipt["did"]): raise RuntimeError("did_failure")
         with_vault_seed(lambda: core.post_signed(intent["room"], text, True, did=did, nonce=receipt["nonce"], action="oracle_isolated_signer_publish", record_permalink=False))
-    except RuntimeError as error:
+    except (RuntimeError, core.httpx.HTTPError) as error:
         try:
             if message_exists(receipt, intent, text): mark_acknowledged(state, receipts, intent, receipt); return "reconciled"
         except Exception:
@@ -216,21 +216,25 @@ def run_once() -> dict:
     return {"enabled": True, "paused": False, "processed": processed}
 
 
-def quarantine_controlled_e2e() -> dict:
-    """Terminally quarantine only the known ambiguous v1 controlled test intent."""
+def quarantine_controlled_e2e(version: str = "v1") -> dict:
+    """Terminally quarantine only a strictly identified controlled test intent."""
+    if version not in {"v1", "v2"}: raise ValueError("invalid controlled E2E version")
     state = autopilot.load(allow_legacy=False)
     if not state["enabled"] or not state["paused"]:
         raise RuntimeError("controlled E2E quarantine requires enabled autopilot paused=true")
-    intent_id = autopilot.controlled_e2e_id("v1")
+    if version == "v2" and state["outbox"].get(autopilot.controlled_e2e_id("v1"), {}).get("status") != "quarantined":
+        raise RuntimeError("controlled E2E v2 quarantine requires quarantined v1")
+    intent_id = autopilot.controlled_e2e_id(version)
     item = state["outbox"].get(intent_id)
     if not isinstance(item, dict) or item.get("status", "queued") != "queued" or item.get("category") != "controlled_e2e" or item.get("topic") != "prompt_injection_safety":
-        raise RuntimeError("controlled E2E v1 queued intent is required for quarantine")
+        raise RuntimeError(f"controlled E2E {version} queued intent is required for quarantine")
     receipt = load_receipts()["receipts"].get(intent_id)
-    if not isinstance(receipt, dict) or receipt.get("state") != "prepared" or receipt.get("last_error_code") != "submission_unknown":
-        raise RuntimeError("controlled E2E quarantine requires an ambiguous prepared receipt")
-    item["status"] = "quarantined"; item["quarantined_at"] = now(); item["quarantine_reason"] = "submission_unknown"
+    expected = (receipt.get("state") == "prepared" and receipt.get("last_error_code") == "submission_unknown") if isinstance(receipt, dict) and version == "v1" else (isinstance(receipt, dict) and receipt.get("state") == "prepared" and receipt.get("attempts") == 0 and receipt.get("last_error_code") is None)
+    if not expected: raise RuntimeError("controlled E2E quarantine requires the expected prepared receipt")
+    reason = "submission_unknown" if version == "v1" else "legacy_unhandled_http_ambiguity"
+    item["status"] = "quarantined"; item["quarantined_at"] = now(); item["quarantine_reason"] = reason
     autopilot.save(state, allow_legacy=False)
-    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": False, "why": "submission_unknown", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "controlled_e2e_quarantined"}, allow_legacy=False)
+    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": False, "why": reason, "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "controlled_e2e_quarantined"}, allow_legacy=False)
     return {"intent_id": intent_id, "status": "quarantined"}
 
 

@@ -158,7 +158,7 @@ def disable() -> dict:
 
 
 def controlled_e2e_id(version: str) -> str:
-    if version not in {"v1", "v2"}: raise ValueError("invalid controlled E2E version")
+    if version not in {"v1", "v2", "v3"}: raise ValueError("invalid controlled E2E version")
     return hashlib.sha256(f"controlled-e2e-{version}".encode()).hexdigest()[:20]
 
 
@@ -190,6 +190,14 @@ def stage_e2e_v2() -> dict:
     if not isinstance(prior, dict) or prior.get("status") != "quarantined":
         raise RuntimeError("controlled E2E v2 requires quarantined v1")
     return _stage_e2e("v2")
+
+
+def stage_e2e_v3() -> dict:
+    state = load()
+    prior = state["outbox"].get(controlled_e2e_id("v2"))
+    if not isinstance(prior, dict) or prior.get("status") != "quarantined":
+        raise RuntimeError("controlled E2E v3 requires quarantined v2")
+    return _stage_e2e("v3")
 
 
 def pause(value: bool) -> dict:
