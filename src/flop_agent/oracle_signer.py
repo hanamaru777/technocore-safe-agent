@@ -75,7 +75,7 @@ def record_upstream_success() -> dict:
     value = default_upstream(); value["last_success_at"] = now(); save_upstream(value); return value
 
 
-def record_upstream_failure(error: core.httpx.HTTPError) -> dict:
+def record_upstream_failure(error: Exception) -> dict:
     value = load_upstream(); failures = value["consecutive_failures"] + 1; delay = BACKOFF_SECONDS[min(failures - 1, len(BACKOFF_SECONDS) - 1)]
     value.update({"status": "degraded", "consecutive_failures": failures, "last_failure_at": now(), "next_probe_at": (datetime.now(UTC) + timedelta(seconds=delay)).isoformat(), "last_error_class": type(error).__name__, "http_status": getattr(getattr(error, "response", None), "status_code", None)})
     save_upstream(value); return value
@@ -171,6 +171,12 @@ def message_exists(receipt: dict, intent: dict, text: str) -> bool:
     return isinstance(messages, list) and any(isinstance(item, dict) and item.get("from") == receipt["did"] and str(item.get("nonce")) == receipt["nonce"] and item.get("text") == text for item in messages)
 
 
+def render_internal(item: dict) -> str:
+    """Render only the strict intent fields, never terminal bookkeeping."""
+    fields = {"id", "source_candidate_id", "source_did", "fingerprint", "room", "seq", "category", "topic", "public_evidence_ids", "created_at", "expires_at", "safety_decision"}
+    return autopilot.render({key: item[key] for key in fields if key in item})
+
+
 def mark_acknowledged(state: dict, receipts: dict, intent: dict, receipt: dict) -> None:
     receipt["state"] = "acknowledged"; receipt["posted_at"] = receipt.get("posted_at", now()); receipt["acknowledged_at"] = now(); save_receipts(receipts)
     item = state["outbox"].get(intent["intent_id"])
@@ -198,19 +204,30 @@ def reconcile_or_skip(state: dict, receipts: dict, intent: dict, text: str) -> s
     return None
 
 
+def terminalize_ambiguous(state: dict, receipts: dict, intent: dict, receipt: dict, error: Exception) -> None:
+    """Make an already-attempted post terminal before reporting degradation."""
+    receipt["attempts"] = int(receipt.get("attempts", 0)) + 1
+    receipt["last_attempt_at"] = now()
+    receipt["last_error_code"] = "submission_unknown"
+    save_receipts(receipts)
+    item = state["outbox"].get(intent["intent_id"])
+    if item is None:
+        raise RuntimeError("signer intent disappeared")
+    item["status"] = "ambiguous"
+    item["ambiguous_at"] = now()
+    item["ambiguity_reason"] = "submission_unknown"
+    autopilot.save(state, allow_legacy=False)
+    autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": False, "why": "submission_unknown", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "oracle_signer_ambiguous"}, allow_legacy=False)
+    record_upstream_failure(error)
+
+
 def submit_prepared(state: dict, receipts: dict, intent: dict, text: str, receipt: dict) -> str:
     try:
         did = verify_did()
         if not hmac.compare_digest(did, receipt["did"]): raise RuntimeError("did_failure")
         with_vault_seed(lambda: core.post_signed(intent["room"], text, True, did=did, nonce=receipt["nonce"], action="oracle_isolated_signer_publish", record_permalink=False))
-    except core.httpx.HTTPError as error:
-        receipt["attempts"] = int(receipt.get("attempts", 0)) + 1; receipt["last_attempt_at"] = now(); receipt["last_error_code"] = "submission_unknown"; save_receipts(receipts)
-        item = state["outbox"].get(intent["intent_id"])
-        if item is None: raise RuntimeError("signer intent disappeared")
-        item["status"] = "ambiguous"; item["ambiguous_at"] = now(); item["ambiguity_reason"] = "submission_unknown"
-        autopilot.save(state, allow_legacy=False)
-        autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": False, "why": "submission_unknown", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "oracle_signer_ambiguous"}, allow_legacy=False)
-        record_upstream_failure(error)
+    except (core.SubmissionAmbiguityError, core.httpx.HTTPError) as error:
+        terminalize_ambiguous(state, receipts, intent, receipt, error)
         raise RuntimeError("submission_unknown") from error
     except RuntimeError as error:
         try:
@@ -267,7 +284,8 @@ def run_once() -> dict:
     for intent in pending:
         if expire_queued_intent(state, intent): processed.append({"intent_id": intent["intent_id"], "action": "expired"})
         else: active.append(intent)
-    reconcile_ambiguous(state, receipts)
+    if reconcile_ambiguous(state, receipts) == "upstream_unavailable":
+        raise RuntimeError("upstream_unavailable")
     for intent in active:
         try:
             processed.append({"intent_id": intent["intent_id"], "action": process_intent(state, receipts, intent)})
@@ -278,17 +296,39 @@ def run_once() -> dict:
     return {"enabled": True, "paused": False, "processed": processed}
 
 
-def reconcile_ambiguous(state: dict, receipts: dict) -> None:
-    """Read-only reconciliation never infers absence and never submits a write."""
-    for intent_id, item in list(state["outbox"].items()):
-        if item.get("status") != "ambiguous": continue
-        receipt = receipts["receipts"].get(intent_id)
-        if not isinstance(receipt, dict) or receipt.get("last_error_code") != "submission_unknown": continue
-        try:
-            intent = autopilot.export_intent(item); text = autopilot.render(item)
-            if message_exists(receipt, intent, text): mark_acknowledged(state, receipts, intent, receipt)
-        except (RuntimeError, core.httpx.HTTPError):
-            continue
+def reconcile_ambiguous(state: dict, receipts: dict) -> str | None:
+    """Bounded, read-only reconciliation obeys the same upstream circuit."""
+    upstream = load_upstream()
+    due = observer.parse_time(upstream.get("next_probe_at"))
+    if upstream["status"] == "degraded" and due and due > datetime.now(UTC):
+        return None
+    candidates = [
+        (intent_id, item, receipts["receipts"].get(intent_id))
+        for intent_id, item in state["outbox"].items()
+        if item.get("status") == "ambiguous"
+        and isinstance(receipts["receipts"].get(intent_id), dict)
+        and receipts["receipts"][intent_id].get("last_error_code") == "submission_unknown"
+    ]
+    if not candidates:
+        return None
+    # One cache-busted room read per signer cycle prevents a large ambiguous
+    # backlog from becoming an outage request storm.
+    intent_id, item, receipt = candidates[0]
+    try:
+        intent = autopilot.export_intent(item)
+        text = render_internal(item)
+        exists = message_exists(receipt, intent, text)
+    except core.httpx.HTTPError as error:
+        record_upstream_failure(error)
+        return "upstream_unavailable"
+    except RuntimeError:
+        # Invalid local state is not an upstream probe result and must not
+        # alter circuit health or cause a network retry.
+        return None
+    record_upstream_success()
+    if exists:
+        mark_acknowledged(state, receipts, intent, receipt)
+    return None
 
 
 def signer_status() -> dict:

@@ -93,6 +93,33 @@ def test_http_post_failure_becomes_persisted_ambiguous_receipt(monkeypatch, tmp_
     assert autopilot.load(allow_legacy=False)["outbox"][item["id"]]["status"] == "ambiguous"
 
 
+@pytest.mark.parametrize("failure", [
+    core.SubmissionAmbiguityError("signed POST receipt is invalid"),
+    core.SubmissionAmbiguityError("signed POST receipt mismatches"),
+    core.SubmissionAmbiguityError("signed POST activity persistence failed"),
+])
+def test_post_success_confirmation_failures_become_terminal_ambiguities(monkeypatch, tmp_path, failure):
+    _, item = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "123")
+    monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: (_ for _ in ()).throw(failure))
+    assert oracle_signer.run_cycle()["status"] == "degraded"
+    receipt = oracle_signer.load_receipts()["receipts"][item["id"]]
+    assert receipt["attempts"] == 1 and receipt["last_error_code"] == "submission_unknown"
+    assert autopilot.load(allow_legacy=False)["outbox"][item["id"]]["status"] == "ambiguous"
+
+
+def test_prewrite_runtime_failure_is_not_terminal_ambiguity(monkeypatch, tmp_path):
+    _, item = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "123")
+    monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("did_failure")))
+    assert oracle_signer.run_cycle()["status"] == "degraded"
+    assert autopilot.load(allow_legacy=False)["outbox"][item["id"]].get("status", "queued") == "queued"
+
+
 def test_upstream_probe_opens_circuit_without_signing_or_posting(monkeypatch, tmp_path):
     _, item = setup(monkeypatch, tmp_path)
     error = core.httpx.HTTPStatusError("503", request=core.httpx.Request("GET", "https://technocore.chat/r/lobby"), response=core.httpx.Response(503))
@@ -114,6 +141,35 @@ def test_upstream_backoff_caps_and_successful_probe_closes_circuit(monkeypatch, 
     monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: {"messages": []})
     oracle_signer.probe_upstream("lobby")
     assert oracle_signer.load_upstream()["status"] == "healthy"
+
+
+def test_ambiguous_reconciliation_obeys_backoff_and_is_bounded(monkeypatch, tmp_path):
+    state, first = setup(monkeypatch, tmp_path); text = autopilot.render(first)
+    second = dict(first); second["id"] = "b" * 20; second["source_candidate_id"] = "candidate-2"
+    for item in (first, second): item["status"] = "ambiguous"
+    state["outbox"][second["id"]] = second; autopilot.save(state)
+    receipts = {"schema_version": 1, "receipts": {}}
+    for item in (first, second):
+        receipt = prepared_receipt(item, text); receipt["last_error_code"] = "submission_unknown"; receipts["receipts"][item["id"]] = receipt
+    oracle_signer.save_receipts(receipts)
+    upstream = oracle_signer.default_upstream(); upstream.update({"status": "degraded", "next_probe_at": (datetime.now(UTC) + timedelta(seconds=60)).isoformat()}); oracle_signer.save_upstream(upstream)
+    calls = []
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: calls.append(kwargs) or pytest.fail("backoff must suppress reconciliation"))
+    assert oracle_signer.reconcile_ambiguous(state, receipts) is None and calls == []
+    upstream["next_probe_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat(); oracle_signer.save_upstream(upstream)
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: calls.append(kwargs) or {"messages": []})
+    assert oracle_signer.reconcile_ambiguous(state, receipts) is None
+    assert len(calls) == 1 and oracle_signer.load_upstream()["status"] == "healthy"
+
+
+def test_failed_due_ambiguous_reconciliation_advances_backoff(monkeypatch, tmp_path):
+    state, item = setup(monkeypatch, tmp_path); text = autopilot.render(item); item["status"] = "ambiguous"; autopilot.save(state)
+    receipt = prepared_receipt(item, text); receipt["last_error_code"] = "submission_unknown"; receipts = {"schema_version": 1, "receipts": {item["id"]: receipt}}; oracle_signer.save_receipts(receipts)
+    upstream = oracle_signer.default_upstream(); upstream.update({"status": "degraded", "next_probe_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()}); oracle_signer.save_upstream(upstream)
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: (_ for _ in ()).throw(core.httpx.ConnectError("offline")))
+    assert oracle_signer.reconcile_ambiguous(state, receipts) == "upstream_unavailable"
+    result = oracle_signer.load_upstream()
+    assert result["status"] == "degraded" and result["consecutive_failures"] == 1 and observer.parse_time(result["next_probe_at"]) > datetime.now(UTC)
 
 
 def test_ambiguous_reconciliation_is_read_only_and_does_not_block_valid_queue(monkeypatch, tmp_path):

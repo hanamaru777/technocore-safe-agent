@@ -96,9 +96,40 @@ def test_signed_post_rejects_missing_or_mismatched_receipt(monkeypatch, tmp_path
         def raise_for_status(self): pass
         def json(self): return {"posted": {"from": "did:key:z6MkA", "nonce": "1", "text": "different", "sig": "x" * 86, "seq": 8, "ts": "2026-08-26T00:00:00Z"}}
     monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: Response())
-    with pytest.raises(RuntimeError, match="POST receipt"):
+    with pytest.raises(core.SubmissionAmbiguityError, match="POST receipt"):
         core.post_signed("lobby", "useful", True, did="did:key:z6MkA")
     assert not (tmp_path / "activities.jsonl").exists()
+
+
+def test_signed_post_post_success_failures_are_submission_ambiguities(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "1")
+    monkeypatch.setattr(core, "invoke_signer", lambda *_: ["did:key:z6MkA", "x" * 86])
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): raise ValueError("not json")
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: Response())
+    with pytest.raises(core.SubmissionAmbiguityError):
+        core.post_signed("lobby", "useful", True, did="did:key:z6MkA")
+    class ValidResponse:
+        def raise_for_status(self): pass
+        def json(self): return {"posted": {"from": "did:key:z6MkA", "nonce": "1", "text": "useful", "sig": "x" * 86, "seq": 8, "ts": "2026-08-26T00:00:00Z"}}
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: ValidResponse())
+    monkeypatch.setattr(core, "append_activity", lambda *_: (_ for _ in ()).throw(OSError("disk failed")))
+    with pytest.raises(core.SubmissionAmbiguityError, match="activity persistence"):
+        core.post_signed("lobby", "useful", True, did="did:key:z6MkA")
+
+
+def test_signed_post_prewrite_failure_is_not_submission_ambiguity(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "1")
+    monkeypatch.setattr(core, "invoke_signer", lambda *_: ["did:key:z6MkA", "x" * 86])
+    monkeypatch.setattr(core, "commit_activity_fields", lambda *_: (_ for _ in ()).throw(RuntimeError("git unavailable")))
+    called = []
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: called.append(True))
+    with pytest.raises(RuntimeError, match="git unavailable") as error:
+        core.post_signed("lobby", "useful", True, did="did:key:z6MkA")
+    assert not isinstance(error.value, core.SubmissionAmbiguityError) and called == []
 
 
 def test_untrusted_room_text_is_only_returned_data(monkeypatch):

@@ -28,6 +28,10 @@ CONTRIBUTION_NOTICE = "Community convention only; not a FLOP official airdrop re
 SECRET_PATTERN = re.compile(r"(?i)(?:\b[0-9a-f]{64}\b|SIGN_SEED\s*=\s*[^\s'\"]+|(?:api[_-]?key|secret|private[_-]?key)\s*[:=]\s*[^\s'\"]+)")
 
 
+class SubmissionAmbiguityError(RuntimeError):
+    """A signed HTTP POST may have been accepted but cannot be confirmed locally."""
+
+
 def clean_text(text: str, limit: int = 4096) -> str:
     cleaned = "".join(" " if unicodedata.category(char) in INVISIBLE_CATEGORIES else char for char in text).strip()
     if not cleaned or len(cleaned) > limit:
@@ -264,25 +268,30 @@ def post_signed(room: str, text: str, confirm: bool, *, did: str | None = None, 
     # an isolated signer must not discover a Git safe-directory failure after
     # Technocore has accepted the post.
     activity_metadata = {**commit_activity_fields(commit_context), "executed_at": datetime.now(UTC).isoformat(), "official_commit": UPSTREAM_COMMIT, **observed_activity_fields(observed)}
+    # Keep transport errors distinct: the isolated signer records those as an
+    # ambiguous submission too, but retains their HTTP classification for the
+    # upstream circuit.  Everything after a successful HTTP POST is a local
+    # confirmation/persistence failure and is therefore an ambiguity as well.
     response = httpx.post(f"{BASE_URL}/r/{quote(room, safe='')}?format=json", json=body, timeout=20)
     response.raise_for_status()
     try:
         payload = response.json()
-    except (ValueError, json.JSONDecodeError) as error:
-        raise RuntimeError("POST receipt を検証できないため、活動記録は追加しませんでした") from error
+    except Exception as error:
+        raise SubmissionAmbiguityError("signed POST receipt is invalid") from error
     matched = payload.get("posted") if isinstance(payload, dict) else None
     if not isinstance(matched, dict) or not isinstance(matched.get("seq"), int) or matched["seq"] < 0 or not isinstance(matched.get("ts"), str) or not isinstance(matched.get("sig"), str):
-        raise RuntimeError("POST receipt を検証できないため、活動記録は追加しませんでした")
+        raise SubmissionAmbiguityError("signed POST receipt is invalid")
     try:
         datetime.fromisoformat(matched["ts"].replace("Z", "+00:00"))
     except ValueError as error:
-        raise RuntimeError("POST receipt を検証できないため、活動記録は追加しませんでした") from error
+        raise SubmissionAmbiguityError("signed POST receipt is invalid") from error
     if matched.get("from") != did or str(matched.get("nonce")) != nonce or matched.get("text") != cleaned or matched["sig"] != signed[1]:
-        raise RuntimeError("POST receipt が署名済み投稿と一致しないため、活動記録は追加しませんでした")
+        raise SubmissionAmbiguityError("signed POST receipt mismatches")
     activity = {"action": action, "did": did, "room": room, "seq": matched["seq"], "ts": matched["ts"], "nonce": nonce, "text": cleaned, **activity_metadata}
     if record_permalink:
         activity["permalink"] = human_permalink(room, matched["seq"])
-    return append_activity(activity)
+    try: return append_activity(activity)
+    except Exception as error: raise SubmissionAmbiguityError("signed POST activity persistence failed") from error
 
 
 def read_note(namespace: str, key: str) -> str:
