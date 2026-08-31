@@ -2,15 +2,22 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from . import autopilot, observer, resident
 
 LOG = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://\S+", re.I)
+MENTION_RE = re.compile(r"<@!?&?\d+>|@everyone|@here", re.I)
+DISPLAY_TZ = ZoneInfo(os.environ.get("DISCORD_DISPLAY_TIMEZONE", "Asia/Tokyo"))
+NORMAL_DIGEST_SECONDS = 6 * 60 * 60
+UI_STATE_FILE = "discord-ui-state.json"
 CATEGORY_LABELS = {
     "direct_inbound": "直接受信",
     "help_request": "具体的な支援依頼",
@@ -19,6 +26,7 @@ CATEGORY_LABELS = {
     "artifact_contribution": "Contribution候補",
     "interesting_returning_agent": "再会した有用Agent",
     "new_high_quality_agent": "新しい有用Agent",
+    "conversation": "署名付き直接リクエスト",
 }
 PRIORITY_LABELS = {"critical": "緊急", "high": "高", "medium": "中", "low": "低"}
 
@@ -29,32 +37,205 @@ def short(value: object, limit: int = 500) -> str:
 
 
 def safe_excerpt(value: object, limit: int = 180) -> str:
-    """Make an untrusted excerpt readable without creating clickable URL previews."""
-    text = URL_RE.sub("[URL省略]", str(value)).replace("\n", " ")
+    """Render untrusted text for a human without clickable URLs or Discord mentions."""
+    text = URL_RE.sub("[URL省略]", str(value))
+    text = MENTION_RE.sub("[mention省略]", text).replace("@", "＠").replace("\n", " ")
     return re.sub(r"\s+", " ", text).strip()[:limit]
 
 
-def percent(value: object) -> str | None:
+def _parse_time(value: object) -> datetime | None:
+    return observer.parse_time(value) if isinstance(value, str) else None
+
+
+def human_time(value: object) -> str:
+    stamp = _parse_time(value)
+    if not stamp:
+        return "時刻不明"
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    local = stamp.astimezone(DISPLAY_TZ)
+    return f"{local:%m/%d %H:%M} {local.tzname() or ''}".strip()
+
+
+def human_age(value: object, current: datetime | None = None) -> str:
+    stamp = _parse_time(value)
+    if not stamp:
+        return "不明"
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    current = current or datetime.now(UTC)
+    seconds = max(0, int((current - stamp.astimezone(UTC)).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}秒前"
+    if seconds < 3600:
+        return f"{seconds // 60}分前"
+    if seconds < 86400:
+        return f"{seconds // 3600}時間前"
+    return f"{seconds // 86400}日前"
+
+
+def signal_label(value: object, *, noise: bool = False) -> str | None:
     if not isinstance(value, (int, float)):
         return None
-    return f"{max(0, min(100, round(float(value) * 100)))}%"
+    score = max(0.0, min(1.0, float(value)))
+    if noise:
+        return "低" if score <= 0.20 else "中" if score <= 0.50 else "高"
+    return "高" if score >= 0.67 else "中" if score >= 0.34 else "低"
+
+
+def ui_state_path() -> Path:
+    return resident.resident_dir() / UI_STATE_FILE
+
+
+def default_ui_state() -> dict:
+    return {
+        "schema_version": 1,
+        "digest_baseline": None,
+        "last_gap_count": None,
+        "last_health_problem": None,
+        "interactions": [],
+    }
+
+
+def load_ui_state() -> dict:
+    path = ui_state_path()
+    if not path.exists():
+        return default_ui_state()
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        LOG.warning("Discord UI state was unreadable; rebuilding presentation-only state")
+        return default_ui_state()
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        return default_ui_state()
+    for key, value in default_ui_state().items():
+        data.setdefault(key, value)
+    return data
+
+
+def save_ui_state(state: dict) -> None:
+    observer.atomic_json_write(ui_state_path(), state, compact=True)
+
+
+def _observer_metrics() -> dict:
+    try:
+        state = observer.load_state()
+    except RuntimeError:
+        return {"unique_dids_discovered": 0, "returning_did_encounters": 0, "message_gaps": 0}
+    metrics = state.get("metrics", {})
+    return {
+        "unique_dids_discovered": int(metrics.get("unique_dids_discovered", 0)),
+        "returning_did_encounters": int(metrics.get("returning_did_encounters", 0)),
+        "message_gaps": int(metrics.get("message_gaps", 0)),
+    }
+
+
+def _find_message(observed: dict, fingerprint: str, room: object, seq: object) -> dict | None:
+    agent = observed.get("agents", {}).get(fingerprint, {}) if isinstance(observed, dict) else {}
+    for message in agent.get("facts", {}).get("recent_messages", []):
+        if message.get("room") == room and message.get("seq") == seq:
+            return message
+    return None
+
+
+def sync_interactions() -> list[dict]:
+    """Persist a bounded, human-facing record of real inbound/outbound interactions."""
+    ui = load_ui_state()
+    records = {item.get("id"): item for item in ui.get("interactions", []) if isinstance(item, dict) and item.get("id")}
+    try:
+        local = resident.load_state()
+        observed = observer.load_state()
+    except RuntimeError:
+        local, observed = {"candidates": {}}, {"agents": {}}
+
+    for item in local.get("candidates", {}).values():
+        signals = item.get("signals", {})
+        if signals.get("direct_public_signed") is not True:
+            continue
+        identifier = f"in:{item.get('candidate_id', '')}"
+        if identifier in records:
+            continue
+        message = _find_message(observed, str(item.get("fingerprint", "")), item.get("room"), item.get("seq"))
+        summary = message.get("text", "") if message else f"署名付き直接リクエスト topic={signals.get('conversation_topic', '不明')}"
+        records[identifier] = {
+            "id": identifier,
+            "direction": "受信",
+            "at": (message or {}).get("ts") or item.get("created_at"),
+            "fingerprint": item.get("fingerprint"),
+            "did": item.get("did"),
+            "room": item.get("room"),
+            "seq": item.get("seq"),
+            "kind": CATEGORY_LABELS.get(item.get("category"), "署名付き直接リクエスト"),
+            "summary": safe_excerpt(summary, 240),
+        }
+
+    try:
+        auto_state = autopilot.load()
+    except RuntimeError:
+        auto_state = {"outbox": {}, "receipts": {}}
+    for intent_id, receipt in auto_state.get("receipts", {}).items():
+        intent = auto_state.get("outbox", {}).get(intent_id)
+        if not isinstance(intent, dict):
+            continue
+        identifier = f"out:{intent_id}"
+        if identifier in records:
+            continue
+        topic = intent.get("topic", "不明")
+        records[identifier] = {
+            "id": identifier,
+            "direction": "送信",
+            "at": receipt.get("at"),
+            "fingerprint": intent.get("fingerprint"),
+            "did": intent.get("source_did"),
+            "room": intent.get("room"),
+            "seq": intent.get("seq"),
+            "kind": "自動返信",
+            "summary": f"{topic}について安全な固定テンプレートで返信",
+        }
+
+    ordered = sorted(records.values(), key=lambda item: _parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC))[-200:]
+    if ordered != ui.get("interactions", []):
+        ui["interactions"] = ordered
+        save_ui_state(ui)
+    return ordered
+
+
+def candidate_excerpt(item: dict) -> str:
+    context = item.get("context", {})
+    if context.get("excerpt"):
+        return safe_excerpt(context.get("excerpt"), 180)
+    try:
+        observed = observer.load_state()
+    except RuntimeError:
+        return ""
+    message = _find_message(observed, str(item.get("fingerprint", "")), item.get("room"), item.get("seq"))
+    return safe_excerpt((message or {}).get("text", ""), 180)
+
+
+def candidate_reason(item: dict) -> str:
+    signals = item.get("signals", {})
+    if signals.get("direct_public_signed") is True:
+        return "あなたのDID宛の署名付きリクエストを検出"
+    if item.get("priority") == "critical":
+        return "緊急度の高い受信を検出"
+    return f"{CATEGORY_LABELS.get(item.get('category'), '対応候補')}として検出"
 
 
 def candidate_message(item: dict) -> str:
-    context = item.get("context", {})
     signals = item.get("signals", {})
-    category = CATEGORY_LABELS.get(item.get("category"), item.get("category", "不明"))
-    priority = PRIORITY_LABELS.get(item.get("priority"), item.get("priority", "不明"))
-    excerpt = safe_excerpt(context.get("excerpt", ""), 180)
-    useful = percent(signals.get("useful_agent_probability"))
-    noise = percent(signals.get("spam_noise_probability"))
+    useful = signal_label(signals.get("useful_agent_probability"))
+    noise = signal_label(signals.get("spam_noise_probability"), noise=True)
+    icon = "🔴" if item.get("priority") == "critical" else "🟡"
     lines = [
-        "🚨 Technocore 対応候補",
-        f"種類: {category} / 優先度: {priority}",
+        f"{icon} FLOP Agent 確認あり",
+        "",
+        f"理由: {candidate_reason(item)}",
+        f"時刻: {human_time(item.get('created_at'))}",
         f"相手: {item.get('fingerprint', 'unknown')} | {item.get('room', '?')} #{item.get('seq', '?')}",
     ]
+    excerpt = candidate_excerpt(item)
     if excerpt:
-        lines.append(f"抜粋: {excerpt}")
+        lines.append(f"要点: {excerpt}")
     if useful is not None or noise is not None:
         parts = []
         if useful is not None:
@@ -62,7 +243,99 @@ def candidate_message(item: dict) -> str:
         if noise is not None:
             parts.append(f"ノイズ {noise}")
         lines.append("判定: " + " / ".join(parts))
-    lines.append(f"確認: /candidate {item.get('candidate_id', '')}")
+    lines.extend(["", f"次にやること: /candidate {item.get('candidate_id', '')}"])
+    return "\n".join(lines)
+
+
+def _pending_counts(state: dict) -> tuple[int, int]:
+    critical = sum(item.get("status") == "pending" and item.get("priority") == "critical" for item in state.get("candidates", {}).values())
+    direct = sum(item.get("status") == "pending" and item.get("signals", {}).get("direct_public_signed") is True for item in state.get("candidates", {}).values())
+    return critical, direct
+
+
+def _latest_post_at(auto_state: dict) -> str | None:
+    values = [item.get("at") for item in auto_state.get("rate_history", []) if _parse_time(item.get("at"))]
+    return max(values, key=lambda value: _parse_time(value) or datetime.min.replace(tzinfo=UTC), default=None)
+
+
+def _health_snapshot() -> dict:
+    status = resident.resident_status()
+    try:
+        auto_state = autopilot.load()
+        auto = autopilot.status(auto_state)
+    except RuntimeError:
+        auto_state, auto = {"rate_history": []}, {"enabled": False, "paused": True, "queued": 0, "receipts": 0}
+    health = status.get("health", {}).get("current", "unknown") if isinstance(status.get("health"), dict) else "unknown"
+    last_refresh = status.get("last_refresh_at")
+    age = human_age(last_refresh)
+    stamp = _parse_time(last_refresh)
+    stale = not stamp or (datetime.now(UTC) - stamp.astimezone(UTC)).total_seconds() > 180
+    critical, direct = _pending_counts(resident.load_state())
+    problems = []
+    if health != "ok":
+        problems.append(f"監視状態 {health}")
+    if not auto.get("enabled"):
+        problems.append("Autopilot OFF")
+    elif auto.get("paused"):
+        problems.append("Autopilot 一時停止")
+    if stale:
+        problems.append(f"最終監視 {age}")
+    return {
+        "resident": status,
+        "auto_state": auto_state,
+        "auto": auto,
+        "health": health,
+        "last_refresh": last_refresh,
+        "last_refresh_age": age,
+        "critical": critical,
+        "direct": direct,
+        "problems": problems,
+    }
+
+
+def status_message() -> str:
+    snapshot = _health_snapshot()
+    interactions = sync_interactions()
+    latest_interaction = interactions[-1] if interactions else None
+    needs_attention = bool(snapshot["problems"] or snapshot["critical"] or snapshot["direct"] or snapshot["auto"].get("queued", 0))
+    icon = "🔴" if snapshot["problems"] else "🟡" if needs_attention else "🟢"
+    title = "異常" if snapshot["problems"] else "確認あり" if needs_attention else "正常"
+    auto_label = "ON" if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") else "停止/一時停止"
+    lines = [
+        f"{icon} FLOP Agent {title}",
+        f"Autopilot: {auto_label} / queue {snapshot['auto'].get('queued', 0)}",
+        f"要対応: 緊急 {snapshot['critical']} / 直接リクエスト {snapshot['direct']}",
+        f"最終監視: {snapshot['last_refresh_age']}",
+        f"最終投稿: {human_age(_latest_post_at(snapshot['auto_state'])) if _latest_post_at(snapshot['auto_state']) else 'なし'}",
+    ]
+    if latest_interaction:
+        lines.append(f"最終やりとり: {human_age(latest_interaction.get('at'))} / {latest_interaction.get('fingerprint', 'unknown')} / {latest_interaction.get('direction')}")
+    if snapshot["problems"]:
+        lines.append("異常: " + " / ".join(snapshot["problems"]))
+        lines.append("結論: 対応が必要です。詳細は /status を再確認してください。")
+    elif needs_attention:
+        lines.append("結論: 確認事項があります。直接リクエストまたはqueueを確認してください。")
+    else:
+        lines.append("結論: 対応不要。そのまま稼働中。")
+    return "\n".join(lines)
+
+
+def history_message(filter_value: str | None = None, limit: int = 5) -> str:
+    records = sync_interactions()
+    if filter_value:
+        token = filter_value.lower()
+        records = [item for item in records if token in str(item.get("fingerprint", "")).lower() or token in str(item.get("did", "")).lower()]
+    records = records[-limit:]
+    if not records:
+        return "🧾 最近のやりとり\nまだ直接のやりとり記録はありません。"
+    lines = ["🧾 最近のやりとり"]
+    for item in records:
+        lines.extend([
+            "",
+            f"{human_time(item.get('at'))} | {item.get('direction')} | {item.get('fingerprint', 'unknown')}",
+            f"{item.get('room', '?')} #{item.get('seq', '?')} | {item.get('kind', 'やりとり')}",
+            f"内容: {safe_excerpt(item.get('summary', ''), 180)}",
+        ])
     return "\n".join(lines)
 
 
@@ -77,6 +350,8 @@ class Control:
         parts = text.strip().split()
         if not parts: return {"ok": False, "error": "empty", "message": "Use /help for local control commands."}
         action, args = parts[0], parts[1:]
+        if action == "/status": return {"ok": True, "data": {}, "message": status_message()}
+        if action == "/history" and len(args) <= 1: return {"ok": True, "data": {}, "message": history_message(args[0] if args else None)}
         if action == "/resident-status":
             data = resident.resident_status(); return {"ok": True, "data": data, "message": f"状態: agents={data['agents_known']} pending={data['useful_candidates']} gaps={data['message_gaps']}"}
         if action == "/intel":
@@ -103,7 +378,8 @@ class Control:
             data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
         if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
         if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot outbox generation resumed locally; Discord cannot publish."}
-        if action == "/help": return {"ok": True, "data": {}, "message": "Commands: /resident-status /intel /opportunities /agents /agent <id> /candidate <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-pause /autopilot-resume"}
+        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /status /history [相手ID] /candidate <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
+        if action == "/help-debug": return {"ok": True, "data": {}, "message": "Debug: /resident-status /intel /opportunities /agents /agent <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
 
     def notifications(self) -> list[dict]:
@@ -125,22 +401,77 @@ class Control:
             notices.append(item); capacity -= 1
         resident.save_state(state); return notices
 
+    def ensure_baseline(self) -> None:
+        sync_interactions()
+        ui = load_ui_state()
+        if ui.get("digest_baseline") is None:
+            ui["digest_baseline"] = {**_observer_metrics(), "at": datetime.now(UTC).isoformat()}
+        if ui.get("last_gap_count") is None:
+            ui["last_gap_count"] = _observer_metrics()["message_gaps"]
+        save_ui_state(ui)
+
+    def system_notices(self) -> list[str]:
+        sync_interactions()
+        snapshot = _health_snapshot()
+        metrics = _observer_metrics()
+        ui = load_ui_state(); notices = []
+        current_gap = metrics["message_gaps"]
+        previous_gap = ui.get("last_gap_count")
+        if previous_gap is None:
+            ui["last_gap_count"] = current_gap
+        elif current_gap > previous_gap:
+            notices.append(
+                "🟡 FLOP Agent 通信欠落を検出\n\n"
+                f"新しいgap: +{current_gap - previous_gap}\n"
+                f"最終監視: {snapshot['last_refresh_age']}\n\n"
+                "次にやること: /status"
+            )
+            ui["last_gap_count"] = current_gap
+        elif current_gap < previous_gap:
+            ui["last_gap_count"] = current_gap
+
+        problem = " / ".join(snapshot["problems"]) if snapshot["problems"] else None
+        previous_problem = ui.get("last_health_problem")
+        if problem and problem != previous_problem:
+            notices.append(
+                "🔴 FLOP Agent 異常\n\n"
+                f"{problem}\n"
+                f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n"
+                "次にやること: /status"
+            )
+        elif not problem and previous_problem:
+            notices.append("🟢 FLOP Agent 復旧\n\n監視とAutopilotが正常状態へ戻りました。\n結論: 対応不要。そのまま稼働中。")
+        ui["last_health_problem"] = problem
+        save_ui_state(ui)
+        return notices
+
     def digest(self) -> str:
-        status = resident.resident_status()
-        state = resident.load_state()
-        auto = autopilot.status()
-        critical_pending = sum(item.get("status") == "pending" and item.get("priority") == "critical" for item in state["candidates"].values())
-        direct_pending = sum(item.get("status") == "pending" and item.get("signals", {}).get("direct_public_signed") is True for item in state["candidates"].values())
-        health = status.get("health", {}).get("current", "unknown") if isinstance(status.get("health"), dict) else "unknown"
-        healthy = health == "ok" and not status.get("paused") and auto.get("enabled") and not auto.get("paused")
-        icon = "🟢" if healthy else "🟠"
-        auto_label = "ON" if auto.get("enabled") and not auto.get("paused") else "停止/一時停止"
-        conclusion = "今すぐ対応不要。24時間監視を継続中。" if healthy and not critical_pending and not direct_pending else "要確認項目あり。上の件数を確認してください。"
+        sync_interactions()
+        snapshot = _health_snapshot()
+        current_metrics = _observer_metrics()
+        ui = load_ui_state()
+        baseline = ui.get("digest_baseline") or {**current_metrics, "at": datetime.now(UTC).isoformat()}
+        new_agents = max(0, current_metrics["unique_dids_discovered"] - int(baseline.get("unique_dids_discovered", 0)))
+        returning = max(0, current_metrics["returning_did_encounters"] - int(baseline.get("returning_did_encounters", 0)))
+        new_gaps = max(0, current_metrics["message_gaps"] - int(baseline.get("message_gaps", 0)))
+        cutoff = datetime.now(UTC) - timedelta(seconds=NORMAL_DIGEST_SECONDS)
+        auto_posts = sum((_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff for item in snapshot["auto_state"].get("rate_history", []))
+        interactions = load_ui_state().get("interactions", [])
+        direct_received = sum(item.get("direction") == "受信" and (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff for item in interactions)
+        ui["digest_baseline"] = {**current_metrics, "at": datetime.now(UTC).isoformat()}; save_ui_state(ui)
+        attention = snapshot["critical"] + snapshot["direct"]
+        if snapshot["problems"]:
+            icon, title, conclusion = "🔴", "異常", "対応が必要です。/status を確認してください。"
+        elif attention or new_gaps:
+            icon, title, conclusion = "🟡", "確認あり", "確認事項があります。/status を確認してください。"
+        else:
+            icon, title, conclusion = "🟢", "正常", "対応不要。そのまま稼働中。"
         return (
-            f"{icon} FLOP Agent 1時間レポート（Resident 定時報告）\n"
-            f"稼働: {health} / Autopilot {auto_label} / queue {auto.get('queued', 0)}\n"
-            f"監視: Agent {status['agents_known']} / ノイズ除外 {status['noise_ignored']} / 再会 {status['returning_agents']}\n"
-            f"要対応: 緊急 {critical_pending} / 直接リクエスト {direct_pending} / 投稿記録 {auto.get('receipts', 0)}\n"
+            f"{icon} FLOP Agent 6時間レポート（{title}）\n"
+            f"直近6時間: 新規Agent +{new_agents} / 再会 +{returning}\n"
+            f"活動: 自動投稿 {auto_posts} / 直接受信 {direct_received}\n"
+            f"要対応: {attention} / 新しいgap +{new_gaps} / queue {snapshot['auto'].get('queued', 0)}\n"
+            f"最終監視: {snapshot['last_refresh_age']}\n"
             f"結論: {conclusion}"
         )
 
@@ -156,6 +487,8 @@ def validate_environment() -> tuple[str, str, set[str]]:
 
 async def notification_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
+        for notice in await asyncio.to_thread(control.system_notices):
+            await channel.send(notice, suppress_embeds=True)
         for item in await asyncio.to_thread(control.notifications):
             await channel.send(candidate_message(item), suppress_embeds=True)
         try: await asyncio.wait_for(stop.wait(), timeout=15)
@@ -164,7 +497,9 @@ async def notification_worker(channel, control: Control, stop: asyncio.Event) ->
 
 async def digest_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
-        try: await asyncio.wait_for(stop.wait(), timeout=resident.load_config().get("discord_digest_interval_seconds", 3600))
+        configured = resident.load_config().get("discord_digest_interval_seconds", NORMAL_DIGEST_SECONDS)
+        interval = max(NORMAL_DIGEST_SECONDS, int(configured))
+        try: await asyncio.wait_for(stop.wait(), timeout=interval)
         except TimeoutError: await channel.send(await asyncio.to_thread(control.digest), suppress_embeds=True)
 
 
@@ -180,6 +515,7 @@ def main() -> None:
         if channel is None: raise RuntimeError("configured Discord channel is unavailable")
         if getattr(bot, "resident_workers_started", False): return
         bot.resident_workers_started = True
+        await asyncio.to_thread(control.ensure_baseline)
         LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal")
         asyncio.create_task(notification_worker(channel, control, stop)); asyncio.create_task(digest_worker(channel, control, stop))
     @bot.event
