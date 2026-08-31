@@ -21,4 +21,9 @@ for name in ("observer-heartbeat.json", "resident-heartbeat.json"):
         data = json.loads(path.read_text("utf-8")); age = (datetime.now(UTC) - datetime.fromisoformat(data["updated_at"])).total_seconds()
         print(f"{name} status={data.get('status')} age_seconds={age:.0f}")
     except (OSError, ValueError, KeyError, json.JSONDecodeError): print(f"{name} unavailable")
+path = Path(sys.argv[1]) / "signer" / "upstream-health.json"
+try:
+    data = json.loads(path.read_text("utf-8"))
+    print("signer_upstream status=%s circuit=%s next_probe_at=%s consecutive_failures=%s" % (data.get("status"), "open" if data.get("status") == "degraded" else "closed", data.get("next_probe_at"), data.get("consecutive_failures")))
+except (OSError, json.JSONDecodeError): print("signer_upstream unavailable")
 PY

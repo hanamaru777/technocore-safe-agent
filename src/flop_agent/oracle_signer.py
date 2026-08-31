@@ -15,7 +15,7 @@ import re
 import secrets
 import signal
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 
@@ -23,14 +23,17 @@ from . import autopilot, autopilot_transport, core, observer
 
 RECEIPT_NAME = "oracle-signer-receipts.json"
 HEALTH_NAME = "signer-health.json"
+UPSTREAM_NAME = "upstream-health.json"
 HEX_SEED = re.compile(rb"[0-9a-f]{64}")
 EXPECTED_DID = re.compile(r"did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{20,128}")
-ERROR_CODES = {"did_failure", "intent_invalid", "rate_limited", "submission_unknown", "vault_failure"}
+ERROR_CODES = {"did_failure", "intent_invalid", "rate_limited", "submission_unknown", "vault_failure", "upstream_unavailable"}
+BACKOFF_SECONDS = (30, 60, 120, 300, 900)
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
 def receipt_path() -> Path: return core.STATE / "signer" / RECEIPT_NAME
 def health_path() -> Path: return core.STATE / "signer" / HEALTH_NAME
+def upstream_path() -> Path: return core.STATE / "signer" / UPSTREAM_NAME
 def receipt_hash(intent: dict, did: str, nonce: str, text: str) -> str: return hashlib.sha256(f"{intent['intent_id']}|{did}|{nonce}|{text}".encode()).hexdigest()
 
 
@@ -49,6 +52,43 @@ def load_health() -> dict:
 
 
 def save_health(data: dict) -> None: observer.atomic_json_write(health_path(), data, mode=0o600)
+
+
+def default_upstream() -> dict:
+    return {"schema_version": 1, "status": "healthy", "consecutive_failures": 0, "last_success_at": None, "last_failure_at": None, "next_probe_at": None, "last_error_class": None, "http_status": None}
+
+
+def load_upstream() -> dict:
+    path = upstream_path()
+    if not path.exists(): return default_upstream()
+    try: data = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as error: raise RuntimeError("upstream health state is corrupt") from error
+    if not isinstance(data, dict) or set(data) != set(default_upstream()) or data.get("schema_version") != 1 or data.get("status") not in {"healthy", "degraded"} or not isinstance(data.get("consecutive_failures"), int) or data["consecutive_failures"] < 0:
+        raise RuntimeError("upstream health state is invalid")
+    return data
+
+
+def save_upstream(data: dict) -> None: observer.atomic_json_write(upstream_path(), data, mode=0o600)
+
+
+def record_upstream_success() -> dict:
+    value = default_upstream(); value["last_success_at"] = now(); save_upstream(value); return value
+
+
+def record_upstream_failure(error: core.httpx.HTTPError) -> dict:
+    value = load_upstream(); failures = value["consecutive_failures"] + 1; delay = BACKOFF_SECONDS[min(failures - 1, len(BACKOFF_SECONDS) - 1)]
+    value.update({"status": "degraded", "consecutive_failures": failures, "last_failure_at": now(), "next_probe_at": (datetime.now(UTC) + timedelta(seconds=delay)).isoformat(), "last_error_class": type(error).__name__, "http_status": getattr(getattr(error, "response", None), "status_code", None)})
+    save_upstream(value); return value
+
+
+def probe_upstream(room: str) -> None:
+    value = load_upstream(); due = observer.parse_time(value.get("next_probe_at"))
+    if value["status"] == "degraded" and due and due > datetime.now(UTC): raise RuntimeError("upstream_unavailable")
+    try:
+        core.read_room(room, limit=1, cache_buster=secrets.token_hex(16))
+    except core.httpx.HTTPError as error:
+        record_upstream_failure(error); raise RuntimeError("upstream_unavailable") from error
+    record_upstream_success()
 
 
 def record_health(error_code: str | None = None) -> dict:
@@ -163,7 +203,16 @@ def submit_prepared(state: dict, receipts: dict, intent: dict, text: str, receip
         did = verify_did()
         if not hmac.compare_digest(did, receipt["did"]): raise RuntimeError("did_failure")
         with_vault_seed(lambda: core.post_signed(intent["room"], text, True, did=did, nonce=receipt["nonce"], action="oracle_isolated_signer_publish", record_permalink=False))
-    except (RuntimeError, core.httpx.HTTPError) as error:
+    except core.httpx.HTTPError as error:
+        receipt["attempts"] = int(receipt.get("attempts", 0)) + 1; receipt["last_attempt_at"] = now(); receipt["last_error_code"] = "submission_unknown"; save_receipts(receipts)
+        item = state["outbox"].get(intent["intent_id"])
+        if item is None: raise RuntimeError("signer intent disappeared")
+        item["status"] = "ambiguous"; item["ambiguous_at"] = now(); item["ambiguity_reason"] = "submission_unknown"
+        autopilot.save(state, allow_legacy=False)
+        autopilot.audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": False, "why": "submission_unknown", "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "oracle_signer_ambiguous"}, allow_legacy=False)
+        record_upstream_failure(error)
+        raise RuntimeError("submission_unknown") from error
+    except RuntimeError as error:
         try:
             if message_exists(receipt, intent, text): mark_acknowledged(state, receipts, intent, receipt); return "reconciled"
         except Exception:
@@ -179,7 +228,8 @@ def process_intent(state: dict, receipts: dict, intent: dict) -> str:
     except RuntimeError as error: raise RuntimeError("intent_invalid") from error
     internal = state["outbox"].get(intent["intent_id"])
     if not isinstance(internal, dict) or autopilot.export_intent(internal) != intent: raise RuntimeError("signer internal intent mismatch")
-    text = autopilot.render(internal)
+    try: text = autopilot.render(internal)
+    except RuntimeError as error: raise RuntimeError("intent_invalid") from error
     if autopilot.DLP.search(text): raise RuntimeError("outbound DLP blocked rendered content")
     existing = reconcile_or_skip(state, receipts, intent, text)
     if existing: return existing
@@ -188,6 +238,7 @@ def process_intent(state: dict, receipts: dict, intent: dict) -> str:
     if not allowed: raise RuntimeError("rate_limited")
     receipt = receipts["receipts"].get(intent["intent_id"])
     if receipt is None:
+        probe_upstream(intent["room"])
         did = verify_did(); nonce = core.make_nonce(intent["room"], did)
         receipt = {"state": "prepared", "did": did, "nonce": nonce, "text_hash": hashlib.sha256(text.encode()).hexdigest(), "receipt_hash": receipt_hash(intent, did, nonce, text), "prepared_at": now(), "attempts": 0, "last_attempt_at": None, "last_error_code": None}
         receipts["receipts"][intent["intent_id"]] = receipt; save_receipts(receipts)
@@ -209,11 +260,43 @@ def run_once() -> dict:
     state = autopilot.load(allow_legacy=False)
     if not state["enabled"] or state["paused"]: return {"enabled": state["enabled"], "paused": state["paused"], "processed": []}
     receipts, processed = load_receipts(), []
-    for intent in autopilot.export_pending(allow_legacy=False)["intents"]:
-        if expire_queued_intent(state, intent):
-            processed.append({"intent_id": intent["intent_id"], "action": "expired"}); continue
-        processed.append({"intent_id": intent["intent_id"], "action": process_intent(state, receipts, intent)})
+    pending = autopilot.export_pending(allow_legacy=False)["intents"]
+    # Expiration is local and remains available even while the upstream circuit
+    # is open; do it before any probe can stop the write portion of this cycle.
+    active = []
+    for intent in pending:
+        if expire_queued_intent(state, intent): processed.append({"intent_id": intent["intent_id"], "action": "expired"})
+        else: active.append(intent)
+    reconcile_ambiguous(state, receipts)
+    for intent in active:
+        try:
+            processed.append({"intent_id": intent["intent_id"], "action": process_intent(state, receipts, intent)})
+        except RuntimeError as error:
+            code = str(error)
+            if code in {"vault_failure", "did_failure", "upstream_unavailable", "submission_unknown"}: raise
+            processed.append({"intent_id": intent["intent_id"], "action": "failed", "error": code})
     return {"enabled": True, "paused": False, "processed": processed}
+
+
+def reconcile_ambiguous(state: dict, receipts: dict) -> None:
+    """Read-only reconciliation never infers absence and never submits a write."""
+    for intent_id, item in list(state["outbox"].items()):
+        if item.get("status") != "ambiguous": continue
+        receipt = receipts["receipts"].get(intent_id)
+        if not isinstance(receipt, dict) or receipt.get("last_error_code") != "submission_unknown": continue
+        try:
+            intent = autopilot.export_intent(item); text = autopilot.render(item)
+            if message_exists(receipt, intent, text): mark_acknowledged(state, receipts, intent, receipt)
+        except (RuntimeError, core.httpx.HTTPError):
+            continue
+
+
+def signer_status() -> dict:
+    state = autopilot.load(allow_legacy=False); upstream = load_upstream()
+    ambiguous = [item for item in state["outbox"].values() if item.get("status") == "ambiguous"]
+    ages = [observer.parse_time(item.get("ambiguous_at")) for item in ambiguous]
+    oldest = min((item for item in ages if item), default=None)
+    return {"upstream_status": upstream["status"], "circuit": "open" if upstream["status"] == "degraded" else "closed", "next_probe_at": upstream["next_probe_at"], "consecutive_upstream_failures": upstream["consecutive_failures"], "ambiguous_intents": len(ambiguous), "oldest_ambiguous_age_seconds": None if oldest is None else max(0, int((datetime.now(UTC) - oldest).total_seconds()))}
 
 
 def quarantine_controlled_e2e(version: str = "v1") -> dict:

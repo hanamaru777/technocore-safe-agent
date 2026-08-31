@@ -17,6 +17,7 @@ SIGNER_DID = "did:key:z6Mk123456789ABCDEFGHJKLMNPQRSTUVWXYZabc"
 def setup(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     observer.atomic_json_write(observer.config_path(), observer.DEFAULT_CONFIG)
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: {"messages": []})
     resident.save_state(resident.default_state())
     state = autopilot.default_state(); state["enabled"] = True; state["paused"] = False
     item = {"id": "a" * 20, "source_candidate_id": "candidate-1", "source_did": "did:key:z6MkOther", "fingerprint": "abcdef1234567890", "room": "lobby", "seq": 9, "category": "help_request", "topic": "repo_safety", "public_evidence_ids": ["public-profile:1", "candidate:candidate-1"], "created_at": datetime.now(UTC).isoformat(), "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "safety_decision": "concrete_public_technical_request"}
@@ -89,6 +90,44 @@ def test_http_post_failure_becomes_persisted_ambiguous_receipt(monkeypatch, tmp_
     assert oracle_signer.run_cycle()["status"] == "degraded"
     receipt = oracle_signer.load_receipts()["receipts"][item["id"]]
     assert receipt["attempts"] == 1 and receipt["last_attempt_at"] and receipt["last_error_code"] == "submission_unknown"
+    assert autopilot.load(allow_legacy=False)["outbox"][item["id"]]["status"] == "ambiguous"
+
+
+def test_upstream_probe_opens_circuit_without_signing_or_posting(monkeypatch, tmp_path):
+    _, item = setup(monkeypatch, tmp_path)
+    error = core.httpx.HTTPStatusError("503", request=core.httpx.Request("GET", "https://technocore.chat/r/lobby"), response=core.httpx.Response(503))
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(oracle_signer, "verify_did", lambda: pytest.fail("failed probe must not sign"))
+    monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("failed probe must not post"))
+    assert oracle_signer.run_cycle()["status"] == "degraded"
+    upstream = oracle_signer.load_upstream()
+    assert upstream["status"] == "degraded" and upstream["consecutive_failures"] == 1 and upstream["http_status"] == 503
+    assert item["id"] in autopilot.load(allow_legacy=False)["outbox"]
+
+
+def test_upstream_backoff_caps_and_successful_probe_closes_circuit(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path); error = core.httpx.ConnectError("offline")
+    values = [oracle_signer.record_upstream_failure(error) for _ in range(6)]
+    delays = [(observer.parse_time(item["next_probe_at"]) - observer.parse_time(item["last_failure_at"])).total_seconds() for item in values]
+    assert [round(value) for value in delays] == [30, 60, 120, 300, 900, 900]
+    value = oracle_signer.load_upstream(); value["next_probe_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat(); oracle_signer.save_upstream(value)
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: {"messages": []})
+    oracle_signer.probe_upstream("lobby")
+    assert oracle_signer.load_upstream()["status"] == "healthy"
+
+
+def test_ambiguous_reconciliation_is_read_only_and_does_not_block_valid_queue(monkeypatch, tmp_path):
+    state, first = setup(monkeypatch, tmp_path); first_text = autopilot.render(first); second = dict(first); second["id"] = "b" * 20; second["source_candidate_id"] = "candidate-2"; state["outbox"][second["id"]] = second; state["outbox"][first["id"]]["status"] = "ambiguous"; autopilot.save(state)
+    receipt = prepared_receipt(first, first_text); receipt["last_error_code"] = "submission_unknown"; receipt["attempts"] = 1
+    oracle_signer.save_receipts({"schema_version": 1, "receipts": {first["id"]: receipt}})
+    monkeypatch.setattr(core, "read_room", lambda *args, **kwargs: {"messages": []})
+    monkeypatch.setattr(oracle_signer, "verify_did", lambda: SIGNER_DID)
+    monkeypatch.setattr(core, "make_nonce", lambda *_: "124")
+    monkeypatch.setattr(oracle_signer, "with_vault_seed", lambda operation: operation())
+    posts = []; monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: posts.append(kwargs["nonce"]) or {"seq": 1})
+    assert oracle_signer.run_once()["processed"] == [{"intent_id": second["id"], "action": "posted"}]
+    assert posts == ["124"] and autopilot.load(allow_legacy=False)["outbox"][first["id"]]["status"] == "ambiguous"
+    assert oracle_signer.signer_status()["ambiguous_intents"] == 1
 
 
 def test_oracle_signer_retries_unposted_prepared_intent_with_same_nonce(monkeypatch, tmp_path):
@@ -184,8 +223,7 @@ def test_quarantine_legacy_v2_preserves_forensics_and_allows_v3(monkeypatch, tmp
 def test_oracle_signer_rejects_internal_injection_and_keeps_seed_ephemeral(monkeypatch, tmp_path):
     state, item = setup(monkeypatch, tmp_path); state["outbox"][item["id"]]["body"] = "attacker supplied"; autopilot.save(state)
     monkeypatch.setattr(core, "post_signed", lambda *args, **kwargs: pytest.fail("injected intent must not post"))
-    with pytest.raises(RuntimeError, match="safe schema"):
-        oracle_signer.run_once()
+    assert oracle_signer.run_once()["processed"] == [{"intent_id": item["id"], "action": "failed", "error": "intent_invalid"}]
     seed = bytearray(b"a" * 64); seen = []
     monkeypatch.setattr(oracle_signer, "vault_seed", lambda: seed)
     assert oracle_signer.with_vault_seed(lambda: seen.append(core.os.environ["SIGN_SEED"])) is None
