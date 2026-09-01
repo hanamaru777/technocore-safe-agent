@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime
 
 from flop_agent import autopilot, core, discord_control, observer, resident
@@ -38,7 +39,7 @@ def auto_state_with(intent_id="intent-1", *, receipt=True, controlled=False):
         "expires_at": "2026-09-02T12:00:00+00:00",
         "safety_decision": "controlled_pause_only_e2e" if controlled else "signed_public_direct_request",
     }
-    return {
+    state = {
         "schema_version": 1,
         "enabled": True,
         "paused": False,
@@ -47,6 +48,9 @@ def auto_state_with(intent_id="intent-1", *, receipt=True, controlled=False):
         "rate_history": [],
         "migrated_at": "done",
     }
+    if receipt:
+        state["rate_history"] = [{"at": "2026-08-31T12:05:00+00:00", "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(autopilot.render(intent).encode()).hexdigest()}]
+    return state
 
 
 def test_existing_reply_is_baselined_and_not_replayed(monkeypatch, tmp_path):
@@ -67,13 +71,15 @@ def test_new_reply_notifies_once_with_when_who_and_what(monkeypatch, tmp_path):
     control = discord_control.Control({"42"}, "99")
     control.ensure_baseline()
     auto_state["receipts"]["intent-1"] = {"at": "2026-08-31T12:05:00+00:00"}
+    intent = auto_state["outbox"]["intent-1"]
+    auto_state["rate_history"].append({"at": "2026-08-31T12:05:00+00:00", "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(autopilot.render(intent).encode()).hexdigest()})
     notices = control.interaction_notices()
     assert len(notices) == 1
     notice = notices[0]
     assert "自動返信完了" in notice
     assert "abc123" in notice
     assert "lobby #99" in notice
-    assert "repo_safety" in notice
+    assert "The public technocore-safe-agent repository" in notice
     assert "/history abc123" in notice
     assert control.interaction_notices() == []
 
@@ -112,3 +118,44 @@ def test_history_is_bounded_and_sanitized(monkeypatch, tmp_path):
     assert "https://example.invalid" not in message
     assert "@everyone" not in message
     assert "[URL省略]" in message
+
+
+def test_outbound_notice_pairs_sanitized_inbound_with_exact_fixed_reply(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path)
+    state["candidates"] = {
+        "candidate-1": {
+            "candidate_id": "candidate-1", "status": "pending", "category": "conversation",
+            "fingerprint": "abc12345deadbeef", "did": "did:key:z6MkOther", "room": "lobby", "seq": 99,
+            "created_at": "2026-08-31T12:00:00+00:00", "signals": {"direct_public_signed": True, "conversation_topic": "repo_safety"},
+            "context": {"untrusted": True},
+        }
+    }
+    resident.save_state(state)
+    observed = observer.load_state()
+    observed["agents"]["abc12345deadbeef"] = {"facts": {"recent_messages": [{"room": "lobby", "seq": 99, "ts": "2026-08-31T12:00:00+00:00", "text": "@everyone review https://unsafe.invalid\x00 now"}]}}
+    observer.save_state(observed)
+    auto_state = auto_state_with(receipt=False)
+    monkeypatch.setattr(autopilot, "load", lambda: auto_state)
+    monkeypatch.setattr(autopilot, "status", lambda state=None: {"enabled": True, "paused": False, "queued": 0, "receipts": len(auto_state["receipts"]), "migration_complete": True})
+    control = discord_control.Control({"42"}, "99")
+    control.ensure_baseline()
+    auto_state["receipts"]["intent-1"] = {"at": "2026-08-31T12:05:00+00:00"}
+    intent = auto_state["outbox"]["intent-1"]
+    auto_state["rate_history"].append({"at": "2026-08-31T12:05:00+00:00", "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(autopilot.render(intent).encode()).hexdigest()})
+    notice = control.interaction_notices()[0]
+    assert "受信:" in notice and "送信:" in notice
+    assert "https://unsafe.invalid" not in notice and "@everyone" not in notice and "\x00" not in notice
+    assert "The public technocore-safe-agent repository" in notice
+    history = discord_control.history_message()
+    assert "[URL省略]" in history and "@everyone" not in history
+    assert "The public technocore-safe-agent repository" in history
+
+
+def test_history_does_not_invent_exact_outbound_text_without_matching_hash(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    auto_state = auto_state_with()  # legacy receipt has no text hash or matching rate record
+    auto_state["rate_history"] = []
+    monkeypatch.setattr(autopilot, "load", lambda: auto_state)
+    message = discord_control.history_message()
+    assert "正確な本文は保持されていません" in message
+    assert "The public technocore-safe-agent repository" not in message

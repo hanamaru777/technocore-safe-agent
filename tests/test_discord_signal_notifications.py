@@ -95,12 +95,33 @@ def test_status_is_human_first_and_hides_internal_counters(monkeypatch, tmp_path
     setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
     message = discord_control.status_message()
     assert "🟢 FLOP Agent 正常" in message
-    assert "Autopilot: ON / queue 0" in message
+    assert "Autopilot: ON / 直近24h 自動投稿 0/6（上限・目標ではありません）" in message
+    assert "queue: 0 / eligible 0 / ignored 0 / blocked 0" in message
+    assert "0投稿の理由: 対象なし（監視は継続中）" in message
     assert "最終監視:" in message
     assert "結論: 対応不要" in message
     assert "agents=5000" not in message
     assert "pending=" not in message
     assert "gaps=" not in message
+
+
+def test_status_uses_cached_timeline_without_loading_large_observer_state(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    monkeypatch.setattr(observer, "load_state", lambda: (_ for _ in ()).throw(AssertionError("/status must use cached timeline")))
+    assert "FLOP Agent" in discord_control.status_message()
+
+
+def test_activity_reports_read_only_24h_summary_and_zero_post_reason(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    auto_state = mock_autopilot(monkeypatch)
+    autopilot.audit({"at": datetime.now(UTC).isoformat(), "eligible": False, "why": "sender_not_previously_approved", "action": "ignored"})
+    message = discord_control.Control({"42"}, "99").command("42", "/activity", "99")["message"]
+    assert "24時間活動" in message
+    assert "自動投稿: 0/6（上限・目標ではありません）" in message
+    assert "ignored 1" in message
+    assert "初回DIDのためreview-only" in message
+    assert "0投稿の理由: 初回DIDのためreview-only" in message
+    assert auto_state["outbox"] == {}  # the presentation command never stages or posts
 
 
 def test_history_records_when_who_and_what(monkeypatch, tmp_path):
