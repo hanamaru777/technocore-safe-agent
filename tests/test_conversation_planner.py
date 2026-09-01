@@ -1,13 +1,15 @@
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from flop_agent import autopilot, conversation_planner, core, observer, resident
+from flop_agent import autopilot, conversation_planner, core, observer, oracle_signer, resident
 
 
 OWN = "did:key:z6MkOwnConversation"
 OTHER = "did:key:z6MkOtherConversation"
+SIGNER_DID = "did:key:z6Mk123456789ABCDEFGHJKLMNPQRSTUVWXYZabc"
 
 
 def setup(monkeypatch, tmp_path):
@@ -79,10 +81,16 @@ def test_first_contact_is_review_only_and_prior_approval_unlocks_later_autopilot
 
     current = [item for item in resident.load_state()["candidates"].values() if item["category"] == "conversation" and item["status"] == "pending"]
     assert len(current) == 1 and current[0]["candidate_id"] != first_candidate["candidate_id"]
+    assert autopilot.sender_trusted_for_autopilot(current[0]) is False
+    staged = autopilot.stage_approved_reply(first_candidate["candidate_id"])
+    auto = autopilot.load(); intent = auto["outbox"][staged["intent_id"]]
+    exported, text = autopilot.export_intent(intent), autopilot.render(intent)
+    receipt = {"state": "prepared", "did": SIGNER_DID, "nonce": "123", "text_hash": hashlib.sha256(text.encode()).hexdigest(), "receipt_hash": oracle_signer.receipt_hash(exported, SIGNER_DID, "123", text), "prepared_at": datetime.now(UTC).isoformat()}
+    oracle_signer.mark_acknowledged(auto, {"schema_version": 1, "receipts": {staged["intent_id"]: receipt}}, exported, receipt)
     assert autopilot.sender_trusted_for_autopilot(current[0]) is True
 
     autopilot.build_outbox(); queued = autopilot.queue()["outbox"]
-    assert len(queued) == 1 and queued[0]["source_candidate_id"] == current[0]["candidate_id"]
-    assert autopilot.render(queued[0])
+    generated = [item for item in queued if item["source_candidate_id"] == current[0]["candidate_id"]]
+    assert len(generated) == 1 and autopilot.render(generated[0])
     resident.refresh(); autopilot.build_outbox()
-    assert len(autopilot.queue()["outbox"]) == 1
+    assert len(autopilot.queue()["outbox"]) == 2

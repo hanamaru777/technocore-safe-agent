@@ -20,12 +20,12 @@ def test_public_trigger_rules_cannot_make_first_contact_autonomous():
     )
     assert autopilot.sender_trusted_for_autopilot(current, state) is False
 
-    # Only a previous human-approved interaction establishes trust for a later
-    # candidate from the same DID/fingerprint.
+    # A previous approval alone is still only trust intent.  Active trust needs
+    # a durable acknowledged Oracle publication or verified manual publish state.
     relationship["approval_rejection_history"].append(
         {"candidate_id": "earlier", "decision": "approved"}
     )
-    assert autopilot.sender_trusted_for_autopilot(current, state) is True
+    assert autopilot.sender_trusted_for_autopilot(current, state) is False
 
 
 def test_metadata_firewall_is_default_deny_for_non_signer_users_on_imds_only():

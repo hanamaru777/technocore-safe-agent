@@ -126,15 +126,66 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     return False, "category_not_allowlisted", None
 
 
-def sender_trusted_for_autopilot(candidate: dict, local_state: dict | None = None) -> bool:
-    """Require a prior explicit human approval before a DID may consume autopilot writes.
+def eligible_approved_candidate(candidate: dict) -> tuple[bool, str, str | None]:
+    """Recheck an approved candidate with the unchanged pending eligibility rules."""
+    pending = dict(candidate)
+    pending["status"] = "pending"
+    return eligible(pending)
 
-    Public code and the public DID make first-contact trigger rules observable.  A
-    fresh DID must therefore remain review-only even when its signed message is
-    otherwise useful.  Approval of the *current* candidate does not count; only a
-    previous approved interaction establishes trust for a later candidate.
+
+def durable_publication_at(candidate_id: str, fingerprint: str, local_state: dict, auto_state: dict) -> str | None:
+    """Return durable local publication evidence for one human-approved candidate.
+
+    Mere approval, staging, prepared receipts, ambiguous outcomes, and quarantine
+    are intentionally insufficient.  Oracle trust activates only after its normal
+    posted-and-acknowledged state; the older manual path requires its resident
+    published record as well.
     """
+    for intent_id, item in auto_state.get("outbox", {}).items():
+        receipt = auto_state.get("receipts", {}).get(intent_id)
+        if (
+            isinstance(item, dict) and item.get("source_candidate_id") == candidate_id
+            and item.get("fingerprint") == fingerprint and item.get("status") == "acknowledged"
+            and isinstance(receipt, dict) and observer.parse_time(item.get("posted_at"))
+            and observer.parse_time(item.get("acknowledged_at")) and observer.parse_time(receipt.get("at"))
+        ):
+            return item["acknowledged_at"]
+    candidate = local_state.get("candidates", {}).get(candidate_id)
+    if not isinstance(candidate, dict) or candidate.get("fingerprint") != fingerprint or candidate.get("status") != "published":
+        return None
+    published_at = candidate.get("published_at")
+    if not observer.parse_time(published_at):
+        return None
+    for record in local_state.get("published", []):
+        if (
+            isinstance(record, dict) and record.get("candidate_id") == candidate_id
+            and observer.parse_time(record.get("at")) and isinstance(record.get("permalink"), str)
+            and record["permalink"].startswith("https://technocore.chat/humans#r/")
+        ):
+            return published_at
+    return None
+
+
+def active_trusted_relationships(local_state: dict | None = None, auto_state: dict | None = None) -> list[dict]:
+    """List only counterparts whose approved bootstrap has durable success evidence."""
     state = local_state or resident.load_state()
+    auto = auto_state or load()
+    rows = []
+    for fingerprint, relationship in state.get("relationships", {}).items():
+        history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []
+        successes = [
+            stamp for item in history if isinstance(item, dict) and item.get("decision") == "approved"
+            for stamp in [durable_publication_at(str(item.get("candidate_id", "")), fingerprint, state, auto)] if stamp
+        ]
+        if successes:
+            rows.append({"fingerprint": fingerprint, "at": max(successes)})
+    return sorted(rows, key=lambda item: item["at"], reverse=True)
+
+
+def sender_trusted_for_autopilot(candidate: dict, local_state: dict | None = None, auto_state: dict | None = None) -> bool:
+    """Require prior approval plus durable successful publication for normal writes."""
+    state = local_state or resident.load_state()
+    auto = auto_state or load()
     relationship = state.get("relationships", {}).get(candidate.get("fingerprint"), {})
     history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []
     current_id = candidate.get("candidate_id")
@@ -142,6 +193,7 @@ def sender_trusted_for_autopilot(candidate: dict, local_state: dict | None = Non
         isinstance(item, dict)
         and item.get("decision") == "approved"
         and item.get("candidate_id") != current_id
+        and durable_publication_at(str(item.get("candidate_id", "")), str(candidate.get("fingerprint", "")), state, auto)
         for item in history
     )
 
@@ -158,13 +210,51 @@ def build_outbox() -> dict:
     local = resident.load_state()
     for candidate in local["candidates"].values():
         allowed, reason, topic = eligible(candidate)
-        if allowed and not sender_trusted_for_autopilot(candidate, local):
+        if allowed and not sender_trusted_for_autopilot(candidate, local, state):
             allowed, reason, topic = False, "sender_not_previously_approved", None
         audit({"at": now(), "source_candidate": candidate.get("candidate_id"), "eligible": allowed, "why": reason, "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_created" if allowed else "ignored"})
         if not allowed or not topic: continue
         intent = make_intent(candidate, topic, reason)
         state["outbox"].setdefault(intent["id"], intent)
     save(state); return status(state)
+
+
+def rate_ok_preview(state: dict, intent: dict) -> tuple[bool, str]:
+    """Apply the existing limiter without pruning or otherwise mutating real state."""
+    preview = dict(state)
+    preview["rate_history"] = list(state.get("rate_history", []))
+    return rate_ok(preview, intent)
+
+
+def stage_approved_reply(candidate_id: str) -> dict:
+    """Human-gated bootstrap: stage exactly one fixed-template approved candidate."""
+    state = load()
+    if not state["enabled"] or state["paused"]:
+        raise RuntimeError("autopilot must be enabled and unpaused before staging")
+    local = resident.load_state()
+    candidate = local.get("candidates", {}).get(candidate_id)
+    if not isinstance(candidate, dict) or candidate.get("status") != "approved":
+        raise RuntimeError("candidate must be approved before staging")
+    approvals = local.get("relationships", {}).get(candidate.get("fingerprint"), {}).get("approval_rejection_history", [])
+    if not any(isinstance(item, dict) and item.get("candidate_id") == candidate_id and item.get("decision") == "approved" for item in approvals):
+        raise RuntimeError("exact human approval record is required")
+    expires = observer.parse_time(candidate.get("expires_at"))
+    if expires is None or expires <= datetime.now(UTC):
+        raise RuntimeError("approved candidate is expired")
+    allowed, reason, topic = eligible_approved_candidate(candidate)
+    if not allowed or topic is None:
+        raise RuntimeError("approved candidate fails safety eligibility")
+    intent = make_intent(candidate, topic, reason)
+    if intent["id"] in state["outbox"] or intent["id"] in state["receipts"]:
+        raise RuntimeError("approved candidate was already staged")
+    render(intent)
+    rate_allowed, rate_reason = rate_ok_preview(state, intent)
+    if not rate_allowed:
+        raise RuntimeError(f"rate limit precheck failed: {rate_reason}")
+    state["outbox"][intent["id"]] = intent
+    save(state)
+    audit({"at": now(), "source_candidate": candidate_id, "eligible": True, "why": reason, "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "precheck_pass", "action": "approved_reply_staged"})
+    return {"intent_id": intent["id"], "status": "staged"}
 
 
 def status(state: dict | None = None) -> dict:
