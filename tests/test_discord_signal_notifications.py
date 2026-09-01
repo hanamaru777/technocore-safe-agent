@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from flop_agent import autopilot, core, discord_control, observer, resident
 
@@ -157,6 +157,98 @@ def test_gap_burst_and_autopilot_problem_are_immediate_once(monkeypatch, tmp_pat
     notices = control.system_notices()
     assert any("🔴 FLOP Agent 異常" in notice and "Autopilot 一時停止" in notice for notice in notices)
     assert not any("🔴 FLOP Agent 異常" in notice for notice in control.system_notices())
+
+    mock_autopilot(monkeypatch, enabled=False, paused=True)
+    notices = control.system_notices()
+    assert any("🔴 FLOP Agent 異常" in notice and "Autopilot OFF" in notice for notice in notices)
+
+
+def test_transient_observer_degraded_is_silent_and_status_is_immediate(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    control = discord_control.Control({"42"}, "99")
+    state["cached_observer"]["health"] = {"current": "degraded"}; resident.save_state(state)
+    assert not control.system_notices()
+    assert "監視状態 degraded" in discord_control.status_message()
+    state["cached_observer"]["health"] = {"current": "ok"}; resident.save_state(state)
+    assert not control.system_notices()
+
+
+def test_persistent_observer_degraded_alerts_once_then_recovers_once(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    control = discord_control.Control({"42"}, "99")
+    state["cached_observer"]["health"] = {"current": "degraded"}; resident.save_state(state)
+    assert not control.system_notices()
+    ui = discord_control.load_ui_state()
+    ui["observer_degraded_since"] = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    discord_control.save_ui_state(ui)
+    notices = control.system_notices()
+    assert len([notice for notice in notices if "監視状態 degraded が5分以上" in notice]) == 1
+    assert not control.system_notices()
+    state["cached_observer"]["health"] = {"current": "ok"}; resident.save_state(state)
+    notices = control.system_notices()
+    assert len([notice for notice in notices if "監視復旧" in notice]) == 1
+    assert not control.system_notices()
+
+
+def test_stale_resident_health_remains_immediate(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    control = discord_control.Control({"42"}, "99")
+    state["daemon"]["last_refresh_at"] = (datetime.now(UTC) - timedelta(minutes=4)).isoformat(); resident.save_state(state)
+    notices = control.system_notices()
+    assert any("最終監視" in notice and "🔴 FLOP Agent 異常" in notice for notice in notices)
+
+    state["daemon"]["last_refresh_at"] = (datetime.now(UTC) - timedelta(minutes=5)).isoformat(); resident.save_state(state)
+    assert not any("🔴 FLOP Agent 異常" in notice for notice in control.system_notices())
+
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat(); resident.save_state(state)
+    notices = control.system_notices()
+    assert len([notice for notice in notices if "🟢 FLOP Agent 復旧" in notice]) == 1
+    assert not control.system_notices()
+
+
+def test_legacy_health_display_migrates_to_stable_incident_key(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    state["daemon"]["last_refresh_at"] = (datetime.now(UTC) - timedelta(minutes=4)).isoformat(); resident.save_state(state)
+    legacy = discord_control.default_ui_state()
+    legacy.pop("health_incident_keys")
+    legacy["last_health_problem"] = "最終監視 4分前"
+    discord_control.save_ui_state(legacy)
+    control = discord_control.Control({"42"}, "99")
+    assert not any("🔴 FLOP Agent 異常" in notice for notice in control.system_notices())
+    assert discord_control.load_ui_state()["health_incident_keys"] == ["resident_stale"]
+
+
+def test_health_incident_transitions_do_not_emit_partial_recovery(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    control = discord_control.Control({"42"}, "99")
+    mock_autopilot(monkeypatch, paused=True)
+    assert any("Autopilot 一時停止" in notice for notice in control.system_notices())
+
+    mock_autopilot(monkeypatch, enabled=False, paused=True)
+    notices = control.system_notices()
+    assert any("Autopilot OFF" in notice and "🔴 FLOP Agent 異常" in notice for notice in notices)
+    assert not any("🟢 FLOP Agent 復旧" in notice or "対応不要。そのまま稼働中" in notice for notice in notices)
+
+    mock_autopilot(monkeypatch, paused=True)
+    notices = control.system_notices()
+    assert any("Autopilot 一時停止" in notice and "🔴 FLOP Agent 異常" in notice for notice in notices)
+    assert not any("🟢 FLOP Agent 復旧" in notice or "対応不要。そのまま稼働中" in notice for notice in notices)
+
+
+def test_only_final_health_incident_resolution_notifies_recovery(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path)
+    control = discord_control.Control({"42"}, "99")
+    state["daemon"]["last_refresh_at"] = (datetime.now(UTC) - timedelta(minutes=4)).isoformat(); resident.save_state(state)
+    mock_autopilot(monkeypatch, paused=True)
+    assert any("🔴 FLOP Agent 異常" in notice for notice in control.system_notices())
+
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat(); resident.save_state(state)
+    assert not any("🟢 FLOP Agent 復旧" in notice or "対応不要。そのまま稼働中" in notice for notice in control.system_notices())
+
+    mock_autopilot(monkeypatch)
+    notices = control.system_notices()
+    assert len([notice for notice in notices if "🟢 FLOP Agent 復旧" in notice]) == 1
+    assert not control.system_notices()
 
 
 def test_help_keeps_daily_surface_small(monkeypatch, tmp_path):
