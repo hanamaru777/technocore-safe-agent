@@ -126,6 +126,13 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     return False, "category_not_allowlisted", None
 
 
+def eligible_approved_candidate(candidate: dict) -> tuple[bool, str, str | None]:
+    """Recheck an approved candidate with the unchanged pending eligibility rules."""
+    pending = dict(candidate)
+    pending["status"] = "pending"
+    return eligible(pending)
+
+
 def sender_trusted_for_autopilot(candidate: dict, local_state: dict | None = None) -> bool:
     """Require a prior explicit human approval before a DID may consume autopilot writes.
 
@@ -165,6 +172,44 @@ def build_outbox() -> dict:
         intent = make_intent(candidate, topic, reason)
         state["outbox"].setdefault(intent["id"], intent)
     save(state); return status(state)
+
+
+def rate_ok_preview(state: dict, intent: dict) -> tuple[bool, str]:
+    """Apply the existing limiter without pruning or otherwise mutating real state."""
+    preview = dict(state)
+    preview["rate_history"] = list(state.get("rate_history", []))
+    return rate_ok(preview, intent)
+
+
+def stage_approved_reply(candidate_id: str) -> dict:
+    """Human-gated bootstrap: stage exactly one fixed-template approved candidate."""
+    state = load()
+    if not state["enabled"] or state["paused"]:
+        raise RuntimeError("autopilot must be enabled and unpaused before staging")
+    local = resident.load_state()
+    candidate = local.get("candidates", {}).get(candidate_id)
+    if not isinstance(candidate, dict) or candidate.get("status") != "approved":
+        raise RuntimeError("candidate must be approved before staging")
+    approvals = local.get("relationships", {}).get(candidate.get("fingerprint"), {}).get("approval_rejection_history", [])
+    if not any(isinstance(item, dict) and item.get("candidate_id") == candidate_id and item.get("decision") == "approved" for item in approvals):
+        raise RuntimeError("exact human approval record is required")
+    expires = observer.parse_time(candidate.get("expires_at"))
+    if expires is None or expires <= datetime.now(UTC):
+        raise RuntimeError("approved candidate is expired")
+    allowed, reason, topic = eligible_approved_candidate(candidate)
+    if not allowed or topic is None:
+        raise RuntimeError("approved candidate fails safety eligibility")
+    intent = make_intent(candidate, topic, reason)
+    if intent["id"] in state["outbox"] or intent["id"] in state["receipts"]:
+        raise RuntimeError("approved candidate was already staged")
+    render(intent)
+    rate_allowed, rate_reason = rate_ok_preview(state, intent)
+    if not rate_allowed:
+        raise RuntimeError(f"rate limit precheck failed: {rate_reason}")
+    state["outbox"][intent["id"]] = intent
+    save(state)
+    audit({"at": now(), "source_candidate": candidate_id, "eligible": True, "why": reason, "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "precheck_pass", "action": "approved_reply_staged"})
+    return {"intent_id": intent["id"], "status": "staged"}
 
 
 def status(state: dict | None = None) -> dict:

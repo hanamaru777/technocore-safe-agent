@@ -502,7 +502,52 @@ def activity_snapshot(*, sync_timeline: bool = True) -> dict:
         "counterparts": len(counterparts),
         "interactions": interactions,
         "latest_post": _latest_post_at(snapshot["auto_state"]),
+        "trusted": trusted_relationships(),
+        "trust_candidates": trust_candidates(),
     }
+
+
+def trust_candidates(limit: int = 5) -> list[dict]:
+    """Read-only, safe first-contact candidates; never stages or approves anything."""
+    state = resident.load_state()
+    now = datetime.now(UTC)
+    rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+    category_rank = {"conversation": 4, "specific_question": 3, "help_request": 3, "technical_collaboration": 3, "artifact_contribution": 2}
+    selected, seen = [], set()
+    for item in sorted(state.get("candidates", {}).values(), key=lambda value: (category_rank.get(value.get("category"), 0), rank.get(value.get("priority"), 0), value.get("created_at", "")), reverse=True):
+        expires = _parse_time(item.get("expires_at"))
+        if item.get("status") != "pending" or expires is None or expires <= now or item.get("fingerprint") in seen:
+            continue
+        allowed, _, _ = autopilot.eligible(item)
+        if not allowed or autopilot.sender_trusted_for_autopilot(item, state):
+            continue
+        seen.add(item.get("fingerprint")); selected.append(item)
+        if len(selected) >= limit: break
+    return selected
+
+
+def trusted_relationships() -> list[dict]:
+    state = resident.load_state(); rows = []
+    for fingerprint, relationship in state.get("relationships", {}).items():
+        approvals = [item for item in relationship.get("approval_rejection_history", []) if isinstance(item, dict) and item.get("decision") == "approved"]
+        if approvals:
+            rows.append({"fingerprint": fingerprint, "at": max(item.get("at", "") for item in approvals)})
+    return sorted(rows, key=lambda item: item["at"], reverse=True)
+
+
+def trust_candidates_message() -> str:
+    rows = trust_candidates()
+    if not rows: return "🤝 trust候補\n現在、safeな初回trust候補はありません。監視は継続中です。"
+    lines = ["🤝 初回trust候補（投稿はしません）"]
+    for item in rows:
+        lines.extend(["", f"{item.get('candidate_id')} | {short_fingerprint(item.get('fingerprint'))} | {item.get('room')} #{item.get('seq')}", f"{CATEGORY_LABELS.get(item.get('category'), '候補')} / {PRIORITY_LABELS.get(item.get('priority'), '中')}", f"理由: {candidate_reason(item)}", f"要点: {candidate_excerpt(item)}", f"次: /approve {item.get('candidate_id')}"])
+    return "\n".join(lines)
+
+
+def trusted_message() -> str:
+    rows = trusted_relationships()
+    if not rows: return "🤝 trusted counterpart: 0\n初回trustは /trust-candidates から確認できます。"
+    return "\n".join([f"🤝 trusted counterpart: {len(rows)}", *[f"- {short_fingerprint(item['fingerprint'])} / approval {human_time(item['at'])}" for item in rows[:5]]])
 
 
 def _health_snapshot() -> dict:
@@ -579,6 +624,8 @@ def status_message() -> str:
         lines.append("主な非投稿理由: " + max(activity["reasons"], key=activity["reasons"].get))
     if activity["zero_reason"]:
         lines.append(f"0投稿の理由: {activity['zero_reason']}")
+    if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and not activity["trusted"] and activity["trust_candidates"]:
+        lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
     if snapshot["problems"]:
         lines.append("異常: " + " / ".join(snapshot["problems"]))
         lines.append("結論: 対応が必要です。詳細は /status を再確認してください。")
@@ -624,6 +671,8 @@ def activity_message() -> str:
         lines.append("主なblocked/ignored理由: " + max(activity["reasons"], key=activity["reasons"].get))
     if activity["zero_reason"]:
         lines.append(f"0投稿の理由: {activity['zero_reason']}")
+    if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and not activity["trusted"] and activity["trust_candidates"]:
+        lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
     if recent:
         lines.append("直近のやりとり:")
         for item in recent:
@@ -647,6 +696,8 @@ class Control:
         action, args = parts[0], parts[1:]
         if action == "/status": return {"ok": True, "data": {}, "message": status_message()}
         if action == "/activity" and not args: return {"ok": True, "data": {}, "message": activity_message()}
+        if action == "/trust-candidates" and not args: return {"ok": True, "data": {}, "message": trust_candidates_message()}
+        if action == "/trusted" and not args: return {"ok": True, "data": {}, "message": trusted_message()}
         if action == "/history" and len(args) <= 1: return {"ok": True, "data": {}, "message": history_message(args[0] if args else None)}
         if action == "/resident-status":
             data = resident.resident_status(); return {"ok": True, "data": data, "message": f"状態: agents={data['agents_known']} pending={data['useful_candidates']} gaps={data['message_gaps']}"}
@@ -661,7 +712,10 @@ class Control:
         if action == "/candidate" and len(args) == 1:
             data = resident.candidate(args[0]); return {"ok": True, "data": data, "message": candidate_message(data['candidate'])}
         if action == "/approve" and len(args) == 1:
-            data = resident.feedback(args[0], "approved"); return {"ok": True, "data": data, "message": f"Approved locally: {data['candidate_id']}. No Technocore post was made."}
+            data = resident.feedback(args[0], "approved"); return {"ok": True, "data": data, "message": f"Trust registered locally for {short_fingerprint(data.get('fingerprint'))}. This candidate was not posted. Future safe candidates from this counterpart may use the trusted Autopilot path. To stage this exact first reply: /reply-approved {data['candidate_id']} SEND"}
+        if action == "/reply-approved" and len(args) == 2:
+            if args[1] != "SEND": return {"ok": False, "error": "confirmation_required", "message": "No intent staged. Use exact uppercase SEND only after review."}
+            data = autopilot.stage_approved_reply(args[0]); return {"ok": True, "data": data, "message": f"STAGED: {data['intent_id']}. Discord did not sign or post; the isolated Signer will process it asynchronously."}
         if action == "/reject" and len(args) == 2:
             data = resident.feedback(args[0], "rejected", args[1]); return {"ok": True, "data": data, "message": f"Rejected locally: {data['candidate_id']}."}
         if action == "/pause": return {"ok": True, "data": resident.pause(True), "message": "Candidate generation paused; observation continues."}
@@ -674,7 +728,7 @@ class Control:
             data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
         if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
         if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot outbox generation resumed locally; Discord cannot publish."}
-        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /status /activity /history [相手ID] /candidate <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
+        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /status /activity /trust-candidates /trusted /history [相手ID] /candidate <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
         if action == "/help-debug": return {"ok": True, "data": {}, "message": "Debug: /resident-status /intel /opportunities /agents /agent <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
 
