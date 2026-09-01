@@ -120,6 +120,10 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     if signals.get("spam_noise_probability", 1) >= 0.20 or signals.get("generic_template_probability", 1) > 0 or signals.get("poetic_filler_count", 0): return False, "generic_or_noise", None
     if not signals.get("concrete_evidence"): return False, "no_public_concrete_evidence", None
     category = candidate.get("category")
+    if category == "specific_question":
+        context = candidate.get("context", {})
+        if not isinstance(context, dict) or not observer.is_question_or_explicit_request(context.get("excerpt")):
+            return False, "specific_question_context_unverified", None
     if category in {"help_request", "specific_question", "technical_collaboration"}: return True, "concrete_public_technical_request", "repo_safety"
     if category == "artifact_contribution": return True, "public_artifact_evidence", "public_contribution"
     if signals.get("conversation_continuity") and signals.get("useful_agent_probability", 0) >= 0.75: return True, "proven_returning_high_quality_agent", "signer_did_nonce"

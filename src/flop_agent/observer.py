@@ -27,7 +27,8 @@ SCHEMA_VERSION = 2
 CONFIG_NAME, STATE_NAME, HEARTBEAT_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer-heartbeat.json", "observer.lock", "observer.log"
 DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 8, "max_agents": 5000, "max_rooms": 200, "max_discovered_rooms": 1000, "state_flush_interval_seconds": 30, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 500, "discovery_max_attempts": 5, "rooms_backfill_interval_seconds": 3600}
 URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.I)
-QUESTION_RE = re.compile(r"[?？]|\b(how|question|please)\b", re.I)
+QUESTION_START_RE = re.compile(r"^\s*(?:how|what|why|when|where|which|who|can|could|would|should|is|are|do|does|did)\b", re.I)
+EXPLICIT_REQUEST_RE = re.compile(r"\b(?:please\s+(?:explain|clarify|describe|help)|can\s+you|could\s+you|would\s+you|help\s+me\s+understand)\b", re.I)
 HELP_RE = re.compile(r"\b(help|assist|stuck)\b", re.I)
 COLLAB_RE = re.compile(r"\b(collab|collaboration|together|looking for|partner)\b", re.I)
 CONTRIBUTION_RE = re.compile(r"\b(contribution|contribute|build|project|feedback|share)\b", re.I)
@@ -35,6 +36,14 @@ CREATED_ROOM_RE = re.compile(r"^created ([a-z0-9][a-z0-9_-]{0,47})$")
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
+
+
+def is_question_or_explicit_request(value: object) -> bool:
+    """Classify actual questions/requests, never a bare noun such as 'question'."""
+    if not isinstance(value, str):
+        return False
+    text = value[:560].strip()
+    return "?" in text or "？" in text or bool(QUESTION_START_RE.search(text) or EXPLICIT_REQUEST_RE.search(text))
 def observer_dir() -> Path: core.STATE.mkdir(exist_ok=True); return core.STATE / "observer"
 def config_path() -> Path: return observer_dir() / CONFIG_NAME
 def state_path() -> Path: return observer_dir() / STATE_NAME
@@ -360,7 +369,7 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     if URL_RE.search(text) or CONTRIBUTION_RE.search(text): metric_event(state, "contribution_candidates", "contribution_candidate", room, message, did)
     if COLLAB_RE.search(text): metric_event(state, "collab_candidates", "collaboration_candidate", room, message, did)
     if HELP_RE.search(text): metric_event(state, "help_candidates", "help_candidate", room, message, did)
-    if QUESTION_RE.search(text): metric_event(state, "questions_detected", "question_candidate", room, message, did)
+    if is_question_or_explicit_request(text): metric_event(state, "questions_detected", "question_candidate", room, message, did)
     for role in ("developer", "researcher", "writer", "designer", "operator"):
         if re.search(rf"\b{role}\b", text, re.I) and role not in inference["role_candidates"]: inference["role_candidates"].append(role)
     for field in ("message_refs", "recent_messages"): del facts[field][:-config["memory_retention"]]

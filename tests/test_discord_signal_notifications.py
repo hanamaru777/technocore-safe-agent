@@ -73,7 +73,7 @@ def test_candidate_message_is_actionable_and_sanitizes_untrusted_content(monkeyp
     assert "あなたのDID宛" in message
     assert "有用度 高" in message
     assert "ノイズ 低" in message
-    assert "次にやること: /candidate c1" in message
+    assert "次にやること: /approve c1" in message
     assert "72%" not in message
 
 
