@@ -17,6 +17,8 @@ URL_RE = re.compile(r"https?://\S+", re.I)
 MENTION_RE = re.compile(r"<@!?&?\d+>|@everyone|@here", re.I)
 DISPLAY_TZ = ZoneInfo(os.environ.get("DISCORD_DISPLAY_TIMEZONE", "Asia/Tokyo"))
 NORMAL_DIGEST_SECONDS = 6 * 60 * 60
+GAP_NOTICE_THRESHOLD = 3
+GAP_NOTICE_COOLDOWN_SECONDS = 60 * 60
 UI_STATE_FILE = "discord-ui-state.json"
 INTERACTION_HISTORY_LIMIT = 1000
 CATEGORY_LABELS = {
@@ -93,6 +95,8 @@ def default_ui_state() -> dict:
         "schema_version": 1,
         "digest_baseline": None,
         "last_gap_count": None,
+        "pending_gap_delta": 0,
+        "last_gap_notice_at": None,
         "last_health_problem": None,
         "interactions": [],
         "notified_interactions": [],
@@ -345,7 +349,7 @@ def history_message(filter_value: str | None = None, limit: int = 5) -> str:
         records = [item for item in records if token in str(item.get("fingerprint", "")).lower() or token in str(item.get("did", "")).lower()]
     records = records[-limit:]
     if not records:
-        return "🧾 最近のやりとり\nまだ直接のやりとり記録はありません。"
+        return "🧾 最近のやりとり\nまだ直接のやりとり記録はありません。\n※監視しただけの他Agent会話は含めず、自分のDIDが関与した直接受信・自動返信だけを記録します。"
     lines = ["🧾 最近のやりとり"]
     for item in records:
         lines.extend([
@@ -437,18 +441,31 @@ class Control:
         ui = load_ui_state(); notices = []
         current_gap = metrics["message_gaps"]
         previous_gap = ui.get("last_gap_count")
+        now = datetime.now(UTC)
         if previous_gap is None:
             ui["last_gap_count"] = current_gap
         elif current_gap > previous_gap:
-            notices.append(
-                "🟡 FLOP Agent 通信欠落を検出\n\n"
-                f"新しいgap: +{current_gap - previous_gap}\n"
-                f"最終監視: {snapshot['last_refresh_age']}\n\n"
-                "次にやること: /status"
-            )
+            ui["pending_gap_delta"] = int(ui.get("pending_gap_delta", 0)) + (current_gap - previous_gap)
             ui["last_gap_count"] = current_gap
         elif current_gap < previous_gap:
             ui["last_gap_count"] = current_gap
+            ui["pending_gap_delta"] = 0
+
+        pending_gap = int(ui.get("pending_gap_delta", 0))
+        last_gap_notice = _parse_time(ui.get("last_gap_notice_at"))
+        if last_gap_notice and last_gap_notice.tzinfo is None:
+            last_gap_notice = last_gap_notice.replace(tzinfo=UTC)
+        cooldown_elapsed = not last_gap_notice or (now - last_gap_notice.astimezone(UTC)).total_seconds() >= GAP_NOTICE_COOLDOWN_SECONDS
+        if pending_gap >= GAP_NOTICE_THRESHOLD and cooldown_elapsed:
+            notices.append(
+                "🟡 FLOP Agent 通信欠落を複数検出\n\n"
+                f"未通知gap: +{pending_gap}\n"
+                f"最終監視: {snapshot['last_refresh_age']}\n"
+                "単発gapは6時間レポートへ集約し、連続時だけ通知しています。\n\n"
+                "次にやること: /status"
+            )
+            ui["pending_gap_delta"] = 0
+            ui["last_gap_notice_at"] = now.isoformat()
 
         problem = " / ".join(snapshot["problems"]) if snapshot["problems"] else None
         previous_problem = ui.get("last_health_problem")
@@ -494,7 +511,9 @@ class Control:
         auto_posts = sum((_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff for item in snapshot["auto_state"].get("rate_history", []))
         interactions = load_ui_state().get("interactions", [])
         direct_received = sum(item.get("direction") == "受信" and (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff for item in interactions)
-        ui["digest_baseline"] = {**current_metrics, "at": datetime.now(UTC).isoformat()}; save_ui_state(ui)
+        ui["digest_baseline"] = {**current_metrics, "at": datetime.now(UTC).isoformat()}
+        ui["pending_gap_delta"] = 0
+        save_ui_state(ui)
         attention = snapshot["critical"] + snapshot["direct"]
         if snapshot["problems"]:
             icon, title, conclusion = "🔴", "異常", "対応が必要です。/status を確認してください。"
