@@ -114,7 +114,7 @@ def test_status_uses_cached_timeline_without_loading_large_observer_state(monkey
 def test_activity_reports_read_only_24h_summary_and_zero_post_reason(monkeypatch, tmp_path):
     setup_state(monkeypatch, tmp_path)
     auto_state = mock_autopilot(monkeypatch)
-    autopilot.audit({"at": datetime.now(UTC).isoformat(), "eligible": False, "why": "sender_not_previously_approved", "action": "ignored"})
+    autopilot.audit({"at": datetime.now(UTC).isoformat(), "source_candidate": "review-only", "eligible": False, "why": "sender_not_previously_approved", "action": "ignored"})
     message = discord_control.Control({"42"}, "99").command("42", "/activity", "99")["message"]
     assert "24時間活動" in message
     assert "自動投稿: 0/6（上限・目標ではありません）" in message
@@ -122,6 +122,28 @@ def test_activity_reports_read_only_24h_summary_and_zero_post_reason(monkeypatch
     assert "初回DIDのためreview-only" in message
     assert "0投稿の理由: 初回DIDのためreview-only" in message
     assert auto_state["outbox"] == {}  # the presentation command never stages or posts
+
+
+def test_activity_dedupes_candidate_audit_and_prefers_block_rate_limit(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    moment = datetime.now(UTC).isoformat()
+    autopilot.audit({"at": moment, "source_candidate": "eligible", "eligible": True, "action": "intent_created"})
+    autopilot.audit({"at": moment, "source_candidate": "ignored", "eligible": False, "why": "sender_not_previously_approved", "action": "ignored"})
+    autopilot.audit({"at": moment, "source_candidate": "ignored", "eligible": False, "why": "candidate_not_pending", "action": "ignored"})
+    autopilot.audit({"at": moment, "source_candidate": "blocked", "eligible": True, "why": "safety_decision", "rate_limit": "daily_limit", "action": "blocked"})
+    activity = discord_control.activity_snapshot()
+    assert (activity["eligible"], activity["ignored"], activity["blocked"]) == (1, 1, 1)
+    assert "24時間上限" in activity["reasons"] and "安全条件により対象外" not in activity["reasons"]
+
+
+def test_audit_reader_keeps_first_line_and_streams_back_to_cutoff(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    monkeypatch.setattr(discord_control, "AUDIT_READ_CHUNK_BYTES", 64)
+    moment = datetime.now(UTC).isoformat()
+    autopilot.audit({"at": moment, "source_candidate": "first", "eligible": True, "action": "intent_created"})
+    autopilot.audit({"at": moment, "source_candidate": "second", "eligible": False, "why": "generic_or_noise", "action": "ignored"})
+    records = discord_control._recent_audit_records(datetime.now(UTC) - timedelta(hours=24))
+    assert {item["source_candidate"] for item in records} == {"first", "second"}
 
 
 def test_history_records_when_who_and_what(monkeypatch, tmp_path):

@@ -120,6 +120,32 @@ def test_history_is_bounded_and_sanitized(monkeypatch, tmp_path):
     assert "[URL省略]" in message
 
 
+def test_mailbox_direct_inbound_is_recorded_without_becoming_an_autopilot_reply(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path)
+    state["candidates"] = {"mail": {"candidate_id": "mail", "status": "pending", "category": "direct_inbound", "fingerprint": "mailbox123456", "did": "did:key:z6MkMailbox", "room": "mb-p-safe", "seq": 7, "created_at": "2026-09-01T00:00:00+00:00", "signals": {}, "context": {"excerpt": "fallback"}}}
+    resident.save_state(state)
+    observed = observer.load_state()
+    observed["agents"]["mailbox123456"] = {"facts": {"recent_messages": [{"room": "mb-p-safe", "seq": 7, "ts": "2026-09-01T00:00:00+00:00", "text": "hello @here https://untrusted.invalid"}]}}
+    observer.save_state(observed)
+    monkeypatch.setattr(autopilot, "load", lambda: {"outbox": {}, "receipts": {}, "rate_history": []})
+    records = discord_control.sync_interactions()
+    assert len(records) == 1 and records[0]["direction"] == "受信"
+    assert "https://untrusted.invalid" not in discord_control.history_message()
+
+
+def test_unicode_invisibles_and_history_are_safe_and_chunkable(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(autopilot, "load", lambda: {"outbox": {}, "receipts": {}})
+    assert "\u202e" not in discord_control.safe_excerpt("x\u202e\u200by\x00z https://bad.invalid @everyone")
+    ui = discord_control.default_ui_state()
+    ui["interactions"] = [{"id": f"out:{number}", "direction": "送信", "at": "2026-09-01T00:00:00+00:00", "fingerprint": "abc123456789", "room": "lobby", "seq": number, "kind": "自動返信", "summary": "x" * 1200, "exact_text": True} for number in range(10)]
+    discord_control.save_ui_state(ui)
+    message = discord_control.history_message()
+    chunks = discord_control.discord_message_chunks(message)
+    assert len(chunks) > 1 and all(len(chunk) <= discord_control.DISCORD_MESSAGE_LIMIT for chunk in chunks)
+    assert "".join(chunks) == message
+
+
 def test_outbound_notice_pairs_sanitized_inbound_with_exact_fixed_reply(monkeypatch, tmp_path):
     state = setup_state(monkeypatch, tmp_path)
     state["candidates"] = {

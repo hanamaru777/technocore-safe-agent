@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -24,7 +25,8 @@ OBSERVER_DEGRADED_NOTICE_SECONDS = 5 * 60
 UI_STATE_FILE = "discord-ui-state.json"
 INTERACTION_HISTORY_LIMIT = 1000
 INTERACTION_DISPLAY_LIMIT = 10
-AUDIT_READ_LIMIT_BYTES = 256 * 1024
+AUDIT_READ_CHUNK_BYTES = 64 * 1024
+DISCORD_MESSAGE_LIMIT = 2000
 CATEGORY_LABELS = {
     "direct_inbound": "直接受信",
     "help_request": "具体的な支援依頼",
@@ -52,8 +54,13 @@ def short(value: object, limit: int = 500) -> str:
 def safe_excerpt(value: object, limit: int = 180) -> str:
     """Render untrusted text for a human without clickable URLs or Discord mentions."""
     text = URL_RE.sub("[URL省略]", str(value))
-    text = MENTION_RE.sub("[mention省略]", text).replace("@", "＠").replace("\n", " ")
-    text = "".join(char for char in text if char >= " " or char in "\t")
+    text = MENTION_RE.sub("[mention省略]", text).replace("@", "＠")
+    text = "".join(
+        " " if unicodedata.category(char) in {"Zl", "Zp", "Zs"}
+        else "" if unicodedata.category(char) in {"Cc", "Cf", "Cs", "Co"}
+        else char
+        for char in text
+    )
     return re.sub(r"\s+", " ", text).strip()[:limit]
 
 
@@ -61,6 +68,26 @@ def short_fingerprint(value: object) -> str:
     """Use a stable, non-identifying shorthand in normal Discord surfaces."""
     text = str(value or "unknown")
     return text[:8] if text else "unknown"
+
+
+def discord_message_chunks(value: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
+    """Split local command output without ever exceeding Discord's message limit."""
+    if limit < 1:
+        raise ValueError("Discord message limit must be positive")
+    chunks: list[str] = []
+    current = ""
+    for line in value.splitlines(keepends=True) or [value]:
+        while line:
+            space = limit - len(current)
+            if space == 0:
+                chunks.append(current); current = ""; space = limit
+            part, line = line[:space], line[space:]
+            current += part
+            if len(current) == limit:
+                chunks.append(current); current = ""
+    if current or not chunks:
+        chunks.append(current)
+    return chunks
 
 
 def _parse_time(value: object) -> datetime | None:
@@ -229,7 +256,7 @@ def sync_interactions() -> list[dict]:
 
     for item in local.get("candidates", {}).values():
         signals = item.get("signals", {})
-        if signals.get("direct_public_signed") is not True:
+        if signals.get("direct_public_signed") is not True and item.get("category") != "direct_inbound":
             continue
         identifier = f"in:{item.get('candidate_id', '')}"
         if identifier in records:
@@ -355,30 +382,47 @@ def _latest_post_at(auto_state: dict) -> str | None:
     return max(values, key=lambda value: _parse_time(value) or datetime.min.replace(tzinfo=UTC), default=None)
 
 
-def _recent_audit_records() -> list[dict]:
-    """Read only a bounded tail of local autopilot audit records for presentation."""
+def _recent_audit_records(cutoff: datetime) -> list[dict]:
+    """Stream backwards to cutoff, retaining one meaningful decision per candidate."""
     path = autopilot.audit_path()
     try:
         if not path.is_file() or path.is_symlink():
             return []
         with path.open("rb") as handle:
-            handle.seek(0, 2)
-            handle.seek(max(0, handle.tell() - AUDIT_READ_LIMIT_BYTES))
-            content = handle.read().decode("utf-8", errors="replace")
+            position = handle.seek(0, 2)
+            remainder = b""
+            decisions: dict[str, dict] = {}
+            while position > 0:
+                size = min(AUDIT_READ_CHUNK_BYTES, position)
+                position -= size
+                handle.seek(position)
+                parts = (handle.read(size) + remainder).split(b"\n")
+                remainder = parts.pop(0) if position else b""
+                if position == 0 and remainder:
+                    parts.insert(0, remainder); remainder = b""
+                for raw in reversed(parts):
+                    try:
+                        item = json.loads(raw.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(item, dict):
+                        continue
+                    at = _parse_time(item.get("at"))
+                    if at is None:
+                        continue
+                    if at <= cutoff:
+                        return list(reversed(list(decisions.values())))
+                    candidate = item.get("source_candidate")
+                    if not isinstance(candidate, str) or not candidate or candidate in decisions:
+                        continue
+                    if item.get("action") not in {"intent_created", "ignored", "blocked"}:
+                        continue
+                    if item.get("action") == "ignored" and item.get("why") == "candidate_not_pending":
+                        continue
+                    decisions[candidate] = item
     except OSError:
         return []
-    rows = content.splitlines()
-    if len(rows) > 1:
-        rows = rows[1:]
-    records = []
-    for row in rows:
-        try:
-            item = json.loads(row)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict) and _parse_time(item.get("at")):
-            records.append(item)
-    return records
+    return list(reversed(list(decisions.values())))
 
 
 def _reason_label(reason: object) -> str:
@@ -405,13 +449,14 @@ def activity_snapshot(*, sync_timeline: bool = True) -> dict:
     posts = [item for item in snapshot["auto_state"].get("rate_history", []) if (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff]
     timeline = sync_interactions() if sync_timeline else load_ui_state().get("interactions", [])
     interactions = [item for item in timeline if isinstance(item, dict) and (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff]
-    audit = [item for item in _recent_audit_records() if (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff]
+    audit = _recent_audit_records(cutoff)
     eligible = [item for item in audit if item.get("action") == "intent_created" and item.get("eligible") is True]
     ignored = [item for item in audit if item.get("action") == "ignored"]
     blocked = [item for item in audit if item.get("action") == "blocked"]
     reasons: dict[str, int] = {}
     for item in [*ignored, *blocked]:
-        label = _reason_label(item.get("why") or item.get("rate_limit"))
+        reason = item.get("rate_limit") if item.get("action") == "blocked" else item.get("why")
+        label = _reason_label(reason)
         reasons[label] = reasons.get(label, 0) + 1
     if not posts:
         if not snapshot["auto"].get("enabled"):
@@ -832,7 +877,8 @@ def main() -> None:
     async def on_message(message):
         if message.author.bot or str(message.channel.id) != channel_id: return
         result = await asyncio.to_thread(control.command, str(message.author.id), message.content, str(message.channel.id))
-        await message.channel.send(result["message"], suppress_embeds=True)
+        for chunk in discord_message_chunks(result["message"]):
+            await message.channel.send(chunk, suppress_embeds=True)
     bot.run(token)
 
 
