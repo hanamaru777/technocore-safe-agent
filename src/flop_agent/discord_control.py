@@ -378,8 +378,21 @@ def _pending_counts(state: dict) -> tuple[int, int]:
 
 
 def _latest_post_at(auto_state: dict) -> str | None:
-    values = [item.get("at") for item in auto_state.get("rate_history", []) if _parse_time(item.get("at"))]
+    values = [item.get("at") for item in filtered_rate_history(auto_state) if _parse_time(item.get("at"))]
     return max(values, key=lambda value: _parse_time(value) or datetime.min.replace(tzinfo=UTC), default=None)
+
+
+def filtered_rate_history(auto_state: dict) -> list[dict]:
+    """Return real activity only; controlled E2E receipts are never user activity."""
+    controlled_fingerprints = {
+        item.get("fingerprint")
+        for item in auto_state.get("outbox", {}).values()
+        if isinstance(item, dict) and _is_controlled_test_intent(item) and item.get("fingerprint")
+    }
+    return [
+        item for item in auto_state.get("rate_history", [])
+        if isinstance(item, dict) and item.get("fingerprint") not in controlled_fingerprints
+    ]
 
 
 def _recent_audit_records(cutoff: datetime) -> list[dict]:
@@ -446,7 +459,7 @@ def activity_snapshot(*, sync_timeline: bool = True) -> dict:
     snapshot = _health_snapshot()
     current = datetime.now(UTC)
     cutoff = current - timedelta(hours=24)
-    posts = [item for item in snapshot["auto_state"].get("rate_history", []) if (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff]
+    posts = [item for item in filtered_rate_history(snapshot["auto_state"]) if (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff]
     timeline = sync_interactions() if sync_timeline else load_ui_state().get("interactions", [])
     interactions = [item for item in timeline if isinstance(item, dict) and (_parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC)) > cutoff]
     audit = _recent_audit_records(cutoff)

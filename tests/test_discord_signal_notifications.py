@@ -111,6 +111,26 @@ def test_status_uses_cached_timeline_without_loading_large_observer_state(monkey
     assert "FLOP Agent" in discord_control.status_message()
 
 
+def test_controlled_e2e_rate_history_is_excluded_from_activity(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    controlled = {"id": "e2e", "category": "controlled_e2e", "fingerprint": "e2e-fp"}
+    auto_state = {"enabled": True, "paused": False, "outbox": {"e2e": controlled}, "receipts": {}, "rate_history": [{"at": datetime.now(UTC).isoformat(), "fingerprint": "e2e-fp", "room": "lobby"}]}
+    monkeypatch.setattr(autopilot, "load", lambda: auto_state)
+    monkeypatch.setattr(autopilot, "status", lambda state=None: {"enabled": True, "paused": False, "queued": 0, "receipts": 1, "migration_complete": True})
+    activity = discord_control.activity_snapshot()
+    assert activity["posts"] == 0 and activity["latest_post"] is None
+    assert "0/6" in discord_control.status_message()
+
+
+def test_real_and_controlled_history_counts_only_real_post(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    auto_state = {"enabled": True, "paused": False, "outbox": {"e2e": {"category": "controlled_e2e", "fingerprint": "e2e-fp"}}, "receipts": {}, "rate_history": [{"at": datetime.now(UTC).isoformat(), "fingerprint": "e2e-fp", "room": "lobby"}, {"at": datetime.now(UTC).isoformat(), "fingerprint": "real-fp", "room": "lobby"}]}
+    monkeypatch.setattr(autopilot, "load", lambda: auto_state)
+    monkeypatch.setattr(autopilot, "status", lambda state=None: {"enabled": True, "paused": False, "queued": 0, "receipts": 2, "migration_complete": True})
+    assert discord_control.activity_snapshot()["posts"] == 1
+    assert "1/6" in discord_control.status_message()
+
+
 def test_activity_reports_read_only_24h_summary_and_zero_post_reason(monkeypatch, tmp_path):
     setup_state(monkeypatch, tmp_path)
     auto_state = mock_autopilot(monkeypatch)
