@@ -95,12 +95,75 @@ def test_status_is_human_first_and_hides_internal_counters(monkeypatch, tmp_path
     setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
     message = discord_control.status_message()
     assert "🟢 FLOP Agent 正常" in message
-    assert "Autopilot: ON / queue 0" in message
+    assert "Autopilot: ON / 直近24h 自動投稿 0/6（上限・目標ではありません）" in message
+    assert "queue: 0 / eligible 0 / ignored 0 / blocked 0" in message
+    assert "0投稿の理由: 対象なし（監視は継続中）" in message
     assert "最終監視:" in message
     assert "結論: 対応不要" in message
     assert "agents=5000" not in message
     assert "pending=" not in message
     assert "gaps=" not in message
+
+
+def test_status_uses_cached_timeline_without_loading_large_observer_state(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    monkeypatch.setattr(observer, "load_state", lambda: (_ for _ in ()).throw(AssertionError("/status must use cached timeline")))
+    assert "FLOP Agent" in discord_control.status_message()
+
+
+def test_controlled_e2e_rate_history_is_excluded_from_activity(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    controlled = {"id": "e2e", "category": "controlled_e2e", "fingerprint": "e2e-fp"}
+    auto_state = {"enabled": True, "paused": False, "outbox": {"e2e": controlled}, "receipts": {}, "rate_history": [{"at": datetime.now(UTC).isoformat(), "fingerprint": "e2e-fp", "room": "lobby"}]}
+    monkeypatch.setattr(autopilot, "load", lambda: auto_state)
+    monkeypatch.setattr(autopilot, "status", lambda state=None: {"enabled": True, "paused": False, "queued": 0, "receipts": 1, "migration_complete": True})
+    activity = discord_control.activity_snapshot()
+    assert activity["posts"] == 0 and activity["latest_post"] is None
+    assert "0/6" in discord_control.status_message()
+
+
+def test_real_and_controlled_history_counts_only_real_post(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    auto_state = {"enabled": True, "paused": False, "outbox": {"e2e": {"category": "controlled_e2e", "fingerprint": "e2e-fp"}}, "receipts": {}, "rate_history": [{"at": datetime.now(UTC).isoformat(), "fingerprint": "e2e-fp", "room": "lobby"}, {"at": datetime.now(UTC).isoformat(), "fingerprint": "real-fp", "room": "lobby"}]}
+    monkeypatch.setattr(autopilot, "load", lambda: auto_state)
+    monkeypatch.setattr(autopilot, "status", lambda state=None: {"enabled": True, "paused": False, "queued": 0, "receipts": 2, "migration_complete": True})
+    assert discord_control.activity_snapshot()["posts"] == 1
+    assert "1/6" in discord_control.status_message()
+
+
+def test_activity_reports_read_only_24h_summary_and_zero_post_reason(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    auto_state = mock_autopilot(monkeypatch)
+    autopilot.audit({"at": datetime.now(UTC).isoformat(), "source_candidate": "review-only", "eligible": False, "why": "sender_not_previously_approved", "action": "ignored"})
+    message = discord_control.Control({"42"}, "99").command("42", "/activity", "99")["message"]
+    assert "24時間活動" in message
+    assert "自動投稿: 0/6（上限・目標ではありません）" in message
+    assert "ignored 1" in message
+    assert "初回DIDのためreview-only" in message
+    assert "0投稿の理由: 初回DIDのためreview-only" in message
+    assert auto_state["outbox"] == {}  # the presentation command never stages or posts
+
+
+def test_activity_dedupes_candidate_audit_and_prefers_block_rate_limit(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    moment = datetime.now(UTC).isoformat()
+    autopilot.audit({"at": moment, "source_candidate": "eligible", "eligible": True, "action": "intent_created"})
+    autopilot.audit({"at": moment, "source_candidate": "ignored", "eligible": False, "why": "sender_not_previously_approved", "action": "ignored"})
+    autopilot.audit({"at": moment, "source_candidate": "ignored", "eligible": False, "why": "candidate_not_pending", "action": "ignored"})
+    autopilot.audit({"at": moment, "source_candidate": "blocked", "eligible": True, "why": "safety_decision", "rate_limit": "daily_limit", "action": "blocked"})
+    activity = discord_control.activity_snapshot()
+    assert (activity["eligible"], activity["ignored"], activity["blocked"]) == (1, 1, 1)
+    assert "24時間上限" in activity["reasons"] and "安全条件により対象外" not in activity["reasons"]
+
+
+def test_audit_reader_keeps_first_line_and_streams_back_to_cutoff(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    monkeypatch.setattr(discord_control, "AUDIT_READ_CHUNK_BYTES", 64)
+    moment = datetime.now(UTC).isoformat()
+    autopilot.audit({"at": moment, "source_candidate": "first", "eligible": True, "action": "intent_created"})
+    autopilot.audit({"at": moment, "source_candidate": "second", "eligible": False, "why": "generic_or_noise", "action": "ignored"})
+    records = discord_control._recent_audit_records(datetime.now(UTC) - timedelta(hours=24))
+    assert {item["source_candidate"] for item in records} == {"first", "second"}
 
 
 def test_history_records_when_who_and_what(monkeypatch, tmp_path):
