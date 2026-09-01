@@ -19,6 +19,7 @@ DISPLAY_TZ = ZoneInfo(os.environ.get("DISCORD_DISPLAY_TIMEZONE", "Asia/Tokyo"))
 NORMAL_DIGEST_SECONDS = 6 * 60 * 60
 GAP_NOTICE_THRESHOLD = 3
 GAP_NOTICE_COOLDOWN_SECONDS = 60 * 60
+OBSERVER_DEGRADED_NOTICE_SECONDS = 5 * 60
 UI_STATE_FILE = "discord-ui-state.json"
 INTERACTION_HISTORY_LIMIT = 1000
 CATEGORY_LABELS = {
@@ -98,6 +99,8 @@ def default_ui_state() -> dict:
         "pending_gap_delta": 0,
         "last_gap_notice_at": None,
         "last_health_problem": None,
+        "observer_degraded_since": None,
+        "observer_degraded_alerted": False,
         "interactions": [],
         "notified_interactions": [],
     }
@@ -467,8 +470,33 @@ class Control:
             ui["pending_gap_delta"] = 0
             ui["last_gap_notice_at"] = now.isoformat()
 
-        problem = " / ".join(snapshot["problems"]) if snapshot["problems"] else None
+        observer_degraded = snapshot["health"] == "degraded"
+        observer_since = _parse_time(ui.get("observer_degraded_since"))
+        observer_alerted = ui.get("observer_degraded_alerted") is True
+        if observer_degraded:
+            if observer_since is None:
+                ui["observer_degraded_since"] = now.isoformat()
+            elif not observer_alerted and (now - observer_since.astimezone(UTC)).total_seconds() >= OBSERVER_DEGRADED_NOTICE_SECONDS:
+                notices.append(
+                    "🔴 FLOP Agent 異常\n\n"
+                    "監視状態 degraded が5分以上継続しています。\n"
+                    f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n"
+                    "次にやること: /status"
+                )
+                ui["observer_degraded_alerted"] = True
+        else:
+            if observer_alerted:
+                notices.append("🟢 FLOP Agent 監視復旧\n\nObserver監視状態が正常へ戻りました。\n結論: 対応不要。そのまま稼働中。")
+            ui["observer_degraded_since"] = None
+            ui["observer_degraded_alerted"] = False
+
+        # A transient Observer read error is handled above.  All other service
+        # health problems remain immediate and retain their existing lifecycle.
+        immediate_problems = [problem for problem in snapshot["problems"] if problem != "監視状態 degraded"]
+        problem = " / ".join(immediate_problems) if immediate_problems else None
         previous_problem = ui.get("last_health_problem")
+        if previous_problem == "監視状態 degraded":
+            previous_problem = None  # legacy state did not distinguish a transient Observer flap
         if problem and problem != previous_problem:
             notices.append(
                 "🔴 FLOP Agent 異常\n\n"
@@ -477,7 +505,10 @@ class Control:
                 "次にやること: /status"
             )
         elif not problem and previous_problem:
-            notices.append("🟢 FLOP Agent 復旧\n\n監視とAutopilotが正常状態へ戻りました。\n結論: 対応不要。そのまま稼働中。")
+            if observer_degraded:
+                notices.append("🟢 FLOP Agent 復旧\n\nサービス状態は復旧しました。Observer監視は継続確認中です。")
+            else:
+                notices.append("🟢 FLOP Agent 復旧\n\n監視とAutopilotが正常状態へ戻りました。\n結論: 対応不要。そのまま稼働中。")
         ui["last_health_problem"] = problem
         save_ui_state(ui)
         return notices
