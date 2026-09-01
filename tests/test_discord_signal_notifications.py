@@ -218,6 +218,39 @@ def test_legacy_health_display_migrates_to_stable_incident_key(monkeypatch, tmp_
     assert discord_control.load_ui_state()["health_incident_keys"] == ["resident_stale"]
 
 
+def test_health_incident_transitions_do_not_emit_partial_recovery(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    control = discord_control.Control({"42"}, "99")
+    mock_autopilot(monkeypatch, paused=True)
+    assert any("Autopilot 一時停止" in notice for notice in control.system_notices())
+
+    mock_autopilot(monkeypatch, enabled=False, paused=True)
+    notices = control.system_notices()
+    assert any("Autopilot OFF" in notice and "🔴 FLOP Agent 異常" in notice for notice in notices)
+    assert not any("🟢 FLOP Agent 復旧" in notice or "対応不要。そのまま稼働中" in notice for notice in notices)
+
+    mock_autopilot(monkeypatch, paused=True)
+    notices = control.system_notices()
+    assert any("Autopilot 一時停止" in notice and "🔴 FLOP Agent 異常" in notice for notice in notices)
+    assert not any("🟢 FLOP Agent 復旧" in notice or "対応不要。そのまま稼働中" in notice for notice in notices)
+
+
+def test_only_final_health_incident_resolution_notifies_recovery(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path)
+    control = discord_control.Control({"42"}, "99")
+    state["daemon"]["last_refresh_at"] = (datetime.now(UTC) - timedelta(minutes=4)).isoformat(); resident.save_state(state)
+    mock_autopilot(monkeypatch, paused=True)
+    assert any("🔴 FLOP Agent 異常" in notice for notice in control.system_notices())
+
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat(); resident.save_state(state)
+    assert not any("🟢 FLOP Agent 復旧" in notice or "対応不要。そのまま稼働中" in notice for notice in control.system_notices())
+
+    mock_autopilot(monkeypatch)
+    notices = control.system_notices()
+    assert len([notice for notice in notices if "🟢 FLOP Agent 復旧" in notice]) == 1
+    assert not control.system_notices()
+
+
 def test_help_keeps_daily_surface_small(monkeypatch, tmp_path):
     setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
     control = discord_control.Control({"42"}, "99")

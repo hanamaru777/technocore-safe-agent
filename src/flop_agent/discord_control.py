@@ -508,9 +508,12 @@ class Control:
             ui["pending_gap_delta"] = 0
             ui["last_gap_notice_at"] = now.isoformat()
 
+        incidents = immediate_health_incidents(snapshot)
+        current_keys = set(incidents)
         observer_degraded = snapshot["health"] == "degraded"
         observer_since = _parse_time(ui.get("observer_degraded_since"))
         observer_alerted = ui.get("observer_degraded_alerted") is True
+        observer_recovered = False
         if observer_degraded:
             if observer_since is None:
                 ui["observer_degraded_since"] = now.isoformat()
@@ -523,15 +526,12 @@ class Control:
                 )
                 ui["observer_degraded_alerted"] = True
         else:
-            if observer_alerted:
-                notices.append("🟢 FLOP Agent 監視復旧\n\nObserver監視状態が正常へ戻りました。\n結論: 対応不要。そのまま稼働中。")
+            observer_recovered = observer_alerted
             ui["observer_degraded_since"] = None
             ui["observer_degraded_alerted"] = False
 
         # A transient Observer read error is handled above. Other service
         # incidents are identified by fixed keys; their display text may age.
-        incidents = immediate_health_incidents(snapshot)
-        current_keys = set(incidents)
         previous_keys = {key for key in ui.get("health_incident_keys", []) if key in HEALTH_INCIDENT_LABELS}
         new_keys = current_keys - previous_keys
         resolved_keys = previous_keys - current_keys
@@ -543,10 +543,11 @@ class Control:
                 f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n"
                 "次にやること: /status"
             )
-        if resolved_keys:
-            resolved = " / ".join(HEALTH_INCIDENT_LABELS[key] for key in sorted(resolved_keys))
-            suffix = "Observer監視は継続確認中です。" if observer_degraded else "結論: 対応不要。そのまま稼働中。"
-            notices.append(f"🟢 FLOP Agent 復旧\n\n{resolved} が復旧しました。\n{suffix}")
+        if (resolved_keys or observer_recovered) and not current_keys and not observer_degraded:
+            if observer_recovered and not resolved_keys:
+                notices.append("🟢 FLOP Agent 監視復旧\n\nObserver監視状態が正常へ戻りました。\n結論: 対応不要。そのまま稼働中。")
+            else:
+                notices.append("🟢 FLOP Agent 復旧\n\n監視とAutopilotが正常状態へ戻りました。\n結論: 対応不要。そのまま稼働中。")
         ui["health_incident_keys"] = sorted(current_keys)
         ui["last_health_problem"] = " / ".join(incidents[key] for key in sorted(current_keys)) or None
         save_ui_state(ui)
