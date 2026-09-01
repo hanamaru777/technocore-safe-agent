@@ -144,13 +144,13 @@ def test_digest_uses_six_hour_deltas_not_cumulative_noise(monkeypatch, tmp_path)
     assert "対応不要。そのまま稼働中" in message
 
 
-def test_new_gap_and_autopilot_problem_are_immediate_once(monkeypatch, tmp_path):
+def test_gap_burst_and_autopilot_problem_are_immediate_once(monkeypatch, tmp_path):
     setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
     control = discord_control.Control({"42"}, "99")
     control.ensure_baseline()
-    observed = observer.load_state(); observed["metrics"]["message_gaps"] = 2; observer.save_state(observed)
+    observed = observer.load_state(); observed["metrics"]["message_gaps"] = 3; observer.save_state(observed)
     notices = control.system_notices()
-    assert any("通信欠落" in notice and "新しいgap: +2" in notice for notice in notices)
+    assert any("通信欠落" in notice and "未通知gap: +3" in notice for notice in notices)
     assert not any("通信欠落" in notice for notice in control.system_notices())
 
     mock_autopilot(monkeypatch, paused=True)
