@@ -33,6 +33,12 @@ CATEGORY_LABELS = {
     "conversation": "署名付き直接リクエスト",
 }
 PRIORITY_LABELS = {"critical": "緊急", "high": "高", "medium": "中", "low": "低"}
+HEALTH_INCIDENT_LABELS = {
+    "autopilot_off": "Autopilot OFF",
+    "autopilot_paused": "Autopilot 一時停止",
+    "resident_stale": "Resident監視遅延",
+    "observer_health_other": "Observer監視異常",
+}
 
 
 def short(value: object, limit: int = 500) -> str:
@@ -99,6 +105,7 @@ def default_ui_state() -> dict:
         "pending_gap_delta": 0,
         "last_gap_notice_at": None,
         "last_health_problem": None,
+        "health_incident_keys": [],
         "observer_degraded_since": None,
         "observer_degraded_alerted": False,
         "interactions": [],
@@ -117,8 +124,25 @@ def load_ui_state() -> dict:
         return default_ui_state()
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         return default_ui_state()
+    legacy_problem = data.get("last_health_problem")
+    has_incident_keys = "health_incident_keys" in data
+    has_observer_incident = "observer_degraded_alerted" in data
     for key, value in default_ui_state().items():
         data.setdefault(key, value)
+    if not has_incident_keys:
+        legacy_text = legacy_problem if isinstance(legacy_problem, str) else ""
+        keys = []
+        if "Autopilot OFF" in legacy_text:
+            keys.append("autopilot_off")
+        elif "Autopilot 一時停止" in legacy_text:
+            keys.append("autopilot_paused")
+        if "最終監視 " in legacy_text:
+            keys.append("resident_stale")
+        if "監視状態 " in legacy_text and "監視状態 degraded" not in legacy_text:
+            keys.append("observer_health_other")
+        data["health_incident_keys"] = keys
+    if not has_observer_incident and legacy_problem == "監視状態 degraded":
+        data["observer_degraded_alerted"] = True
     return data
 
 
@@ -318,6 +342,20 @@ def _health_snapshot() -> dict:
     }
 
 
+def immediate_health_incidents(snapshot: dict) -> dict[str, str]:
+    """Stable incident keys separate notification identity from changing display age."""
+    incidents: dict[str, str] = {}
+    if snapshot["health"] not in {"ok", "degraded"}:
+        incidents["observer_health_other"] = f"監視状態 {snapshot['health']}"
+    if not snapshot["auto"].get("enabled"):
+        incidents["autopilot_off"] = "Autopilot OFF"
+    elif snapshot["auto"].get("paused"):
+        incidents["autopilot_paused"] = "Autopilot 一時停止"
+    if any(problem.startswith("最終監視 ") for problem in snapshot["problems"]):
+        incidents["resident_stale"] = f"最終監視 {snapshot['last_refresh_age']}"
+    return incidents
+
+
 def status_message() -> str:
     snapshot = _health_snapshot()
     interactions = sync_interactions()
@@ -490,26 +528,27 @@ class Control:
             ui["observer_degraded_since"] = None
             ui["observer_degraded_alerted"] = False
 
-        # A transient Observer read error is handled above.  All other service
-        # health problems remain immediate and retain their existing lifecycle.
-        immediate_problems = [problem for problem in snapshot["problems"] if problem != "監視状態 degraded"]
-        problem = " / ".join(immediate_problems) if immediate_problems else None
-        previous_problem = ui.get("last_health_problem")
-        if previous_problem == "監視状態 degraded":
-            previous_problem = None  # legacy state did not distinguish a transient Observer flap
-        if problem and problem != previous_problem:
+        # A transient Observer read error is handled above. Other service
+        # incidents are identified by fixed keys; their display text may age.
+        incidents = immediate_health_incidents(snapshot)
+        current_keys = set(incidents)
+        previous_keys = {key for key in ui.get("health_incident_keys", []) if key in HEALTH_INCIDENT_LABELS}
+        new_keys = current_keys - previous_keys
+        resolved_keys = previous_keys - current_keys
+        if new_keys:
+            problem = " / ".join(incidents[key] for key in sorted(new_keys))
             notices.append(
                 "🔴 FLOP Agent 異常\n\n"
                 f"{problem}\n"
                 f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n"
                 "次にやること: /status"
             )
-        elif not problem and previous_problem:
-            if observer_degraded:
-                notices.append("🟢 FLOP Agent 復旧\n\nサービス状態は復旧しました。Observer監視は継続確認中です。")
-            else:
-                notices.append("🟢 FLOP Agent 復旧\n\n監視とAutopilotが正常状態へ戻りました。\n結論: 対応不要。そのまま稼働中。")
-        ui["last_health_problem"] = problem
+        if resolved_keys:
+            resolved = " / ".join(HEALTH_INCIDENT_LABELS[key] for key in sorted(resolved_keys))
+            suffix = "Observer監視は継続確認中です。" if observer_degraded else "結論: 対応不要。そのまま稼働中。"
+            notices.append(f"🟢 FLOP Agent 復旧\n\n{resolved} が復旧しました。\n{suffix}")
+        ui["health_incident_keys"] = sorted(current_keys)
+        ui["last_health_problem"] = " / ".join(incidents[key] for key in sorted(current_keys)) or None
         save_ui_state(ui)
         return notices
 

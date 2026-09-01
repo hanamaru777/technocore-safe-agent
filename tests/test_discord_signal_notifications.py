@@ -197,6 +197,26 @@ def test_stale_resident_health_remains_immediate(monkeypatch, tmp_path):
     notices = control.system_notices()
     assert any("最終監視" in notice and "🔴 FLOP Agent 異常" in notice for notice in notices)
 
+    state["daemon"]["last_refresh_at"] = (datetime.now(UTC) - timedelta(minutes=5)).isoformat(); resident.save_state(state)
+    assert not any("🔴 FLOP Agent 異常" in notice for notice in control.system_notices())
+
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat(); resident.save_state(state)
+    notices = control.system_notices()
+    assert len([notice for notice in notices if "🟢 FLOP Agent 復旧" in notice]) == 1
+    assert not control.system_notices()
+
+
+def test_legacy_health_display_migrates_to_stable_incident_key(monkeypatch, tmp_path):
+    state = setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
+    state["daemon"]["last_refresh_at"] = (datetime.now(UTC) - timedelta(minutes=4)).isoformat(); resident.save_state(state)
+    legacy = discord_control.default_ui_state()
+    legacy.pop("health_incident_keys")
+    legacy["last_health_problem"] = "最終監視 4分前"
+    discord_control.save_ui_state(legacy)
+    control = discord_control.Control({"42"}, "99")
+    assert not any("🔴 FLOP Agent 異常" in notice for notice in control.system_notices())
+    assert discord_control.load_ui_state()["health_incident_keys"] == ["resident_stale"]
+
 
 def test_help_keeps_daily_surface_small(monkeypatch, tmp_path):
     setup_state(monkeypatch, tmp_path); mock_autopilot(monkeypatch)
