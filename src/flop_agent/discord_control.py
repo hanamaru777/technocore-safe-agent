@@ -504,6 +504,7 @@ def activity_snapshot(*, sync_timeline: bool = True) -> dict:
         "latest_post": _latest_post_at(snapshot["auto_state"]),
         "trusted": trusted_relationships(),
         "trust_candidates": trust_candidates(),
+        "bootstrap_pending": bootstrap_pending_approvals(),
     }
 
 
@@ -527,12 +528,25 @@ def trust_candidates(limit: int = 5) -> list[dict]:
 
 
 def trusted_relationships() -> list[dict]:
-    state = resident.load_state(); rows = []
-    for fingerprint, relationship in state.get("relationships", {}).items():
-        approvals = [item for item in relationship.get("approval_rejection_history", []) if isinstance(item, dict) and item.get("decision") == "approved"]
-        if approvals:
-            rows.append({"fingerprint": fingerprint, "at": max(item.get("at", "") for item in approvals)})
-    return sorted(rows, key=lambda item: item["at"], reverse=True)
+    state = resident.load_state()
+    try: return autopilot.active_trusted_relationships(state, autopilot.load())
+    except RuntimeError: return []
+
+
+def bootstrap_pending_approvals() -> list[dict]:
+    """Approved first contacts still awaiting durable publication; never active trust."""
+    state = resident.load_state()
+    try: auto = autopilot.load()
+    except RuntimeError: auto = autopilot.default_state()
+    pending = []
+    for item in state.get("candidates", {}).values():
+        if item.get("status") != "approved":
+            continue
+        history = state.get("relationships", {}).get(item.get("fingerprint"), {}).get("approval_rejection_history", [])
+        approved = any(isinstance(record, dict) and record.get("candidate_id") == item.get("candidate_id") and record.get("decision") == "approved" for record in history)
+        if approved and not autopilot.durable_publication_at(str(item.get("candidate_id", "")), str(item.get("fingerprint", "")), state, auto):
+            pending.append(item)
+    return pending
 
 
 def trust_candidates_message() -> str:
@@ -546,8 +560,14 @@ def trust_candidates_message() -> str:
 
 def trusted_message() -> str:
     rows = trusted_relationships()
-    if not rows: return "🤝 trusted counterpart: 0\n初回trustは /trust-candidates から確認できます。"
-    return "\n".join([f"🤝 trusted counterpart: {len(rows)}", *[f"- {short_fingerprint(item['fingerprint'])} / approval {human_time(item['at'])}" for item in rows[:5]]])
+    waiting = bootstrap_pending_approvals()
+    lines = [f"🤝 active trusted counterpart: {len(rows)}"]
+    lines.extend(f"- {short_fingerprint(item['fingerprint'])} / active {human_time(item['at'])}" for item in rows[:5])
+    if waiting:
+        lines.append("初回返信待ち: " + ", ".join(short_fingerprint(item.get("fingerprint")) for item in waiting[:3]))
+    elif not rows:
+        lines.append("初回trustは /trust-candidates から確認できます。")
+    return "\n".join(lines)
 
 
 def _health_snapshot() -> dict:
@@ -624,7 +644,7 @@ def status_message() -> str:
         lines.append("主な非投稿理由: " + max(activity["reasons"], key=activity["reasons"].get))
     if activity["zero_reason"]:
         lines.append(f"0投稿の理由: {activity['zero_reason']}")
-    if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and not activity["trusted"] and activity["trust_candidates"]:
+    if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and not activity["trusted"] and (activity["trust_candidates"] or activity["bootstrap_pending"]):
         lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
     if snapshot["problems"]:
         lines.append("異常: " + " / ".join(snapshot["problems"]))
@@ -671,7 +691,7 @@ def activity_message() -> str:
         lines.append("主なblocked/ignored理由: " + max(activity["reasons"], key=activity["reasons"].get))
     if activity["zero_reason"]:
         lines.append(f"0投稿の理由: {activity['zero_reason']}")
-    if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and not activity["trusted"] and activity["trust_candidates"]:
+    if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and not activity["trusted"] and (activity["trust_candidates"] or activity["bootstrap_pending"]):
         lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
     if recent:
         lines.append("直近のやりとり:")
@@ -712,7 +732,7 @@ class Control:
         if action == "/candidate" and len(args) == 1:
             data = resident.candidate(args[0]); return {"ok": True, "data": data, "message": candidate_message(data['candidate'])}
         if action == "/approve" and len(args) == 1:
-            data = resident.feedback(args[0], "approved"); return {"ok": True, "data": data, "message": f"Trust registered locally for {short_fingerprint(data.get('fingerprint'))}. This candidate was not posted. Future safe candidates from this counterpart may use the trusted Autopilot path. To stage this exact first reply: /reply-approved {data['candidate_id']} SEND"}
+            data = resident.feedback(args[0], "approved"); return {"ok": True, "data": data, "message": f"Approval registered locally for {short_fingerprint(data.get('fingerprint'))}. Autonomous write trust is not active yet, and this candidate was not posted. To stage this exact first reply: /reply-approved {data['candidate_id']} SEND. Normal Autopilot trust activates only after this reply is posted and ACKed."}
         if action == "/reply-approved" and len(args) == 2:
             if args[1] != "SEND": return {"ok": False, "error": "confirmation_required", "message": "No intent staged. Use exact uppercase SEND only after review."}
             data = autopilot.stage_approved_reply(args[0]); return {"ok": True, "data": data, "message": f"STAGED: {data['intent_id']}. Discord did not sign or post; the isolated Signer will process it asynchronously."}

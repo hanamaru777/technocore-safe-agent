@@ -3,11 +3,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from flop_agent import autopilot, core, discord_control, observer, resident
+from flop_agent import autopilot, core, discord_control, observer, oracle_signer, resident
 
 
 OWN = "did:key:z6MkOwnBootstrap"
 OTHER = "did:key:z6MkOtherBootstrap"
+SIGNER_DID = "did:key:z6Mk123456789ABCDEFGHJKLMNPQRSTUVWXYZabc"
 
 
 def setup_state(monkeypatch, tmp_path):
@@ -55,10 +56,25 @@ def put_candidate(item):
     resident.save_state(state)
 
 
+def acknowledge_with_existing_oracle_semantics(intent_id):
+    state = autopilot.load()
+    item = state["outbox"][intent_id]
+    exported = autopilot.export_intent(item)
+    text = autopilot.render(item)
+    receipt = {
+        "state": "prepared", "did": SIGNER_DID, "nonce": "123",
+        "text_hash": hashlib.sha256(text.encode()).hexdigest(),
+        "receipt_hash": oracle_signer.receipt_hash(exported, SIGNER_DID, "123", text),
+        "prepared_at": datetime.now(UTC).isoformat(),
+    }
+    oracle_signer.mark_acknowledged(state, {"schema_version": 1, "receipts": {intent_id: receipt}}, exported, receipt)
+
+
 def test_fresh_trust_bootstrap_stages_one_reply_then_unlocks_existing_path(monkeypatch, tmp_path):
     setup_state(monkeypatch, tmp_path)
+    second = candidate("candidate-second", seq=8)
     first = candidate()
-    put_candidate(first)
+    put_candidate(second); put_candidate(first)
     control = discord_control.Control({"operator"}, "channel")
 
     assert "candidate-first" in control.command("operator", "/trust-candidates", "channel")["message"]
@@ -68,7 +84,11 @@ def test_fresh_trust_bootstrap_stages_one_reply_then_unlocks_existing_path(monke
     assert autopilot.load()["outbox"] == {}
     assert autopilot.load()["receipts"] == {}
     assert autopilot.load()["rate_history"] == []
-    assert "otherboo" in control.command("operator", "/trusted", "channel")["message"]
+    assert "active trusted counterpart: 0" in control.command("operator", "/trusted", "channel")["message"]
+    assert "初回返信待ち" in control.command("operator", "/trusted", "channel")["message"]
+    assert "初回trust設定が必要" in control.command("operator", "/activity", "channel")["message"]
+    autopilot.build_outbox()
+    assert autopilot.load()["outbox"] == {}
 
     assert not control.command("operator", "/reply-approved candidate-first send", "channel")["ok"]
     assert autopilot.load()["outbox"] == {}
@@ -76,24 +96,47 @@ def test_fresh_trust_bootstrap_stages_one_reply_then_unlocks_existing_path(monke
     assert staged["ok"] and "STAGED" in staged["message"]
     state = autopilot.load()
     assert len(state["outbox"]) == 1 and state["receipts"] == {}
+    autopilot.build_outbox()
+    assert len(autopilot.load()["outbox"]) == 1
     with pytest.raises(RuntimeError, match="already staged"):
         autopilot.stage_approved_reply("candidate-first")
 
     intent_id = staged["data"]["intent_id"]
-    intent = state["outbox"][intent_id]
-    rendered = autopilot.render(intent)
-    state["receipts"][intent_id] = {"at": datetime.now(UTC).isoformat(), "text_hash": hashlib.sha256(rendered.encode()).hexdigest()}
-    state["rate_history"].append({"at": datetime.now(UTC).isoformat(), "fingerprint": "otherboot", "room": "lobby", "text_hash": hashlib.sha256(rendered.encode()).hexdigest()})
-    autopilot.save(state)
+    acknowledge_with_existing_oracle_semantics(intent_id)
     activity = discord_control.activity_snapshot()
     assert activity["posts"] == 1 and activity["latest_post"]
     assert "nonce" in discord_control.history_message("otherboot")
     assert len(discord_control.trusted_relationships()) == 1
 
-    follow_up = candidate("candidate-follow-up", seq=8)
+    follow_up = candidate("candidate-follow-up", seq=9)
     put_candidate(follow_up)
     autopilot.build_outbox()
     assert any(item["source_candidate_id"] == "candidate-follow-up" for item in autopilot.queue()["outbox"])
+
+
+@pytest.mark.parametrize("terminal", ["ambiguous", "quarantined"])
+def test_terminal_bootstrap_intent_never_activates_counterpart_trust(monkeypatch, tmp_path, terminal):
+    setup_state(monkeypatch, tmp_path)
+    put_candidate(candidate()); put_candidate(candidate("candidate-second", seq=8))
+    control = discord_control.Control({"operator"}, "channel")
+    assert control.command("operator", "/approve candidate-first", "channel")["ok"]
+    intent_id = control.command("operator", "/reply-approved candidate-first SEND", "channel")["data"]["intent_id"]
+    state = autopilot.load(); state["outbox"][intent_id]["status"] = terminal; autopilot.save(state)
+    autopilot.build_outbox()
+    assert len(autopilot.load()["outbox"]) == 1
+    assert discord_control.trusted_relationships() == []
+
+
+def test_manual_published_candidate_is_durable_active_trust(monkeypatch, tmp_path):
+    setup_state(monkeypatch, tmp_path)
+    put_candidate(candidate())
+    resident.feedback("candidate-first", "approved")
+    state = resident.load_state()
+    state["candidates"]["candidate-first"].update({"status": "published", "published_at": datetime.now(UTC).isoformat()})
+    state["published"].append({"candidate_id": "candidate-first", "at": datetime.now(UTC).isoformat(), "permalink": "https://technocore.chat/humans#r/lobby/7"})
+    resident.save_state(state)
+    follow_up = candidate("candidate-follow-up", seq=8)
+    assert autopilot.sender_trusted_for_autopilot(follow_up)
 
 
 @pytest.mark.parametrize("mutate", [
