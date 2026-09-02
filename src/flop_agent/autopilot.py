@@ -174,7 +174,7 @@ def resolve_candidate_topic(value: object) -> tuple[str | None, str]:
         return "did_signature", "candidate_subject_resolved"
     if re.search(r"\b(?:repo|repository|test|bug|pr|pull\s+request|commit)\b", text):
         return "repo_tests_bugs", "candidate_subject_resolved"
-    if re.search(r"\b(?:contribution|artifact)\b", text):
+    if re.search(r"\b(?:contribut(?:ion|ed|e)|artifact)\b", text):
         return "contribution_artifact", "candidate_subject_resolved"
     if re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b", text):
         return "collaboration", "candidate_subject_resolved"
@@ -206,7 +206,16 @@ def reply_semantics_supported(value: object, topic: str) -> bool:
     if topic == "prompt_injection_safety":
         return bool(re.search(r"\b(?:how|what|can|should)\b.*\b(?:prompt\s+injection|suspicious\s+url|unsafe\s+url|command\s+safety)\b", text))
     if topic == "contribution_artifact":
-        return bool(re.search(r"\b(?:how|what|can)\b.*\b(?:contribution|artifact)\b.*\b(?:evidence|public|verif)\b|\bverify\b.*\b(?:contribution|artifact)\b", text))
+        evidence = r"\b(?:contribution|artifact)(?:'s)?\s+(?:artifact\s+)?(?:public\s+)?evidence\b|\b(?:public\s+)?evidence\s+(?:for|of)\s+(?:this\s+)?(?:contribution|artifact)\b"
+        hygiene = r"\b(?:public|independently\s+verif(?:y|iable)|verif(?:y|iable)|credentials?|private\s+configuration)\b"
+        if not re.search(evidence, text):
+            return False
+        if observer.is_question_or_explicit_request(value):
+            return bool(re.search(hygiene, text))
+        # Non-question artifacts are eligible only when the artifact-evidence
+        # hygiene itself is the subject, never from a generic "verify it" or
+        # a contribution footer next to an unrelated domain note.
+        return bool(re.search(r"\b(?:credentials?|private\s+configuration)\b", text))
     if topic == "collaboration":
         return bool(re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b.*\b(?:small|public|testable|artifact|task)\b", text))
     return False
@@ -237,7 +246,7 @@ def incremental_value_supported(value: object, topic: str, category: object = No
     claims = inbound_canonical_claims(value, topic)
     delta = canonical_claim_delta(value, topic)
     primary = set(PRIMARY_REPLY_CLAIMS.get(topic, ()))
-    if category == "artifact_contribution" and primary and primary <= delta:
+    if category == "artifact_contribution" and topic == "contribution_artifact" and primary and primary <= delta:
         return True, "incremental_value_confirmed"
     if primary & claims:
         return False, "redundant_reply"

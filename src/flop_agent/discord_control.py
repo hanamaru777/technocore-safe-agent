@@ -322,6 +322,14 @@ def candidate_excerpt(item: dict) -> str:
     return safe_excerpt((message or {}).get("text", ""), 180)
 
 
+def candidate_context_excerpt(item: dict) -> str:
+    """Show exactly the bounded saved context used by eligibility, safely."""
+    context = item.get("context", {})
+    if not isinstance(context, dict) or not isinstance(context.get("excerpt"), str):
+        return "保存済みcontextなし"
+    return safe_excerpt(context["excerpt"], 560) or "保存済みcontextなし"
+
+
 def candidate_reason(item: dict) -> str:
     signals = item.get("signals", {})
     if signals.get("direct_public_signed") is True:
@@ -361,6 +369,7 @@ def candidate_message(item: dict) -> str:
     excerpt = candidate_excerpt(item)
     if excerpt:
         lines.append(f"要点（抜粋）: {excerpt}")
+    lines.append(f"判定対象全文: {candidate_context_excerpt(item)}")
     if useful is not None or noise is not None:
         parts = []
         if useful is not None:
