@@ -42,7 +42,7 @@ def is_question_or_explicit_request(value: object) -> bool:
     """Classify actual questions/requests, never a bare noun such as 'question'."""
     if not isinstance(value, str):
         return False
-    text = value[:560].strip()
+    text = URL_RE.sub(" ", value[:560]).strip()
     return "?" in text or "？" in text or bool(QUESTION_START_RE.search(text) or EXPLICIT_REQUEST_RE.search(text))
 def observer_dir() -> Path: core.STATE.mkdir(exist_ok=True); return core.STATE / "observer"
 def config_path() -> Path: return observer_dir() / CONFIG_NAME

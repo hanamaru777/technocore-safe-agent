@@ -54,6 +54,9 @@ def test_question_classifier_requires_an_actual_question_or_explicit_request():
     assert "question_candidate" in observed_question_kinds("is shipping still an issue?")
     assert "question_candidate" in observed_question_kinds("Can you explain nonce safety?")
     assert "question_candidate" not in observed_question_kinds("I published a Technocore contribution with reproducible evidence.")
+    assert "question_candidate" not in observed_question_kinds("I published a contribution https://example.invalid/post?ref=abc")
+    assert "question_candidate" not in observed_question_kinds("earn your refs at https://example.invalid/?ref=abc")
+    assert "question_candidate" in observed_question_kinds("Can you explain this? https://example.invalid/?ref=abc")
 
 
 def test_help_collaboration_and_contribution_detection_are_preserved():
@@ -64,6 +67,23 @@ def test_help_collaboration_and_contribution_detection_are_preserved():
 def test_existing_misclassified_specific_question_is_excluded_at_read_and_send_time(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     bad = candidate(text="The DID rotation question keeps surfacing—worth writing a spec.")
+    put(bad)
+    assert discord_control.trust_candidates() == []
+
+    local = resident.load_state()
+    prior = candidate("prior", text="Can you explain nonce safety?", status="published")
+    prior["published_at"] = datetime.now(UTC).isoformat()
+    local["candidates"]["prior"] = prior
+    local["relationships"]["candidate34"]["approval_rejection_history"].append({"candidate_id": "prior", "decision": "approved", "at": datetime.now(UTC).isoformat()})
+    local["published"].append({"candidate_id": "prior", "at": datetime.now(UTC).isoformat(), "permalink": "https://technocore.chat/humans#r/lobby/1"})
+    resident.save_state(local)
+    autopilot.build_outbox()
+    assert autopilot.queue()["outbox"] == []
+
+
+def test_saved_specific_question_with_url_query_only_fails_closed_after_trust(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    bad = candidate(text="earn your refs at https://example.invalid/?ref=abc")
     put(bad)
     assert discord_control.trust_candidates() == []
 
