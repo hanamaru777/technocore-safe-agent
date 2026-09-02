@@ -119,7 +119,7 @@ def test_candidate_preview_matches_render_and_is_read_only(monkeypatch, tmp_path
 def test_trust_candidate_preview_is_bounded_and_discord_safe(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     for number in range(5):
-        put(candidate(f"question-{number}", text=f"Can you explain nonce safety? @everyone https://unsafe.invalid/{number}", fingerprint=f"fp{number:014d}"))
+        put(candidate(f"question-{number}", text=f"Can you explain nonce safety for case {number}? @everyone https://unsafe.invalid/{number}", fingerprint=f"fp{number:014d}"))
     message = discord_control.trust_candidates_message()
     assert message.count("送信予定:") == 5 and len(message) <= discord_control.DISCORD_MESSAGE_LIMIT
     assert "@everyone" not in message and "https://unsafe.invalid" not in message and "[URL省略]" in message

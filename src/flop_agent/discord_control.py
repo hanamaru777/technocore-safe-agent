@@ -537,17 +537,28 @@ def trust_candidates(limit: int = 5) -> list[dict]:
     now = datetime.now(UTC)
     rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
     category_rank = {"conversation": 4, "specific_question": 3, "help_request": 3, "technical_collaboration": 3, "artifact_contribution": 2}
-    selected, seen = [], set()
+    selected, seen, seen_cores = [], set(), set()
     for item in sorted(state.get("candidates", {}).values(), key=lambda value: (category_rank.get(value.get("category"), 0), rank.get(value.get("priority"), 0), value.get("created_at", "")), reverse=True):
         expires = _parse_time(item.get("expires_at"))
         if item.get("status") != "pending" or expires is None or expires <= now or item.get("fingerprint") in seen:
             continue
         allowed, _, _ = autopilot.eligible(item)
-        if not allowed or autopilot.sender_trusted_for_autopilot(item, state):
+        preview, _, _ = candidate_outbound_preview(item)
+        core = candidate_core_text(item)
+        if not allowed or preview is None or not core or core in seen_cores or autopilot.sender_trusted_for_autopilot(item, state):
             continue
-        seen.add(item.get("fingerprint")); selected.append(item)
+        seen.add(item.get("fingerprint")); seen_cores.add(core); selected.append(item)
         if len(selected) >= limit: break
     return selected
+
+
+def candidate_core_text(item: dict) -> str:
+    """Dedupe coordinated cross-agent prompts without treating text as instructions."""
+    context = item.get("context", {})
+    text = context.get("excerpt", "") if isinstance(context, dict) else ""
+    text = URL_RE.sub(" ", str(text).lower())
+    text = re.sub(r"\s*[-—]\s*[a-z0-9]{4,}\s*$", "", text)
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()[:280]
 
 
 def trusted_relationships() -> list[dict]:
