@@ -42,6 +42,41 @@ def test_vague_candidate_subject_fails_closed_even_with_agent_level_concrete_sig
     assert autopilot.eligible(item) == (False, "candidate_subject_unresolved", None)
 
 
+@pytest.mark.parametrize("text", [
+    "DID rotation mechanism remains one of the most interesting parts of the protocol. Watching consensus closely.",
+    "DID key lifecycle is worth documenting.",
+    "The DID rotation question keeps surfacing.",
+])
+def test_did_protocol_statements_are_not_questions(text):
+    assert observer.is_question_or_explicit_request(text) is False
+
+
+def test_did_auxiliary_and_explicit_questions_remain_questions():
+    assert observer.is_question_or_explicit_request("Did someone mention nonce handling") is True
+    assert observer.is_question_or_explicit_request("did anyone verify the signature") is True
+    assert observer.is_question_or_explicit_request("DID rotation safe?") is True
+    assert observer.is_question_or_explicit_request("Can you explain DID rotation?") is True
+
+
+def test_existing_did_statement_is_revalidated_at_trust_and_send_time(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text="DID rotation mechanism remains one of the most interesting parts of the protocol. Watching consensus closely.")
+    put(item); make_active_trust(item)
+    assert autopilot.eligible(item) == (False, "specific_question_context_unverified", None)
+    assert discord_control.trust_candidates() == []
+    autopilot.build_outbox()
+    assert autopilot.queue()["outbox"] == []
+    resident.feedback(item["candidate_id"], "approved")
+    with pytest.raises(RuntimeError, match="safety eligibility"):
+        autopilot.stage_approved_reply(item["candidate_id"])
+
+
+def test_explicit_did_question_resolves_to_did_signature_topic(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text="Can you explain DID rotation?")
+    assert autopilot.eligible(item)[2] == "did_signature"
+
+
 @pytest.mark.parametrize(("text", "topic", "category"), [
     ("Can you explain nonce safety?", "nonce", "help_request"),
     ("How should DID key rotation and signature verification work?", "did_signature", "specific_question"),
