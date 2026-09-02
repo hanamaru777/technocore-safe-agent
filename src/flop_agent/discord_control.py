@@ -372,6 +372,10 @@ def candidate_message(item: dict) -> str:
     lines.append(f"resolved topic: {topic or 'なし'}")
     if reason == "reply_semantics_unsupported":
         lines.append("reply relevance: unsupported（固定replyでは質問内容を十分に回答できないため自動投稿対象外）")
+    elif reason == "redundant_reply":
+        lines.append("reply relevance: redundant（相手が既に固定replyの主要内容を述べているため自動投稿対象外）")
+    elif reason == "no_incremental_value":
+        lines.append("reply relevance: no incremental value（固定replyで新しい有用情報を追加できないため自動投稿対象外）")
     else:
         lines.append(f"safety: {reason}")
     lines.append("送信予定本文: " + (preview if preview is not None else "表示不可（安全条件を満たさないか確認不能）"))
