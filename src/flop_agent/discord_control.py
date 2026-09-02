@@ -331,6 +331,20 @@ def candidate_reason(item: dict) -> str:
     return f"{CATEGORY_LABELS.get(item.get('category'), '対応候補')}として検出"
 
 
+def candidate_outbound_preview(item: dict) -> tuple[str | None, str, str | None]:
+    """Render the exact bootstrap template without touching any local state."""
+    expiry = _parse_time(item.get("expires_at"))
+    if expiry is None or expiry <= datetime.now(UTC):
+        return None, "candidate_expired", None
+    allowed, reason, topic = autopilot.eligible_approved_candidate(item)
+    if not allowed or topic is None:
+        return None, reason, None
+    try:
+        return autopilot.render(autopilot.make_intent(item, topic, reason)), reason, topic
+    except RuntimeError:
+        return None, "preview_unavailable", topic
+
+
 def candidate_message(item: dict) -> str:
     signals = item.get("signals", {})
     useful = signal_label(signals.get("useful_agent_probability"))
@@ -340,6 +354,7 @@ def candidate_message(item: dict) -> str:
         f"{icon} FLOP Agent 確認あり",
         "",
         f"候補理由: {candidate_reason(item)}",
+        f"category: {item.get('category', '不明')} / priority: {item.get('priority', '不明')}",
         f"時刻: {human_time(item.get('created_at'))}",
         f"相手: {item.get('fingerprint', 'unknown')} | {item.get('room', '?')} #{item.get('seq', '?')}",
     ]
@@ -353,7 +368,15 @@ def candidate_message(item: dict) -> str:
         if noise is not None:
             parts.append(f"ノイズ {noise}")
         lines.append("判定: " + " / ".join(parts))
-    lines.extend(["", f"次にやること: /candidate {item.get('candidate_id', '')}"])
+    preview, reason, topic = candidate_outbound_preview(item)
+    lines.append(f"safety: {topic or 'なし'} / {reason}")
+    lines.append("送信予定本文: " + (preview if preview is not None else "表示不可（安全条件を満たさないか確認不能）"))
+    candidate_id = item.get("candidate_id", "")
+    if item.get("status") == "approved":
+        next_step = f"次にやること: /reply-approved {candidate_id} SEND"
+    else:
+        next_step = f"次にやること: /approve {candidate_id}（承認だけでは投稿しません）"
+    lines.extend(["", next_step])
     return "\n".join(lines)
 
 
@@ -554,7 +577,8 @@ def trust_candidates_message() -> str:
     if not rows: return "🤝 trust候補\n現在、safeな初回trust候補はありません。監視は継続中です。"
     lines = ["🤝 初回trust候補（投稿はしません）"]
     for item in rows:
-        lines.extend(["", f"{item.get('candidate_id')} | {short_fingerprint(item.get('fingerprint'))} | {item.get('room')} #{item.get('seq')}", f"{CATEGORY_LABELS.get(item.get('category'), '候補')} / {PRIORITY_LABELS.get(item.get('priority'), '中')}", f"理由: {candidate_reason(item)}", f"要点: {candidate_excerpt(item)}", f"次: /approve {item.get('candidate_id')}"])
+        preview, _, _ = candidate_outbound_preview(item)
+        lines.extend(["", f"{item.get('candidate_id')} | {short_fingerprint(item.get('fingerprint'))} | {item.get('room')} #{item.get('seq')}", f"{CATEGORY_LABELS.get(item.get('category'), '候補')} / {PRIORITY_LABELS.get(item.get('priority'), '中')}", f"理由: {candidate_reason(item)}", f"要点: {safe_excerpt(candidate_excerpt(item), 100)}", f"送信予定: {safe_excerpt(preview, 100) if preview else '詳細は /candidate で確認'}", f"次: /approve {item.get('candidate_id')}"])
     return "\n".join(lines)
 
 
