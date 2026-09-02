@@ -71,10 +71,59 @@ def test_existing_did_statement_is_revalidated_at_trust_and_send_time(monkeypatc
         autopilot.stage_approved_reply(item["candidate_id"])
 
 
-def test_explicit_did_question_resolves_to_did_signature_topic(monkeypatch, tmp_path):
+def test_key_rotation_detail_question_is_not_covered_by_did_signature_template(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     item = candidate(text="Can you explain DID rotation?")
-    assert autopilot.eligible(item)[2] == "did_signature"
+    assert autopilot.eligible(item) == (False, "reply_semantics_unsupported", "did_signature")
+
+
+def test_author_vs_acceptance_proof_candidate_is_revalidated_at_every_gate(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    item = candidate(
+        "8c651022bc30f0b7",
+        text="For record 2897997, can you separate author proof from acceptance proof? The Ed25519 signature can prove the DID signed the bound payload but what public artifact proves acceptance?",
+    )
+    put(item); make_active_trust(item)
+    assert observer.is_question_or_explicit_request(item["context"]["excerpt"]) is True
+    assert autopilot.eligible(item) == (False, "reply_semantics_unsupported", "did_signature")
+    assert discord_control.trust_candidates() == []
+    before_auto, before_resident = copy.deepcopy(autopilot.load()), copy.deepcopy(resident.load_state())
+    preview, reason, topic = discord_control.candidate_outbound_preview(item)
+    assert (preview, reason, topic) == (None, "reply_semantics_unsupported", "did_signature")
+    assert autopilot.load() == before_auto and resident.load_state() == before_resident
+    assert "resolved topic: did_signature" in discord_control.candidate_message(item)
+    assert "reply relevance: unsupported" in discord_control.candidate_message(item)
+    autopilot.build_outbox()
+    assert autopilot.queue()["outbox"] == []
+    resident.feedback(item["candidate_id"], "approved")
+    with pytest.raises(RuntimeError, match="safety eligibility"):
+        autopilot.stage_approved_reply(item["candidate_id"])
+
+
+@pytest.mark.parametrize(("text", "topic"), [
+    ("How do I verify a did:key signature?", "did_signature"),
+    ("What public key verifies this DID signature?", "did_signature"),
+    ("Can you explain nonce reuse safety?", "nonce"),
+])
+def test_supported_question_intent_uses_existing_fixed_template(monkeypatch, tmp_path, text, topic):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text=text)
+    allowed, reason, resolved = autopilot.eligible(item)
+    assert allowed is True and resolved == topic
+    preview, preview_reason, preview_topic = discord_control.candidate_outbound_preview(item)
+    assert (preview_reason, preview_topic) == (reason, topic)
+    assert preview == autopilot.render(autopilot.make_intent(item, topic, reason))
+
+
+@pytest.mark.parametrize("text", [
+    "How does consensus acceptance proof work?",
+    "What does this API response schema mean?",
+])
+def test_unsupported_protocol_semantics_fail_closed(monkeypatch, tmp_path, text):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text=text)
+    allowed, reason, _ = autopilot.eligible(item)
+    assert allowed is False and reason == "reply_semantics_unsupported"
 
 
 @pytest.mark.parametrize(("text", "topic", "category"), [

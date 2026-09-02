@@ -51,7 +51,7 @@ def test_malicious_direct_text_is_not_reflected_and_unsafe_request_is_blocked(mo
 def test_first_contact_is_review_only_and_prior_approval_unlocks_later_autopilot(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     observed, config = observer.default_state(), observer.load_config()
-    first = {"seq": 7, "from": OTHER, "text": f"{OWN} can you help with an API test bug?", "ts": "2026-08-30T00:00:00Z"}
+    first = {"seq": 7, "from": OTHER, "text": f"{OWN} can you help validate this Technocore API response schema?", "ts": "2026-08-30T00:00:00Z"}
     observer.process_message(observed, config, "lobby", first, OWN, None)
     observer.save_state(observed)
     resident.refresh()
@@ -74,7 +74,7 @@ def test_first_contact_is_review_only_and_prior_approval_unlocks_later_autopilot
     resident.save_state(local)
 
     observed = observer.load_state()
-    second = {"seq": 8, "from": OTHER, "text": f"{OWN} follow-up: what should the next test step be?", "ts": "2026-08-30T01:00:00Z"}
+    second = {"seq": 8, "from": OTHER, "text": f"{OWN} follow-up: can you help validate this Technocore API response schema?", "ts": "2026-08-30T01:00:00Z"}
     observer.process_message(observed, config, "lobby", second, OWN, None)
     observer.save_state(observed)
     resident.refresh()

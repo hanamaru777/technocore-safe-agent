@@ -338,7 +338,7 @@ def candidate_outbound_preview(item: dict) -> tuple[str | None, str, str | None]
         return None, "candidate_expired", None
     allowed, reason, topic = autopilot.eligible_approved_candidate(item)
     if not allowed or topic is None:
-        return None, reason, None
+        return None, reason, topic
     try:
         return autopilot.render(autopilot.make_intent(item, topic, reason)), reason, topic
     except RuntimeError:
@@ -369,7 +369,11 @@ def candidate_message(item: dict) -> str:
             parts.append(f"ノイズ {noise}")
         lines.append("判定: " + " / ".join(parts))
     preview, reason, topic = candidate_outbound_preview(item)
-    lines.append(f"safety: {topic or 'なし'} / {reason}")
+    lines.append(f"resolved topic: {topic or 'なし'}")
+    if reason == "reply_semantics_unsupported":
+        lines.append("reply relevance: unsupported（固定replyでは質問内容を十分に回答できないため自動投稿対象外）")
+    else:
+        lines.append(f"safety: {reason}")
     lines.append("送信予定本文: " + (preview if preview is not None else "表示不可（安全条件を満たさないか確認不能）"))
     candidate_id = item.get("candidate_id", "")
     if item.get("status") == "approved":

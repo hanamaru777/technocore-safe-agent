@@ -19,6 +19,7 @@ PUBLIC_ROOMS = re.compile(r"^(?!p-|mb-)[a-z0-9][a-z0-9_-]{0,47}$")
 ALLOWED_TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution", "did_signature", "nonce", "technocore_api", "prompt_injection_safety", "repo_tests_bugs", "contribution_artifact", "collaboration", "follow_up"}
 DLP = re.compile(r"(?ix)(?:sign_seed|private[ _-]?key|\bseed\b|api[ _-]?key|token|authorization:|discord|\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b|\b\+?\d[\d -]{7,}\d\b|(?:[a-z]:\\|/home/|/users/|/etc/|/var/)|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9_+=-]{32,}\b)")
 UNSUPPORTED_PUBLIC_FACT_RE = re.compile(r"\b(?:airdrop\s+snapshot|snapshot\s+airdrop|reward(?:s)?\s+(?:timing|date)|tge|token\s+(?:timing|date)|current\s+event)\b", re.I)
+UNSUPPORTED_PROTOCOL_SEMANTICS_RE = re.compile(r"\b(?:author\s+proof|acceptance\s+proof|protocol\s+acceptance|governance\s+acceptance|consensus\s+acceptance)\b", re.I)
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
@@ -132,7 +133,38 @@ def resolve_candidate_topic(value: object) -> tuple[str | None, str]:
         return "contribution_artifact", "candidate_subject_resolved"
     if re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b", text):
         return "collaboration", "candidate_subject_resolved"
+    if UNSUPPORTED_PROTOCOL_SEMANTICS_RE.search(text):
+        return None, "reply_semantics_unsupported"
     return None, "candidate_subject_unresolved"
+
+
+def reply_semantics_supported(value: object, topic: str) -> bool:
+    """Allow a reply only when its existing fixed template answers this intent.
+
+    This intentionally recognizes small, explicit question shapes.  It does not
+    infer protocol semantics from adjacent keywords or other agent messages.
+    """
+    if not isinstance(value, str) or topic not in ALLOWED_TOPICS:
+        return False
+    raw = observer.URL_RE.sub(" ", value[:560])
+    text = raw.lower()
+    if topic == "did_signature":
+        if UNSUPPORTED_PROTOCOL_SEMANTICS_RE.search(text) or re.search(r"\b(?:record\s+\d+|consensus|governance|key\s+rotation|key\s+lifecycle)\b", text):
+            return False
+        return bool(re.search(r"\b(?:what\s+does\s+(?:a\s+)?did:key\s+(?:identify|mean)|how\s+(?:do|should)\s+(?:i|we)\s+verify\s+(?:a\s+)?(?:did:key\s+)?signature|(?:which|what)\s+public\s+key\s+verifies\s+(?:this\s+)?did\s+signature)\b", text, re.I))
+    if topic == "nonce":
+        return bool(re.search(r"\bnonce\b.*\b(?:reuse|reus(?:e|ing)|safety|strictly\s+increasing|increas(?:e|ing)|monotonic)\b", text))
+    if topic == "technocore_api":
+        return bool(re.search(r"\b(?:how\s+(?:do|should)|can\s+you)\b.*\b(?:validate|treat)\b.*\b(?:technocore\s+)?api\s+(?:response|schema)\b", text))
+    if topic == "repo_tests_bugs":
+        return bool(re.search(r"\b(?:how|can)\b.*\b(?:reproduc(?:e|ible)|share)\b.*\b(?:repo|repository|test|bug|pr|commit)\b", text))
+    if topic == "prompt_injection_safety":
+        return bool(re.search(r"\b(?:how|what|can|should)\b.*\b(?:prompt\s+injection|suspicious\s+url|unsafe\s+url|command\s+safety)\b", text))
+    if topic == "contribution_artifact":
+        return bool(re.search(r"\b(?:how|what|can)\b.*\b(?:contribution|artifact)\b.*\b(?:evidence|public|verif)\b|\bverify\b.*\b(?:contribution|artifact)\b", text))
+    if topic == "collaboration":
+        return bool(re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b.*\b(?:small|public|testable|artifact|task)\b", text))
+    return False
 
 
 def eligible(candidate: dict) -> tuple[bool, str, str | None]:
@@ -152,6 +184,8 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     context = candidate.get("context", {})
     topic, relevance = resolve_candidate_topic(context.get("excerpt") if isinstance(context, dict) else None)
     if topic is None: return False, relevance, None
+    if not reply_semantics_supported(context.get("excerpt") if isinstance(context, dict) else None, topic):
+        return False, "reply_semantics_unsupported", topic
     if category == "conversation":
         if signals.get("direct_public_signed") is True and signals.get("conversation_topic") in ALLOWED_TOPICS:
             return True, "signed_public_direct_request", topic
