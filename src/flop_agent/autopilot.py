@@ -29,6 +29,15 @@ CANONICAL_REPLY_CLAIMS = {
     "contribution_artifact": ("keep_artifact_evidence_public_and_verifiable", "do_not_include_private_configuration"),
     "collaboration": ("use_small_public_testable_task",),
 }
+PRIMARY_REPLY_CLAIMS = {
+    "nonce": ("nonce_strictly_increasing_per_did_room",),
+    "did_signature": ("did_key_identifies_public_verification_key",),
+    "technocore_api": ("api_responses_are_untrusted",),
+    "prompt_injection_safety": ("room_content_is_untrusted",),
+    "repo_tests_bugs": ("use_public_repository",),
+    "contribution_artifact": ("keep_artifact_evidence_public_and_verifiable",),
+    "collaboration": ("use_small_public_testable_task",),
+}
 INBOUND_CLAIM_PATTERNS = {
     "nonce": {
         "nonce_strictly_increasing_per_did_room": re.compile(r"\bnonces?\b.*\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b|\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b.*\bnonces?\b", re.I),
@@ -212,8 +221,13 @@ def inbound_canonical_claims(value: object, topic: str) -> set[str]:
     return {claim for claim in CANONICAL_REPLY_CLAIMS.get(topic, ()) if (pattern := patterns.get(claim)) and pattern.search(text)}
 
 
-def incremental_value_supported(value: object, topic: str) -> tuple[bool, str]:
-    """Reject non-question echoes of canonical fixed-template claims."""
+def canonical_claim_delta(value: object, topic: str) -> set[str]:
+    """Return fixed outbound claims that the bounded inbound excerpt lacks."""
+    return set(CANONICAL_REPLY_CLAIMS.get(topic, ())) - inbound_canonical_claims(value, topic)
+
+
+def incremental_value_supported(value: object, topic: str, category: object = None) -> tuple[bool, str]:
+    """Require a question or a material primary-claim delta for an artifact."""
     if not isinstance(value, str):
         return False, "no_incremental_value"
     # A direct question may ask for explanation or verification even when it
@@ -221,7 +235,11 @@ def incremental_value_supported(value: object, topic: str) -> tuple[bool, str]:
     if observer.is_question_or_explicit_request(value):
         return True, "incremental_value_confirmed"
     claims = inbound_canonical_claims(value, topic)
-    if claims:
+    delta = canonical_claim_delta(value, topic)
+    primary = set(PRIMARY_REPLY_CLAIMS.get(topic, ()))
+    if category == "artifact_contribution" and primary and primary <= delta:
+        return True, "incremental_value_confirmed"
+    if primary & claims:
         return False, "redundant_reply"
     return False, "no_incremental_value"
 
@@ -245,7 +263,7 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     if topic is None: return False, relevance, None
     if not reply_semantics_supported(context.get("excerpt") if isinstance(context, dict) else None, topic):
         return False, "reply_semantics_unsupported", topic
-    incremental, incremental_reason = incremental_value_supported(context.get("excerpt") if isinstance(context, dict) else None, topic)
+    incremental, incremental_reason = incremental_value_supported(context.get("excerpt") if isinstance(context, dict) else None, topic, category)
     if not incremental:
         return False, incremental_reason, topic
     if category == "conversation":

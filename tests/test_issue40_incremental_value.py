@@ -64,6 +64,14 @@ def test_complete_nonce_echo_is_redundant(monkeypatch, tmp_path):
     assert autopilot.eligible(item) == (False, "redundant_reply", "nonce")
 
 
+def test_partial_primary_nonce_overlap_is_redundant_even_when_secondary_is_missing(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text="A contribution says the nonce must remain strictly increasing.", category="artifact_contribution")
+    assert autopilot.inbound_canonical_claims(item["context"]["excerpt"], "nonce") == {"nonce_strictly_increasing_per_did_room"}
+    assert autopilot.canonical_claim_delta(item["context"]["excerpt"], "nonce") == {"nonce_no_reuse_after_success"}
+    assert autopilot.eligible(item) == (False, "redundant_reply", "nonce")
+
+
 @pytest.mark.parametrize(("text", "topic"), [
     ("Can you explain nonce reuse safety?", "nonce"),
     ("How do I verify a did:key signature?", "did_signature"),
@@ -76,9 +84,19 @@ def test_genuine_question_has_incremental_fixed_reply(monkeypatch, tmp_path, tex
     assert discord_control.candidate_outbound_preview(item) == (autopilot.render(autopilot.make_intent(item, topic, reason)), reason, topic)
 
 
-def test_artifact_nonce_echo_is_rejected_but_explicit_artifact_question_can_pass(monkeypatch, tmp_path):
+def test_artifact_nonce_echo_is_rejected_but_nonquestion_primary_delta_and_explicit_question_can_pass(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     echo = candidate(text="I published a contribution about keeping nonces strictly increasing.", category="artifact_contribution")
     assert autopilot.eligible(echo) == (False, "redundant_reply", "nonce")
+    delta = candidate("artifact-delta", text="I published a contribution about nonce reuse safety.", category="artifact_contribution")
+    assert autopilot.inbound_canonical_claims(delta["context"]["excerpt"], "nonce") == set()
+    assert autopilot.canonical_claim_delta(delta["context"]["excerpt"], "nonce") == set(autopilot.CANONICAL_REPLY_CLAIMS["nonce"])
+    assert autopilot.eligible(delta)[0] is True
     question = candidate("artifact-question", text="Can you verify this contribution artifact's public evidence?", category="artifact_contribution")
     assert autopilot.eligible(question)[0] is True
+
+
+def test_artifact_self_promotion_without_semantic_coverage_stays_blocked(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text="I published a contribution artifact.", category="artifact_contribution")
+    assert autopilot.eligible(item) == (False, "reply_semantics_unsupported", "contribution_artifact")
