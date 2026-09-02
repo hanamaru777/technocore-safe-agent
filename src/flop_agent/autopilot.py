@@ -162,7 +162,7 @@ def is_explicit_agent_use_case_question(value: object) -> bool:
     if not isinstance(value, str):
         return False
     text = observer.URL_RE.sub(" ", value[:560]).strip()
-    return bool(re.search(r"(?:^|[.!—-]\s*)what(?:'s|\s+is)\s+your\s+use\s+case\s*\?\s*$", text, re.I))
+    return bool(re.search(r"(?:^|[\s.!—-])what(?:'s|\s+is)\s+your\s+use\s+case\s*\?\s*$", text, re.I))
 
 
 def resolve_candidate_topic(value: object) -> tuple[str | None, str]:
@@ -173,8 +173,6 @@ def resolve_candidate_topic(value: object) -> tuple[str | None, str]:
     text = raw.lower()
     if UNSUPPORTED_PUBLIC_FACT_RE.search(text):
         return None, "unsupported_public_fact"
-    if is_explicit_agent_use_case_question(raw):
-        return "agent_use_case", "candidate_subject_resolved"
     if re.search(r"\b(?:prompt\s+injection|suspicious\s+url|unsafe\s+url|command\s+safety)\b", text):
         return "prompt_injection_safety", "candidate_subject_resolved"
     if re.search(r"\btechnocore\s+api\b|\bapi\s+(?:schema|endpoint|response)\b", text):
@@ -285,7 +283,12 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
         if not isinstance(context, dict) or not observer.is_question_or_explicit_request(context.get("excerpt")):
             return False, "specific_question_context_unverified", None
     context = candidate.get("context", {})
-    topic, relevance = resolve_candidate_topic(context.get("excerpt") if isinstance(context, dict) else None)
+    if category == "conversation" and signals.get("conversation_topic") == "agent_use_case":
+        if signals.get("direct_public_signed") is not True:
+            return False, "conversation_not_verified", None
+        topic, relevance = "agent_use_case", "candidate_subject_resolved"
+    else:
+        topic, relevance = resolve_candidate_topic(context.get("excerpt") if isinstance(context, dict) else None)
     if topic is None: return False, relevance, None
     if not reply_semantics_supported(context.get("excerpt") if isinstance(context, dict) else None, topic):
         return False, "reply_semantics_unsupported", topic

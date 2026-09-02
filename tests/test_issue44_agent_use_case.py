@@ -3,12 +3,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from flop_agent import autopilot, autopilot_transport, core, discord_control, observer, resident
+from flop_agent import autopilot, autopilot_transport, conversation_planner, core, discord_control, observer, resident
+
+
+OWN = "did:key:z6MkOwnIssue44"
+OTHER = "did:key:z6MkOtherIssue44"
 
 
 def setup(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     observer.atomic_json_write(observer.config_path(), observer.DEFAULT_CONFIG)
+    (tmp_path / "verified-did.json").write_text('{"did": "' + OWN + '"}', encoding="utf-8")
     local = resident.default_state()
     local["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat()
     resident.save_state(local)
@@ -36,12 +41,19 @@ def put(item):
     resident.save_state(state)
 
 
+def direct_candidate(text: str):
+    plan = conversation_planner.plan(room="lobby", sender_did=OTHER, signed=True, own_did=OWN, text=f"{OWN} {text}")
+    assert plan == {"topic": "agent_use_case", "category": "conversation", "safety_decision": "signed_public_direct_request"}
+    item = candidate("direct-use-case", text=f"{OWN} {text}")
+    item.update({"did": OTHER, "category": plan["category"], "why": "signed public direct request mapped to an allowlisted topic", "safety_decision": plan["safety_decision"]})
+    item["signals"] = {"direct_public_signed": True, "conversation_topic": plan["topic"], "facts": {"inbound_to_us": False}}
+    return item
+
+
 @pytest.mark.parametrize("text", ["what's your use case?", "what is your use case?"])
-def test_explicit_agent_use_case_question_resolves_and_has_fixed_profile_reply(monkeypatch, tmp_path, text):
+def test_direct_signed_own_did_use_case_question_has_fixed_profile_reply(monkeypatch, tmp_path, text):
     setup(monkeypatch, tmp_path)
-    item = candidate(text=text)
-    assert autopilot.resolve_candidate_topic(text) == ("agent_use_case", "candidate_subject_resolved")
-    assert autopilot.reply_semantics_supported(text, "agent_use_case") is True
+    item = direct_candidate(text)
     allowed, reason, topic = autopilot.eligible(item)
     assert (allowed, topic) == (True, "agent_use_case")
     intent = autopilot.make_intent(item, topic, reason)
@@ -53,16 +65,58 @@ def test_explicit_agent_use_case_question_resolves_and_has_fixed_profile_reply(m
     assert autopilot_transport.validate_intent(autopilot.export_intent(intent))["topic"] == "agent_use_case"
 
 
-def test_production_ee56_equivalent_is_eligible_with_read_only_preview(monkeypatch, tmp_path):
+def test_direct_first_contact_is_human_gated_and_preview_is_read_only(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
-    item = candidate()
+    item = direct_candidate("what's your use case?")
     put(item)
     before_auto, before_resident = copy.deepcopy(autopilot.load()), copy.deepcopy(resident.load_state())
-    assert autopilot.eligible(item) == (True, "concrete_public_technical_request", "agent_use_case")
+    assert autopilot.eligible(item) == (True, "signed_public_direct_request", "agent_use_case")
     assert discord_control.trust_candidates() == [item]
     preview, reason, topic = discord_control.candidate_outbound_preview(item)
     assert preview == autopilot.render(autopilot.make_intent(item, topic, reason))
     assert autopilot.load() == before_auto and resident.load_state() == before_resident
+    autopilot.build_outbox()
+    assert autopilot.queue()["outbox"] == []
+    resident.feedback(item["candidate_id"], "approved")
+    assert autopilot.queue()["outbox"] == []
+
+
+def test_direct_signed_own_did_message_generates_conversation_candidate(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    observed, config = observer.default_state(), observer.load_config()
+    message = {"seq": 44, "from": OTHER, "text": f"{OWN} what's your use case?", "ts": datetime.now(UTC).isoformat()}
+    observer.process_message(observed, config, "lobby", message, OWN, None)
+    observer.save_state(observed)
+    resident.refresh()
+    rows = [item for item in resident.load_state()["candidates"].values() if item.get("category") == "conversation"]
+    assert len(rows) == 1
+    item = rows[0]
+    assert item["signals"]["direct_public_signed"] is True
+    assert item["signals"]["conversation_topic"] == "agent_use_case"
+    assert autopilot.eligible(item) == (True, "signed_public_direct_request", "agent_use_case")
+    autopilot.build_outbox()
+    assert autopilot.queue()["outbox"] == []
+
+
+def test_production_ee56_equivalent_is_undirected_and_cannot_stage(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    item = candidate()
+    put(item)
+    assert autopilot.eligible(item) == (False, "candidate_subject_unresolved", None)
+    assert discord_control.trust_candidates() == []
+    resident.feedback(item["candidate_id"], "approved")
+    with pytest.raises(RuntimeError, match="safety eligibility"):
+        autopilot.stage_approved_reply(item["candidate_id"])
+
+
+@pytest.mark.parametrize("text", [
+    "what's your use case?",
+    "what is your use case?",
+])
+def test_use_case_question_requires_signed_public_own_did_address(text):
+    assert conversation_planner.plan(room="lobby", sender_did=OTHER, signed=True, own_did=OWN, text=text) is None
+    assert conversation_planner.plan(room="lobby", sender_did=OTHER, signed=True, own_did=OWN, text=f"did:key:z6MkOther {text}") is None
+    assert conversation_planner.plan(room="lobby", sender_did=OTHER, signed=True, own_did=OWN, text=f"@other_agent {text}") is None
 
 
 @pytest.mark.parametrize("text", [
@@ -78,5 +132,6 @@ def test_production_ee56_equivalent_is_eligible_with_read_only_preview(monkeypat
 def test_generic_third_party_protocol_and_unsupported_agent_questions_fail_closed(monkeypatch, tmp_path, text):
     setup(monkeypatch, tmp_path)
     item = candidate(text=text)
-    assert autopilot.resolve_candidate_topic(text)[0] != "agent_use_case"
+    plan = conversation_planner.plan(room="lobby", sender_did=OTHER, signed=True, own_did=OWN, text=f"{OWN} {text}")
+    assert plan is None or plan["topic"] != "agent_use_case"
     assert autopilot.eligible(item)[0] is False

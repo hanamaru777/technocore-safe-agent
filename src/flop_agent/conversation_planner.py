@@ -12,7 +12,9 @@ PUBLIC_ROOM = re.compile(r"^(?!p-|mb-)[a-z0-9][a-z0-9_-]{0,47}$")
 TOPICS = {
     "did_signature", "nonce", "technocore_api", "prompt_injection_safety",
     "repo_tests_bugs", "contribution_artifact", "collaboration", "follow_up",
+    "agent_use_case",
 }
+AGENT_USE_CASE_QUESTION = re.compile(r"^\s*what(?:'s|\s+is)\s+your\s+use\s+case\s*\?\s*$", re.I)
 
 # Unsafe requests are not conversation opportunities.  These patterns are only
 # routing guards; no matched text is retained or reflected.
@@ -45,6 +47,8 @@ def plan(*, room: str, sender_did: str, signed: bool, text: str, own_did: str | 
     # The public DID is an address marker, not conversation subject matter.
     # Excluding it avoids routing every direct message to the DID template.
     text = text.replace(own_did, "")
+    if AGENT_USE_CASE_QUESTION.fullmatch(text):
+        return {"topic": "agent_use_case", "category": "conversation", "safety_decision": "signed_public_direct_request"}
     for topic, pattern in TOPIC_PATTERNS:
         if pattern.search(text):
             return {"topic": topic, "category": "conversation", "safety_decision": "signed_public_direct_request"}
