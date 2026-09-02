@@ -20,6 +20,42 @@ ALLOWED_TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution", "did
 DLP = re.compile(r"(?ix)(?:sign_seed|private[ _-]?key|\bseed\b|api[ _-]?key|token|authorization:|discord|\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b|\b\+?\d[\d -]{7,}\d\b|(?:[a-z]:\\|/home/|/users/|/etc/|/var/)|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9_+=-]{32,}\b)")
 UNSUPPORTED_PUBLIC_FACT_RE = re.compile(r"\b(?:airdrop\s+snapshot|snapshot\s+airdrop|reward(?:s)?\s+(?:timing|date)|tge|token\s+(?:timing|date)|current\s+event)\b", re.I)
 UNSUPPORTED_PROTOCOL_SEMANTICS_RE = re.compile(r"\b(?:author\s+proof|acceptance\s+proof|protocol\s+acceptance|governance\s+acceptance|consensus\s+acceptance)\b", re.I)
+CANONICAL_REPLY_CLAIMS = {
+    "nonce": ("nonce_strictly_increasing_per_did_room", "nonce_no_reuse_after_success"),
+    "did_signature": ("did_key_identifies_public_verification_key", "verify_signature_with_official_tooling"),
+    "technocore_api": ("api_responses_are_untrusted", "validate_documented_response_schema"),
+    "prompt_injection_safety": ("room_content_is_untrusted", "do_not_execute_or_follow_untrusted_content"),
+    "repo_tests_bugs": ("use_public_repository", "share_verifiable_public_evidence"),
+    "contribution_artifact": ("keep_artifact_evidence_public_and_verifiable", "do_not_include_private_configuration"),
+    "collaboration": ("use_small_public_testable_task",),
+}
+INBOUND_CLAIM_PATTERNS = {
+    "nonce": {
+        "nonce_strictly_increasing_per_did_room": re.compile(r"\bnonces?\b.*\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b|\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b.*\bnonces?\b", re.I),
+        "nonce_no_reuse_after_success": re.compile(r"\b(?:do\s+not|don't|never)\s+reuse\b.*\bnonces?\b|\bnonces?\b.*\b(?:do\s+not|don't|never)\s+reuse\b", re.I),
+    },
+    "did_signature": {
+        "did_key_identifies_public_verification_key": re.compile(r"\bdid:key\b.*\b(?:public\s+)?verification\s+key\b|\bpublic\s+verification\s+key\b.*\bdid:key\b", re.I),
+        "verify_signature_with_official_tooling": re.compile(r"\bverify\b.*\bsignature\b.*\bofficial\b|\bofficial\b.*\b(?:tooling|tool)\b.*\bverify\b", re.I),
+    },
+    "technocore_api": {
+        "api_responses_are_untrusted": re.compile(r"\b(?:technocore\s+)?api\s+responses?\b.*\buntrusted\b|\buntrusted\b.*\b(?:technocore\s+)?api\s+responses?\b", re.I),
+        "validate_documented_response_schema": re.compile(r"\bvalidate\b.*\b(?:documented\s+)?(?:response\s+)?schema\b", re.I),
+    },
+    "prompt_injection_safety": {
+        "room_content_is_untrusted": re.compile(r"\broom\s+(?:messages?|content)\b.*\buntrusted\b|\buntrusted\b.*\broom\s+(?:messages?|content)\b", re.I),
+        "do_not_execute_or_follow_untrusted_content": re.compile(r"\b(?:do\s+not|don't|never)\b.*\b(?:run\s+commands?|follow\s+urls?)\b", re.I),
+    },
+    "repo_tests_bugs": {
+        "use_public_repository": re.compile(r"\bpublic\s+repository\b", re.I),
+        "share_verifiable_public_evidence": re.compile(r"\b(?:verifiable|independently\s+verifiable)\s+public\s+evidence\b", re.I),
+    },
+    "contribution_artifact": {
+        "keep_artifact_evidence_public_and_verifiable": re.compile(r"\b(?:contribution|artifact)\s+evidence\b.*\b(?:public|verifiable)\b", re.I),
+        "do_not_include_private_configuration": re.compile(r"\b(?:do\s+not|don't|never)\b.*\b(?:credentials?|private\s+configuration)\b", re.I),
+    },
+    "collaboration": {"use_small_public_testable_task": re.compile(r"\bsmall\s+public\s+testable\s+task\b", re.I)},
+}
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
@@ -120,7 +156,7 @@ def resolve_candidate_topic(value: object) -> tuple[str | None, str]:
         return "prompt_injection_safety", "candidate_subject_resolved"
     if re.search(r"\btechnocore\s+api\b|\bapi\s+(?:schema|endpoint|response)\b", text):
         return "technocore_api", "candidate_subject_resolved"
-    if re.search(r"\bnonce\b", text):
+    if re.search(r"\bnonces?\b", text):
         return "nonce", "candidate_subject_resolved"
     # ``did`` is also an ordinary English past-tense verb.  Treat the protocol
     # identifier as the conventional uppercase acronym (or ``did:key``), while
@@ -153,7 +189,7 @@ def reply_semantics_supported(value: object, topic: str) -> bool:
             return False
         return bool(re.search(r"\b(?:what\s+does\s+(?:a\s+)?did:key\s+(?:identify|mean)|how\s+(?:do|should)\s+(?:i|we)\s+verify\s+(?:a\s+)?(?:did:key\s+)?signature|(?:which|what)\s+public\s+key\s+verifies\s+(?:this\s+)?did\s+signature)\b", text, re.I))
     if topic == "nonce":
-        return bool(re.search(r"\bnonce\b.*\b(?:reuse|reus(?:e|ing)|safety|strictly\s+increasing|increas(?:e|ing)|monotonic)\b", text))
+        return bool(re.search(r"\bnonces?\b.*\b(?:reuse|reus(?:e|ing)|safety|strictly\s+increasing|increas(?:e|ing)|monotonic)\b", text))
     if topic == "technocore_api":
         return bool(re.search(r"\b(?:how\s+(?:do|should)|can\s+you)\b.*\b(?:validate|treat)\b.*\b(?:technocore\s+)?api\s+(?:response|schema)\b", text))
     if topic == "repo_tests_bugs":
@@ -165,6 +201,29 @@ def reply_semantics_supported(value: object, topic: str) -> bool:
     if topic == "collaboration":
         return bool(re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b.*\b(?:small|public|testable|artifact|task)\b", text))
     return False
+
+
+def inbound_canonical_claims(value: object, topic: str) -> set[str]:
+    """Extract only known fixed-template claims from a bounded untrusted excerpt."""
+    if not isinstance(value, str):
+        return set()
+    text = observer.URL_RE.sub(" ", value[:560])
+    patterns = INBOUND_CLAIM_PATTERNS.get(topic, {})
+    return {claim for claim in CANONICAL_REPLY_CLAIMS.get(topic, ()) if (pattern := patterns.get(claim)) and pattern.search(text)}
+
+
+def incremental_value_supported(value: object, topic: str) -> tuple[bool, str]:
+    """Reject non-question echoes of canonical fixed-template claims."""
+    if not isinstance(value, str):
+        return False, "no_incremental_value"
+    # A direct question may ask for explanation or verification even when it
+    # repeats a term from the answer; do not mistake that request for a claim.
+    if observer.is_question_or_explicit_request(value):
+        return True, "incremental_value_confirmed"
+    claims = inbound_canonical_claims(value, topic)
+    if claims:
+        return False, "redundant_reply"
+    return False, "no_incremental_value"
 
 
 def eligible(candidate: dict) -> tuple[bool, str, str | None]:
@@ -186,6 +245,9 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     if topic is None: return False, relevance, None
     if not reply_semantics_supported(context.get("excerpt") if isinstance(context, dict) else None, topic):
         return False, "reply_semantics_unsupported", topic
+    incremental, incremental_reason = incremental_value_supported(context.get("excerpt") if isinstance(context, dict) else None, topic)
+    if not incremental:
+        return False, incremental_reason, topic
     if category == "conversation":
         if signals.get("direct_public_signed") is True and signals.get("conversation_topic") in ALLOWED_TOPICS:
             return True, "signed_public_direct_request", topic
