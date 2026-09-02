@@ -77,6 +77,25 @@ def test_genuine_contribution_evidence_questions_pass(monkeypatch, tmp_path, tex
     assert discord_control.candidate_outbound_preview(item) == (autopilot.render(autopilot.make_intent(item, topic, reason)), reason, topic)
 
 
+@pytest.mark.parametrize("text", [
+    "This contribution's artifact evidence is not public yet.",
+    "This contribution's artifact evidence excludes private configuration.",
+])
+def test_nonquestion_publication_hygiene_with_primary_delta_passes(monkeypatch, tmp_path, text):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text=text)
+    assert autopilot.reply_semantics_supported(item["context"]["excerpt"], "contribution_artifact") is True
+    assert "keep_artifact_evidence_public_and_verifiable" in autopilot.canonical_claim_delta(item["context"]["excerpt"], "contribution_artifact")
+    assert autopilot.eligible(item)[0] is True
+
+
+def test_nonquestion_verifiable_evidence_passes_semantics_then_primary_gate(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    item = candidate(text="The artifact evidence still needs to be independently verifiable.")
+    assert autopilot.reply_semantics_supported(item["context"]["excerpt"], "contribution_artifact") is True
+    assert autopilot.eligible(item) == (False, "redundant_reply", "contribution_artifact")
+
+
 def test_candidate_shows_saved_bounded_context_safely_and_read_only(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     text = "How should I publish contribution evidence so others can independently verify it? @everyone https://unsafe.invalid/\u200b" + " x" * 110

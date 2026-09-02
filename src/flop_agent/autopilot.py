@@ -60,7 +60,7 @@ INBOUND_CLAIM_PATTERNS = {
         "share_verifiable_public_evidence": re.compile(r"\b(?:verifiable|independently\s+verifiable)\s+public\s+evidence\b", re.I),
     },
     "contribution_artifact": {
-        "keep_artifact_evidence_public_and_verifiable": re.compile(r"\b(?:contribution|artifact)\s+evidence\b.*\b(?:public|verifiable)\b", re.I),
+        "keep_artifact_evidence_public_and_verifiable": re.compile(r"\b(?:contribution|artifact)(?:'s)?\s+(?:artifact\s+)?evidence\b(?:(?!\bnot\s+public\b).){0,96}\b(?:public|independently\s+verifiable|verifiable)\b", re.I),
         "do_not_include_private_configuration": re.compile(r"\b(?:do\s+not|don't|never)\b.*\b(?:credentials?|private\s+configuration)\b", re.I),
     },
     "collaboration": {"use_small_public_testable_task": re.compile(r"\bsmall\s+public\s+testable\s+task\b", re.I)},
@@ -208,14 +208,15 @@ def reply_semantics_supported(value: object, topic: str) -> bool:
     if topic == "contribution_artifact":
         evidence = r"\b(?:contribution|artifact)(?:'s)?\s+(?:artifact\s+)?(?:public\s+)?evidence\b|\b(?:public\s+)?evidence\s+(?:for|of)\s+(?:this\s+)?(?:contribution|artifact)\b"
         hygiene = r"\b(?:public|independently\s+verif(?:y|iable)|verif(?:y|iable)|credentials?|private\s+configuration)\b"
-        if not re.search(evidence, text):
+        evidence_hygiene = rf"(?:{evidence}).{{0,96}}(?:{hygiene})|(?:{hygiene}).{{0,96}}(?:{evidence})"
+        if not re.search(evidence_hygiene, text):
             return False
         if observer.is_question_or_explicit_request(value):
-            return bool(re.search(hygiene, text))
+            return True
         # Non-question artifacts are eligible only when the artifact-evidence
         # hygiene itself is the subject, never from a generic "verify it" or
         # a contribution footer next to an unrelated domain note.
-        return bool(re.search(r"\b(?:credentials?|private\s+configuration)\b", text))
+        return True
     if topic == "collaboration":
         return bool(re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b.*\b(?:small|public|testable|artifact|task)\b", text))
     return False
