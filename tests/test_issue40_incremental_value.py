@@ -88,9 +88,9 @@ def test_artifact_nonce_echo_is_rejected_but_nonquestion_primary_delta_and_expli
     setup(monkeypatch, tmp_path)
     echo = candidate(text="I published a contribution about keeping nonces strictly increasing.", category="artifact_contribution")
     assert autopilot.eligible(echo) == (False, "redundant_reply", "nonce")
-    delta = candidate("artifact-delta", text="I published a contribution about nonce reuse safety.", category="artifact_contribution")
-    assert autopilot.inbound_canonical_claims(delta["context"]["excerpt"], "nonce") == set()
-    assert autopilot.canonical_claim_delta(delta["context"]["excerpt"], "nonce") == set(autopilot.CANONICAL_REPLY_CLAIMS["nonce"])
+    delta = candidate("artifact-delta", text="This contribution's artifact evidence excludes private configuration.", category="artifact_contribution")
+    assert autopilot.inbound_canonical_claims(delta["context"]["excerpt"], "contribution_artifact") == set()
+    assert autopilot.canonical_claim_delta(delta["context"]["excerpt"], "contribution_artifact") == set(autopilot.CANONICAL_REPLY_CLAIMS["contribution_artifact"])
     assert autopilot.eligible(delta)[0] is True
     question = candidate("artifact-question", text="Can you verify this contribution artifact's public evidence?", category="artifact_contribution")
     assert autopilot.eligible(question)[0] is True
