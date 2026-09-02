@@ -18,6 +18,7 @@ PROFILE = core.ROOT / "public-profile.json"
 PUBLIC_ROOMS = re.compile(r"^(?!p-|mb-)[a-z0-9][a-z0-9_-]{0,47}$")
 ALLOWED_TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution", "did_signature", "nonce", "technocore_api", "prompt_injection_safety", "repo_tests_bugs", "contribution_artifact", "collaboration", "follow_up"}
 DLP = re.compile(r"(?ix)(?:sign_seed|private[ _-]?key|\bseed\b|api[ _-]?key|token|authorization:|discord|\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b|\b\+?\d[\d -]{7,}\d\b|(?:[a-z]:\\|/home/|/users/|/etc/|/var/)|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9_+=-]{32,}\b)")
+UNSUPPORTED_PUBLIC_FACT_RE = re.compile(r"\b(?:airdrop\s+snapshot|snapshot\s+airdrop|reward(?:s)?\s+(?:timing|date)|tge|token\s+(?:timing|date)|current\s+event)\b", re.I)
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
@@ -106,27 +107,58 @@ def migrate_old_candidates() -> int:
     return changed
 
 
+def resolve_candidate_topic(value: object) -> tuple[str | None, str]:
+    """Resolve one bounded candidate excerpt to a fixed, supported reply topic."""
+    if not isinstance(value, str) or not value.strip():
+        return None, "candidate_subject_unresolved"
+    raw = observer.URL_RE.sub(" ", value[:560])
+    text = raw.lower()
+    if UNSUPPORTED_PUBLIC_FACT_RE.search(text):
+        return None, "unsupported_public_fact"
+    if re.search(r"\b(?:prompt\s+injection|suspicious\s+url|unsafe\s+url|command\s+safety)\b", text):
+        return "prompt_injection_safety", "candidate_subject_resolved"
+    if re.search(r"\btechnocore\s+api\b|\bapi\s+(?:schema|endpoint|response)\b", text):
+        return "technocore_api", "candidate_subject_resolved"
+    if re.search(r"\bnonce\b", text):
+        return "nonce", "candidate_subject_resolved"
+    # ``did`` is also an ordinary English past-tense verb.  Treat the protocol
+    # identifier as the conventional uppercase acronym (or ``did:key``), while
+    # retaining unambiguous signature/key-rotation subjects case-insensitively.
+    if re.search(r"\bDID\b|\bdid:key\b", raw) or re.search(r"\b(?:signature|key\s+rotation|rotate\s+(?:a\s+)?key)\b", text):
+        return "did_signature", "candidate_subject_resolved"
+    if re.search(r"\b(?:repo|repository|test|bug|pr|pull\s+request|commit)\b", text):
+        return "repo_tests_bugs", "candidate_subject_resolved"
+    if re.search(r"\b(?:contribution|artifact)\b", text):
+        return "contribution_artifact", "candidate_subject_resolved"
+    if re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b", text):
+        return "collaboration", "candidate_subject_resolved"
+    return None, "candidate_subject_unresolved"
+
+
 def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     if candidate.get("status") != "pending": return False, "candidate_not_pending", None
     if not isinstance(candidate.get("room"), str) or not PUBLIC_ROOMS.fullmatch(candidate["room"]): return False, "non_public_or_owned_room", None
     signals = candidate.get("signals", {})
     facts = signals.get("facts", {})
-    if candidate.get("category") == "conversation":
-        topic = signals.get("conversation_topic")
-        if signals.get("direct_public_signed") is True and topic in ALLOWED_TOPICS:
-            return True, "signed_public_direct_request", topic
-        return False, "conversation_not_verified", None
-    if facts.get("inbound_to_us"): return False, "direct_context_is_never_auto_posted", None
-    if signals.get("spam_noise_probability", 1) >= 0.20 or signals.get("generic_template_probability", 1) > 0 or signals.get("poetic_filler_count", 0): return False, "generic_or_noise", None
-    if not signals.get("concrete_evidence"): return False, "no_public_concrete_evidence", None
     category = candidate.get("category")
+    if category != "conversation":
+        if facts.get("inbound_to_us"): return False, "direct_context_is_never_auto_posted", None
+        if signals.get("spam_noise_probability", 1) >= 0.20 or signals.get("generic_template_probability", 1) > 0 or signals.get("poetic_filler_count", 0): return False, "generic_or_noise", None
+        if not signals.get("concrete_evidence"): return False, "no_public_concrete_evidence", None
     if category == "specific_question":
         context = candidate.get("context", {})
         if not isinstance(context, dict) or not observer.is_question_or_explicit_request(context.get("excerpt")):
             return False, "specific_question_context_unverified", None
-    if category in {"help_request", "specific_question", "technical_collaboration"}: return True, "concrete_public_technical_request", "repo_safety"
-    if category == "artifact_contribution": return True, "public_artifact_evidence", "public_contribution"
-    if signals.get("conversation_continuity") and signals.get("useful_agent_probability", 0) >= 0.75: return True, "proven_returning_high_quality_agent", "signer_did_nonce"
+    context = candidate.get("context", {})
+    topic, relevance = resolve_candidate_topic(context.get("excerpt") if isinstance(context, dict) else None)
+    if topic is None: return False, relevance, None
+    if category == "conversation":
+        if signals.get("direct_public_signed") is True and signals.get("conversation_topic") in ALLOWED_TOPICS:
+            return True, "signed_public_direct_request", topic
+        return False, "conversation_not_verified", None
+    if category in {"help_request", "specific_question", "technical_collaboration"}: return True, "concrete_public_technical_request", topic
+    if category == "artifact_contribution": return True, "public_artifact_evidence", topic
+    if signals.get("conversation_continuity") and signals.get("useful_agent_probability", 0) >= 0.75: return True, "proven_returning_high_quality_agent", topic
     return False, "category_not_allowlisted", None
 
 

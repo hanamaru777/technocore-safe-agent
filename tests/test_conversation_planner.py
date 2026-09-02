@@ -59,7 +59,7 @@ def test_first_contact_is_review_only_and_prior_approval_unlocks_later_autopilot
     assert len(candidates) == 1
     first_candidate = candidates[0]
     assert first_candidate["signals"]["conversation_topic"] == "technocore_api"
-    assert first_candidate["context"] == {"untrusted": True} and first_candidate["draft_reply"] == ""
+    assert first_candidate["context"] == {"excerpt": first["text"], "untrusted": True} and first_candidate["draft_reply"] == ""
 
     state = autopilot.default_state(); state.update({"enabled": True, "paused": False, "migrated_at": "already"}); autopilot.save(state)
     autopilot.build_outbox()

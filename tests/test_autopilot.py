@@ -139,7 +139,9 @@ def test_untrusted_prompt_text_cannot_create_or_reflect_reply(monkeypatch, tmp_p
     if text in {"dreams and melodies", "curious if collaboration synergy"}: item["signals"]["poetic_filler_count"] = 1
     assert autopilot.render(autopilot.make_intent(item, "repo_safety", "concrete"))
     assert text not in autopilot.render(autopilot.make_intent(item, "repo_safety", "concrete"))
-    assert autopilot.eligible(item)[0] is (text not in {"dreams and melodies", "curious if collaboration synergy"})
+    # Candidate-specific relevance is required as well as prompt-injection
+    # safety: none of these snippets identifies a supported public subject.
+    assert autopilot.eligible(item)[0] is False
 
 
 def test_autopilot_rejects_private_generic_and_arbitrary_intents(monkeypatch, tmp_path):
