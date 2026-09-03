@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,23 @@ def _node_environment() -> dict[str, str]:
     """Pass only OS launch essentials; never forward keys or the full environment."""
     allowed = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP"}
     return {key: value for key, value in os.environ.items() if key.upper() in allowed}
+
+
+def runtime_status() -> dict[str, object]:
+    """Check only local parser prerequisites; no state, secrets, or network I/O."""
+    env = _node_environment()
+    if not shutil.which("node", path=env.get("PATH")):
+        return {"ready": False, "reason": "node_unavailable"}
+    if not (BRIDGE.parent.parent / "node_modules" / "@flop-labs" / "tclk" / "package.json").is_file():
+        return {"ready": False, "reason": "pinned_runtime_unavailable"}
+    if not BRIDGE.is_file():
+        return {"ready": False, "reason": "bridge_unavailable"}
+    try:
+        result = subprocess.run(["node", str(BRIDGE)], input='{"text":"tclk1 {}"}', text=True, capture_output=True, timeout=3, check=False, env=env)
+        decoded = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        decoded = None
+    return {"ready": decoded == {"frame": None}, "reason": None if decoded == {"frame": None} else "bridge_unavailable"}
 
 
 def official_offer(text: object) -> dict | None:
@@ -100,11 +118,12 @@ def opportunities(state: dict) -> list[dict]:
     data = state.get("tclk")
     if not isinstance(data, dict) or not isinstance(data.get("offers"), dict):
         return []
-    rows = [item for item in data["offers"].values() if isinstance(item, dict) and item.get("read_only") is True and item.get("accepted") is False]
+    current = int(datetime.now(UTC).timestamp() * 1000)
+    rows = [item for item in data["offers"].values() if isinstance(item, dict) and item.get("read_only") is True and item.get("accepted") is False and isinstance(item.get("expires_ms"), int) and item["expires_ms"] > current]
     return sorted(rows, key=lambda item: item.get("expires_ms", 0))
 
 
 def offer(state: dict, offer_id: str) -> dict | None:
     data = state.get("tclk")
     item = data.get("offers", {}).get(offer_id) if isinstance(data, dict) else None
-    return item if isinstance(item, dict) and item.get("read_only") is True and item.get("accepted") is False else None
+    return item if isinstance(item, dict) and item.get("read_only") is True and item.get("accepted") is False and isinstance(item.get("expires_ms"), int) and item["expires_ms"] > int(datetime.now(UTC).timestamp() * 1000) else None

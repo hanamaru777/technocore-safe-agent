@@ -417,6 +417,9 @@ def _tclk_offer_message(item: dict) -> str:
 
 def tclk_opportunities_message() -> str:
     """Read current local tclk records without writing state or calling the network."""
+    status = tclk_watch.runtime_status()
+    if status.get("ready") is not True:
+        return f"🔴 tclk runtime unavailable/degraded ({status.get('reason', 'unknown')}). No offer state was changed."
     try:
         rows = tclk_watch.opportunities(observer.load_state())[:5]
     except RuntimeError:
@@ -431,6 +434,9 @@ def tclk_opportunities_message() -> str:
 
 def tclk_offer_message(offer_id: str) -> str:
     """Look up one validated local offer only; unknown IDs fail closed."""
+    status = tclk_watch.runtime_status()
+    if status.get("ready") is not True:
+        return f"🔴 tclk runtime unavailable/degraded ({status.get('reason', 'unknown')}). No offer state was changed."
     try:
         item = tclk_watch.offer(observer.load_state(), offer_id)
     except RuntimeError:

@@ -344,10 +344,11 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     if not isinstance(message.get("seq"), int) or not isinstance(message.get("text"), str): return
     did, text = message_did(message), message["text"]
     if room == "events": queue_discovered_room(state, config, message)
-    if room == tclk_watch.OFFER_ROOM:
+    if room == tclk_watch.OFFER_ROOM and text.startswith(tclk_watch.TCLK_PREFIX):
         offer = tclk_watch.observe_offer(state, message, did)
         if offer is not None:
             emit_event(state, "tclk_offer", room, message, did, extra={"offer_id": offer["id"], "rail": offer["rail"], "frame_type": offer["frame_type"]})
+        return
     if room not in state["rooms"]:
         state["rooms"][room] = {"first_seen": now(), "last_seen": now(), "message_count": 0, "signed_count": 0, "unsigned_count": 0}; metric_event(state, "rooms_observed", "new_room", room, message)
     room_state = state["rooms"][room]; room_state["last_seen"] = now(); room_state["message_count"] += 1; room_state["signed_count" if did else "unsigned_count"] += 1

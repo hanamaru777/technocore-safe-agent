@@ -1,4 +1,3 @@
-import copy
 import json
 import secrets
 import subprocess
@@ -48,6 +47,17 @@ def test_valid_signed_paper_offer_is_read_only_opportunity(monkeypatch, tmp_path
     assert item["frame_type"] == "offer" and item["rail"] == "paper"
     assert item["read_only"] is True and item["accepted"] is False
     assert not any(key in item for key in ("seed", "payment_key", "signature"))
+    assert not state["agents"] and [event["kind"] for event in state["opportunities"]] == ["tclk_offer"]
+
+
+def test_tclk_protocol_frame_never_enters_generic_lane(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    state = observer.default_state()
+    record = signed_offer_message(monkeypatch, job={"context": "help? collaboration contribution"})
+    observer.process_message(state, observer.DEFAULT_CONFIG, tclk_watch.OFFER_ROOM, record, None, None)
+    assert len(tclk_watch.opportunities(state)) == 1
+    assert not state["agents"]
+    assert state["metrics"]["questions_detected"] == state["metrics"]["help_candidates"] == state["metrics"]["collab_candidates"] == state["metrics"]["contribution_candidates"] == 0
 
 
 def test_unsigned_malformed_mismatched_replay_and_unsupported_frames_fail_closed(monkeypatch, tmp_path):
@@ -82,6 +92,20 @@ def test_discord_tclk_views_sanitize_and_never_write_state(monkeypatch, tmp_path
     assert listed["ok"] and detailed["ok"]
     assert "[URL省略]" in detailed["message"] and "@everyone" not in detailed["message"]
     assert "read-only" in detailed["message"] and "not accepted" in detailed["message"]
+    assert observer.state_path().read_bytes() == before
+
+
+def test_runtime_degraded_and_expired_offers_are_not_presented(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    state = observer.default_state(); record = signed_offer_message(monkeypatch)
+    observer.process_message(state, observer.DEFAULT_CONFIG, tclk_watch.OFFER_ROOM, record, None, None)
+    item = tclk_watch.opportunities(state)[0]; item["expires_ms"] = 0
+    assert tclk_watch.opportunities(state) == [] and tclk_watch.offer(state, item["id"]) is None
+    observer.save_state(state); before = observer.state_path().read_bytes()
+    control = discord_control.Control({"42"}, "99")
+    for reason in ("node_unavailable", "pinned_runtime_unavailable", "bridge_unavailable"):
+        monkeypatch.setattr(tclk_watch, "runtime_status", lambda reason=reason: {"ready": False, "reason": reason})
+        assert "runtime unavailable/degraded" in control.command("42", "/tclk-opportunities", "99")["message"]
     assert observer.state_path().read_bytes() == before
 
 
