@@ -21,7 +21,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import core
+from . import core, tclk_watch
 
 SCHEMA_VERSION = 2
 CONFIG_NAME, STATE_NAME, HEARTBEAT_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer-heartbeat.json", "observer.lock", "observer.log"
@@ -67,7 +67,7 @@ def atomic_json_write(path: Path, value: dict, *, compact: bool = False, mode: i
 
 
 def default_state() -> dict:
-    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "compaction_acknowledged": True, "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "discovered_rooms": {}, "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0, "discovery_queue_dropped": 0, "discovery_samples": 0}}
+    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "compaction_acknowledged": True, "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "discovered_rooms": {}, "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "tclk": {"schema_version": 1, "offers": {}, "seen_offer_ids": []}, "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0, "discovery_queue_dropped": 0, "discovery_samples": 0}}
 
 
 def read_json(path: Path, *, default: dict | None = None) -> dict:
@@ -253,7 +253,7 @@ def discovered_mailbox(did: str | None) -> str | None:
 
 def selected_mailbox(config: dict) -> str | None: return config["mailbox"] or discovered_mailbox(verified_did())
 def observed_rooms(config: dict) -> list[str]:
-    mailbox = selected_mailbox(config); return list(dict.fromkeys(["events", "lobby", *([mailbox] if mailbox else []), *config["watch_rooms"]]))
+    mailbox = selected_mailbox(config); return list(dict.fromkeys(["events", "lobby", tclk_watch.OFFER_ROOM, *([mailbox] if mailbox else []), *config["watch_rooms"]]))
 
 
 class ObserverLock:
@@ -344,6 +344,11 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     if not isinstance(message.get("seq"), int) or not isinstance(message.get("text"), str): return
     did, text = message_did(message), message["text"]
     if room == "events": queue_discovered_room(state, config, message)
+    if room == tclk_watch.OFFER_ROOM and text.startswith(tclk_watch.TCLK_PREFIX):
+        offer = tclk_watch.observe_offer(state, message, did)
+        if offer is not None:
+            emit_event(state, "tclk_offer", room, message, did, extra={"offer_id": offer["id"], "rail": offer["rail"], "frame_type": offer["frame_type"]})
+        return
     if room not in state["rooms"]:
         state["rooms"][room] = {"first_seen": now(), "last_seen": now(), "message_count": 0, "signed_count": 0, "unsigned_count": 0}; metric_event(state, "rooms_observed", "new_room", room, message)
     room_state = state["rooms"][room]; room_state["last_seen"] = now(); room_state["message_count"] += 1; room_state["signed_count" if did else "unsigned_count"] += 1

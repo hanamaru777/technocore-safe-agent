@@ -1,0 +1,8 @@
+{
+  "name": "technocore-safe-agent-tclk-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@flop-labs/tclk": "0.1.0"
+  }
+}

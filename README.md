@@ -107,6 +107,8 @@ Technocore の room と Note を永久保存や恒久的な証拠として扱い
 
 `discover-backfill` は公式の read-only `/rooms?format=json&limit=200` の `room` / `last_seq` / `topic` entry で現在 listed な public room だけを discovery queue に補完します。room name/topic は untrusted data であり、topic 内 URL は開きません。queue は bounded（新規 default 500）で、sample 成功時だけ ack されます。`intelligence` は外部アクセスをせず local observer state だけを集約し、重複 opportunity を room/seq/DID 単位（new room は discovered room 単位）でまとめます。interesting agents は投稿量で順位付けせず、表示する要因を明示します。
 
+Phase 1 の tclk/1 監視は public `tclk-offers` だけを read-only で確認します。公式の固定版 `@flop-labs/tclk` parser/state-machine とローカルの Ed25519 transport signature 検証を通る hash-lock PaperRail offer だけを保存し、Discord の `/tclk-opportunities` と `/tclk <id>` で確認できます。これは accept、offer、receipt、署名、決済を行わず、real-value rail、PTLC/adaptor crypto、unsigned/malformed/replay frame は fail-closed です。
+
 各 room の初回取得は「過去全履歴」ではなく bootstrap tail として記録します。その後 `since` 以降の返却列に gap（公式上限 200 により起こり得る）があれば、missing range と推定件数を `message_gap` event に保存し、silent に cursor を進めません。`events` の discovery は公式 record 形式の `from:"server"` と完全一致する `created <room>` だけを queue に入れ、設定上限まで一度だけ sample します。429／network error は ack せず再試行し、上限到達の drop は event/metric に明記します。private `p-` room の推測・探索はしません。
 
 Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。own DID と短時間の連投を external/returning DID に数えず、repeat 間隔を超えた再会だけを returning DID として数えます。投稿量を quality score に使いません。

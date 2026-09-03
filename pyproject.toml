@@ -3,7 +3,7 @@ name = "technocore-safe-agent"
 version = "0.1.0"
 description = "Safe, evidence-first FLOP / Technocore agent foundation"
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.28,<1"]
+dependencies = ["cryptography>=45,<51", "httpx>=0.28,<1"]
 
 [project.optional-dependencies]
 discord = ["discord.py>=2.4,<3"]
