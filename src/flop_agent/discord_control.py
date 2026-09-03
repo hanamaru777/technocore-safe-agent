@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import autopilot, observer, resident
+from . import autopilot, observer, resident, tclk_watch
 
 LOG = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -397,6 +397,47 @@ def candidate_message(item: dict) -> str:
     return "\n".join(lines)
 
 
+def _tclk_offer_message(item: dict) -> str:
+    """Render only stored, bounded offer facts; never accept or alter an offer."""
+    expiry = datetime.fromtimestamp(int(item.get("expires_ms", 0)) / 1000, tz=UTC) if isinstance(item.get("expires_ms"), int) else None
+    job = "/".join(part for part in (safe_excerpt(item.get("job_proto"), 48), safe_excerpt(item.get("job_id"), 64)) if part)
+    return "\n".join([
+        "🔒 tclk/1 opportunity (read-only)",
+        f"ID: {safe_excerpt(item.get('id'), 70)}",
+        f"counterpart: {short_fingerprint(item.get('counterpart_fingerprint'))}",
+        f"frame: {safe_excerpt(item.get('frame_type'), 24)}",
+        f"job: {job or 'unknown'}",
+        f"amount / asset: {safe_excerpt(item.get('amount'), 48)} / {safe_excerpt(item.get('asset'), 48)}",
+        f"rail: {safe_excerpt(item.get('rail'), 24)} (PaperRail only; no real-value rail)",
+        f"expires: {human_time(expiry.isoformat()) if expiry else 'unknown'}",
+        f"terms (untrusted): {safe_excerpt(item.get('terms'), 280) or '-'}",
+        "status: read-only; not accepted. No accept, offer, or receipt was posted.",
+    ])
+
+
+def tclk_opportunities_message() -> str:
+    """Read current local tclk records without writing state or calling the network."""
+    try:
+        rows = tclk_watch.opportunities(observer.load_state())[:5]
+    except RuntimeError:
+        rows = []
+    if not rows:
+        return "🔒 tclk/1 opportunities (read-only)\n\nNo validated signed PaperRail offers are stored locally. Nothing was accepted."
+    lines = ["🔒 tclk/1 opportunities (read-only)", "", f"validated offers: {len(rows)} (showing up to 5)"]
+    for item in rows:
+        lines.extend(["", _tclk_offer_message(item)])
+    return "\n".join(lines)
+
+
+def tclk_offer_message(offer_id: str) -> str:
+    """Look up one validated local offer only; unknown IDs fail closed."""
+    try:
+        item = tclk_watch.offer(observer.load_state(), offer_id)
+    except RuntimeError:
+        item = None
+    return _tclk_offer_message(item) if item is not None else "No validated read-only tclk/1 offer found for that ID."
+
+
 def outbound_interaction_message(item: dict, inbound: dict | None = None) -> str:
     received = safe_excerpt((inbound or {}).get("summary", ""), 180)
     sent = item.get("summary") if item.get("exact_text") else "送信済み（正確な本文は保持されていません）"
@@ -768,6 +809,8 @@ class Control:
         action, args = parts[0], parts[1:]
         if action == "/status": return {"ok": True, "data": {}, "message": status_message()}
         if action == "/activity" and not args: return {"ok": True, "data": {}, "message": activity_message()}
+        if action == "/tclk-opportunities" and not args: return {"ok": True, "data": {}, "message": tclk_opportunities_message()}
+        if action == "/tclk" and len(args) == 1: return {"ok": True, "data": {}, "message": tclk_offer_message(args[0])}
         if action == "/trust-candidates" and not args: return {"ok": True, "data": {}, "message": trust_candidates_message()}
         if action == "/trusted" and not args: return {"ok": True, "data": {}, "message": trusted_message()}
         if action == "/history" and len(args) <= 1: return {"ok": True, "data": {}, "message": history_message(args[0] if args else None)}
@@ -800,7 +843,7 @@ class Control:
             data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
         if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
         if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot outbox generation resumed locally; Discord cannot publish."}
-        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /status /activity /trust-candidates /trusted /history [相手ID] /candidate <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
+        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /status /activity /trust-candidates /trusted /history [相手ID] /candidate <id> /tclk-opportunities /tclk <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
         if action == "/help-debug": return {"ok": True, "data": {}, "message": "Debug: /resident-status /intel /opportunities /agents /agent <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
 

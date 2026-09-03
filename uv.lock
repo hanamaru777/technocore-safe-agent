@@ -901,6 +901,7 @@ name = "technocore-safe-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "httpx" },
 ]
 
@@ -919,6 +920,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=45,<51" },
     { name = "discord-py", marker = "extra == 'discord'", specifier = ">=2.4,<3" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "oci", marker = "extra == 'oracle-signer'", specifier = ">=2.0,<3" },
