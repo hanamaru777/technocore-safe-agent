@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from flop_agent import autopilot, core, discord_control, observer, resident
 
@@ -70,6 +72,44 @@ def test_resident_pause_marker_survives_stale_state_write_and_fast_refresh(monke
     assert result["paused"] is True
 
 
+def test_resident_migrates_legacy_paused_state_to_control_file(monkeypatch, tmp_path):
+    setup_paths(monkeypatch, tmp_path)
+    state = resident.default_state()
+    state["control"]["paused"] = True
+    state["cached_observer"]["health"] = {"current": "ok"}
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat()
+    resident.save_state(state)
+    assert not resident.control_path().exists()
+
+    result = resident.refresh(observed_state=observer.default_state())
+
+    assert result["paused"] is True
+    control = resident.local_json(resident.control_path(), {})
+    assert control["paused"] is True
+
+
+def test_paused_fast_path_expires_due_candidate(monkeypatch, tmp_path):
+    setup_paths(monkeypatch, tmp_path)
+    state = resident.default_state()
+    state["cached_observer"]["health"] = {"current": "ok"}
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat()
+    state["candidates"]["expired-while-paused"] = {
+        "candidate_id": "expired-while-paused",
+        "status": "pending",
+        "priority": "medium",
+        "signals": {},
+        "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+    }
+    resident.save_state(state)
+    resident.pause(True)
+
+    result = resident.refresh()
+
+    assert result["paused"] is True
+    assert result["expired"] == 1
+    assert resident.load_state()["candidates"]["expired-while-paused"]["status"] == "expired"
+
+
 def test_status_uses_small_heartbeat_and_recent_decision_cache(monkeypatch, tmp_path):
     setup_paths(monkeypatch, tmp_path)
     state = resident.default_state()
@@ -85,6 +125,45 @@ def test_status_uses_small_heartbeat_and_recent_decision_cache(monkeypatch, tmp_
     message = discord_control.status_message()
     assert "🟢 FLOP Agent 正常" in message
     assert "queue: 0 / eligible 0 / ignored 0 / blocked 0" in message
+
+
+def test_rate_limit_block_is_retained_in_recent_decision_cache(monkeypatch, tmp_path):
+    setup_paths(monkeypatch, tmp_path)
+    auto = autopilot.default_state()
+    auto.update({"enabled": True, "paused": False, "migrated_at": datetime.now(UTC).isoformat()})
+    intent = {
+        "id": "a" * 20,
+        "source_candidate_id": "candidate-blocked",
+        "source_did": "did:key:test",
+        "fingerprint": "fingerprint-blocked",
+        "room": "lobby",
+        "seq": 1,
+        "category": "conversation",
+        "topic": "nonce",
+        "public_evidence_ids": ["public-profile:1", "candidate:candidate-blocked"],
+        "created_at": datetime.now(UTC).isoformat(),
+        "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        "safety_decision": "signed_public_direct_request",
+    }
+    auto["outbox"][intent["id"]] = intent
+    auto["rate_history"] = [
+        {"at": datetime.now(UTC).isoformat(), "fingerprint": f"fp-{number}", "room": f"room-{number}", "text_hash": "b" * 64}
+        for number in range(6)
+    ]
+    autopilot.save(auto)
+    monkeypatch.setattr(autopilot.os, "name", "nt")
+    monkeypatch.setattr(autopilot, "render", lambda _: "safe fixed reply")
+
+    with pytest.raises(RuntimeError, match="rate limit blocked publish"):
+        autopilot.publish(intent["id"], True)
+
+    state = autopilot.load()
+    blocked = [item for item in state["recent_decisions"] if item.get("action") == "blocked"]
+    assert len(blocked) == 1
+    assert blocked[0]["source_candidate"] == "candidate-blocked"
+    assert blocked[0]["rate_limit"] == "daily_limit"
+    snapshot = discord_control.activity_snapshot(sync_timeline=False, include_trust=False)
+    assert snapshot["blocked"] == 1
 
 
 def test_observer_success_timestamp_does_not_dirty_idle_state(monkeypatch, tmp_path):
