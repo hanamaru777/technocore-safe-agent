@@ -27,9 +27,6 @@ SCHEMA_VERSION = 2
 CONFIG_NAME, STATE_NAME, HEARTBEAT_NAME, LOCK_NAME, LOG_NAME = "observer-config.json", "observer-state.json", "observer-heartbeat.json", "observer.lock", "observer.log"
 DEFAULT_CONFIG = {"schema_version": SCHEMA_VERSION, "watch_rooms": [], "mailbox": None, "poll_interval_seconds": 15, "long_poll_seconds": 10, "memory_retention": 8, "max_agents": 5000, "max_rooms": 200, "max_discovered_rooms": 1000, "state_flush_interval_seconds": 30, "log_max_bytes": 262144, "log_rotations": 2, "read_budget_per_minute": 30, "room_intervals_seconds": {"lobby": 3, "events": 10, "mailbox": 5, "watch": 15}, "repeat_after_seconds": 3600, "discovery_sample_limit": 5, "discovery_queue_limit": 500, "discovery_max_attempts": 5, "rooms_backfill_interval_seconds": 3600}
 URL_RE = re.compile(r"https://[^\s<>()\[\]]+", re.I)
-# Keep ordinary interrogatives case-insensitive, but do not include ``did``:
-# the protocol acronym ``DID`` is not an English auxiliary verb.  The two
-# ordinary spellings are handled separately and case-sensitively below.
 QUESTION_START_RE = re.compile(r"^\s*(?:how|what|why|when|where|which|who|can|could|would|should|is|are|do|does)\b", re.I)
 DID_AUXILIARY_START_RE = re.compile(r"^\s*(?:Did|did)\b")
 EXPLICIT_REQUEST_RE = re.compile(r"\b(?:please\s+(?:explain|clarify|describe|help)|can\s+you|could\s+you|would\s+you|help\s+me\s+understand)\b", re.I)
@@ -40,12 +37,8 @@ CREATED_ROOM_RE = re.compile(r"^created ([a-z0-9][a-z0-9_-]{0,47})$")
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
-
-
 def is_question_or_explicit_request(value: object) -> bool:
-    """Classify actual questions/requests, never a bare noun such as 'question'."""
-    if not isinstance(value, str):
-        return False
+    if not isinstance(value, str): return False
     text = URL_RE.sub(" ", value[:560]).strip()
     return "?" in text or "？" in text or bool(QUESTION_START_RE.search(text) or DID_AUXILIARY_START_RE.search(text) or EXPLICIT_REQUEST_RE.search(text))
 def observer_dir() -> Path: core.STATE.mkdir(exist_ok=True); return core.STATE / "observer"
@@ -82,21 +75,13 @@ def read_json(path: Path, *, default: dict | None = None) -> dict:
 
 def load_config() -> dict:
     if not config_path().exists(): atomic_json_write(config_path(), DEFAULT_CONFIG)
-    raw = read_json(config_path())
-    legacy_default = {**DEFAULT_CONFIG, "memory_retention": 50}
-    legacy_default.pop("state_flush_interval_seconds")
-    old_auto = {key: value for key, value in legacy_default.items() if key != "rooms_backfill_interval_seconds"}
-    old_auto["discovery_queue_limit"] = 100
-    previous_auto = {**old_auto, "discovery_queue_limit": 500}
+    raw = read_json(config_path()); legacy_default = {**DEFAULT_CONFIG, "memory_retention": 50}; legacy_default.pop("state_flush_interval_seconds")
+    old_auto = {key: value for key, value in legacy_default.items() if key != "rooms_backfill_interval_seconds"}; old_auto["discovery_queue_limit"] = 100; previous_auto = {**old_auto, "discovery_queue_limit": 500}
     if raw in (old_auto, previous_auto, legacy_default):
-        raw["discovery_queue_limit"] = 500
-        raw["memory_retention"] = DEFAULT_CONFIG["memory_retention"]
-        raw["state_flush_interval_seconds"] = DEFAULT_CONFIG["state_flush_interval_seconds"]
-        atomic_json_write(config_path(), raw)
+        raw["discovery_queue_limit"] = 500; raw["memory_retention"] = DEFAULT_CONFIG["memory_retention"]; raw["state_flush_interval_seconds"] = DEFAULT_CONFIG["state_flush_interval_seconds"]; atomic_json_write(config_path(), raw)
     config = {**DEFAULT_CONFIG, **raw}
     try:
-        rooms_ok = isinstance(config["watch_rooms"], list) and all(core.validate_room(room) == room for room in config["watch_rooms"])
-        mailbox_ok = config["mailbox"] is None or core.validate_room(config["mailbox"]) == config["mailbox"]
+        rooms_ok = isinstance(config["watch_rooms"], list) and all(core.validate_room(room) == room for room in config["watch_rooms"]); mailbox_ok = config["mailbox"] is None or core.validate_room(config["mailbox"]) == config["mailbox"]
     except (KeyError, TypeError, ValueError) as error: raise RuntimeError("observer config room settings are invalid") from error
     if not rooms_ok or not mailbox_ok: raise RuntimeError("observer config room settings are invalid")
     for key, low, high in (("poll_interval_seconds", 1, 3600), ("long_poll_seconds", 0, 10), ("memory_retention", 1, 500), ("max_agents", 100, 5000), ("max_rooms", 10, 1000), ("max_discovered_rooms", 100, 2000), ("state_flush_interval_seconds", 5, 3600), ("log_max_bytes", 1024, 10485760), ("log_rotations", 0, 10), ("read_budget_per_minute", 1, 600), ("repeat_after_seconds", 1, 31536000), ("discovery_sample_limit", 0, 50), ("discovery_queue_limit", 1, 1000), ("discovery_max_attempts", 1, 20), ("rooms_backfill_interval_seconds", 60, 86400)):
@@ -127,7 +112,6 @@ def _trim_mapping(mapping: dict, limit: int, *, priority) -> bool:
 
 
 def compact_state(state: dict, memory_retention: int, *, max_agents: int | None = None, max_rooms: int | None = None, max_discovered_rooms: int | None = None, evict: bool = False) -> bool:
-    """Bound only volatile agent-memory fields; retain identity and durable facts."""
     changed = False
     for agent in state.get("agents", {}).values():
         if not isinstance(agent, dict): continue
@@ -135,8 +119,7 @@ def compact_state(state: dict, memory_retention: int, *, max_agents: int | None 
         if isinstance(facts, dict):
             for field in ("message_refs", "recent_messages"):
                 entries = facts.get(field)
-                if isinstance(entries, list) and len(entries) > memory_retention:
-                    facts[field] = entries[-memory_retention:]; changed = True
+                if isinstance(entries, list) and len(entries) > memory_retention: facts[field] = entries[-memory_retention:]; changed = True
             messages = facts.get("recent_messages")
             if isinstance(messages, list):
                 for message in messages:
@@ -151,32 +134,36 @@ def compact_state(state: dict, memory_retention: int, *, max_agents: int | None 
     if evict:
         for agent in state.get("agents", {}).values():
             facts, inferences = agent.get("facts", {}), agent.get("inferences", {})
-            if isinstance(inferences, dict) and isinstance(inferences.get("role_candidates"), list) and len(inferences["role_candidates"]) > 8:
-                inferences["role_candidates"] = inferences["role_candidates"][-8:]; changed = True
-            if isinstance(facts, dict) and isinstance(facts.get("rooms"), list) and len(facts["rooms"]) > 16:
-                facts["rooms"] = facts["rooms"][-16:]; changed = True
+            if isinstance(inferences, dict) and isinstance(inferences.get("role_candidates"), list) and len(inferences["role_candidates"]) > 8: inferences["role_candidates"] = inferences["role_candidates"][-8:]; changed = True
+            if isinstance(facts, dict) and isinstance(facts.get("rooms"), list) and len(facts["rooms"]) > 16: facts["rooms"] = facts["rooms"][-16:]; changed = True
         if max_agents is not None: changed = _trim_mapping(state.get("agents", {}), max_agents, priority=lambda agent: _agent_priority(agent)) or changed
         if max_rooms is not None: changed = _trim_mapping(state.get("rooms", {}), max_rooms, priority=lambda room: parse_time(room.get("last_seen")) or datetime.min.replace(tzinfo=UTC)) or changed
         if max_discovered_rooms is not None:
-            rooms = state.get("discovered_rooms", {})
-            protected = {name for name, record in rooms.items() if isinstance(record, dict) and record.get("sample_status") == "queued"}
-            excess = max(0, len(rooms) - max_discovered_rooms)
-            for name, _ in sorted(((name, record) for name, record in rooms.items() if name not in protected), key=lambda item: parse_time(item[1].get("sampled_at") or item[1].get("enqueued_at")) or datetime.min.replace(tzinfo=UTC))[:excess]:
-                del rooms[name]; changed = True
+            rooms = state.get("discovered_rooms", {}); protected = {name for name, record in rooms.items() if isinstance(record, dict) and record.get("sample_status") == "queued"}; excess = max(0, len(rooms) - max_discovered_rooms)
+            for name, _ in sorted(((name, record) for name, record in rooms.items() if name not in protected), key=lambda item: parse_time(item[1].get("sampled_at") or item[1].get("enqueued_at")) or datetime.min.replace(tzinfo=UTC))[:excess]: del rooms[name]; changed = True
         if len(state.get("returning_dids", [])) > 1000: state["returning_dids"] = state["returning_dids"][-1000:]; changed = True
     return changed
 
 
+def _evict_weakest_agent(state: dict) -> bool:
+    """At the hard cap evict exactly one weakest Agent without a full-state compaction/sort."""
+    agents = state.get("agents", {})
+    if not agents: return False
+    fingerprint, _ = min(agents.items(), key=lambda pair: _agent_priority(pair[1])); del agents[fingerprint]; return True
+
+
 def load_state(memory_retention: int | None = None) -> dict:
-    existed = state_path().exists(); state = read_json(state_path(), default=default_state())
-    defaults = default_state()
+    existed = state_path().exists(); state = read_json(state_path(), default=default_state()); defaults = default_state()
     if existed and "compaction_acknowledged" not in state: state["compaction_acknowledged"] = False
     for key, value in defaults.items(): state.setdefault(key, value)
     for key, value in defaults["metrics"].items(): state["metrics"].setdefault(key, value)
     compact_state(state, memory_retention if memory_retention is not None else load_config()["memory_retention"])
     return state
+
+
 def write_heartbeat(state: dict) -> None:
-    atomic_json_write(heartbeat_path(), {"schema_version": 1, "updated_at": state["updated_at"], "status": state.get("health", {}).get("current", "degraded"), "agent_count": len(state.get("agents", {}))}, compact=True)
+    metrics = state.get("metrics", {})
+    atomic_json_write(heartbeat_path(), {"schema_version": 1, "updated_at": state["updated_at"], "status": state.get("health", {}).get("current", "degraded"), "agent_count": len(state.get("agents", {})), "metrics": {"unique_dids_discovered": int(metrics.get("unique_dids_discovered", 0)), "returning_did_encounters": int(metrics.get("returning_did_encounters", 0)), "message_gaps": int(metrics.get("message_gaps", 0))}}, compact=True)
 
 
 def save_state(state: dict) -> None:
@@ -189,10 +176,12 @@ class StateWriter:
         self.state, self.interval_seconds, self.config, self.dirty, self.write_count = state, interval_seconds, config, False, 0
     def mark_dirty(self) -> None: self.dirty = True
     def flush(self) -> None:
-        if self.dirty:
-            config = self.config or load_config()
+        if not self.dirty: return
+        config = self.config or load_config()
+        over_bound = len(self.state.get("agents", {})) > config["max_agents"] or len(self.state.get("rooms", {})) > config["max_rooms"] or len(self.state.get("discovered_rooms", {})) > config["max_discovered_rooms"] or len(self.state.get("returning_dids", [])) > 1000
+        if over_bound or self.write_count % 10 == 0:
             compact_state(self.state, config["memory_retention"], max_agents=config["max_agents"], max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=bool(self.state.get("compaction_acknowledged")))
-            save_state(self.state); self.dirty = False; self.write_count += 1
+        save_state(self.state); self.dirty = False; self.write_count += 1
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             try: await asyncio.wait_for(stop.wait(), timeout=self.interval_seconds)
@@ -214,12 +203,10 @@ def _estimated_compact_size(state: dict) -> int:
 
 
 def compact_persisted_state(apply: bool = False) -> dict:
-    """Explicitly compact a legacy state; apply always creates a unique backup first."""
     path = state_path()
     if not path.is_file(): raise RuntimeError("observer state is missing")
     before_bytes = path.stat().st_size; state, config = load_state(), load_config(); before = _state_counts(state); retention_before = _retention_stats(state.get("agents", {}))
-    compact_state(state, config["memory_retention"], max_agents=config["max_agents"], max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=True)
-    state["compaction_acknowledged"] = True
+    compact_state(state, config["memory_retention"], max_agents=config["max_agents"], max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=True); state["compaction_acknowledged"] = True
     retention_after = _retention_stats(state.get("agents", {})); retention = {"strong_important_total": retention_before["strong_important_total"], "strong_important_retained": retention_after["strong_important_retained"], "strong_important_dropped": retention_before["strong_important_total"] - retention_after["strong_important_retained"], "repeat_retained": retention_after["repeat_retained"]}
     result = {"dry_run": not apply, "before": {"bytes": before_bytes, **before}, "after": {"estimated_bytes": _estimated_compact_size(state), **_state_counts(state)}, "retention": retention, "backup": None}
     if not apply: return result
@@ -227,8 +214,7 @@ def compact_persisted_state(apply: bool = False) -> dict:
     try:
         with path.open("rb") as source, backup.open("xb") as target: shutil.copyfileobj(source, target)
     except FileExistsError as error: raise RuntimeError("observer backup already exists; refusing to overwrite") from error
-    save_state(state); result["dry_run"] = False; result["backup"] = str(backup); result["after"]["bytes"] = path.stat().st_size
-    return result
+    save_state(state); result["dry_run"] = False; result["backup"] = str(backup); result["after"]["bytes"] = path.stat().st_size; return result
 
 
 def verified_did() -> str | None:
@@ -239,7 +225,6 @@ def verified_did() -> str | None:
 
 
 def discovered_mailbox(did: str | None) -> str | None:
-    """Select only newest completed plan metadata for the verified public DID."""
     plans = core.STATE / "proof-plans"
     if not did or not plans.is_dir(): return None
     candidates = []
@@ -257,7 +242,6 @@ def observed_rooms(config: dict) -> list[str]:
 
 
 class ObserverLock:
-    """OS-level advisory lock; crashes release it automatically on Windows/Linux."""
     def __init__(self) -> None: self.path, self.handle = observer_dir() / LOCK_NAME, None
     def __enter__(self) -> "ObserverLock":
         self.path.parent.mkdir(parents=True, exist_ok=True); self.handle = self.path.open("a+", encoding="utf-8")
@@ -272,8 +256,7 @@ class ObserverLock:
                 fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (BlockingIOError, OSError) as error:
             self.handle.close(); self.handle = None; raise RuntimeError("observer is already running") from error
-        self.handle.seek(0); self.handle.truncate(); json.dump({"pid": os.getpid(), "started_at": now()}, self.handle); self.handle.flush()
-        return self
+        self.handle.seek(0); self.handle.truncate(); json.dump({"pid": os.getpid(), "started_at": now()}, self.handle); self.handle.flush(); return self
     def __exit__(self, *_: object) -> None:
         if not self.handle: return
         try:
@@ -305,15 +288,19 @@ def event_id(kind: str, room: str, seq: int | None, did: str | None, extra: dict
 def emit_event(state: dict, kind: str, room: str, message: dict, did: str | None = None, *, extra: dict | None = None) -> bool:
     seq = message.get("seq") if isinstance(message.get("seq"), int) else None; identifier = event_id(kind, room, seq, did, extra)
     if identifier in state["event_ids"]: return False
-    record = {"event_id": identifier, "kind": kind, "room": room, "seq": seq, "ts": message.get("ts"), "did": did, "text_excerpt": excerpt(message.get("text", "")), "untrusted": True, "observed_at": now(), **(extra or {})}
-    state["event_ids"].append(identifier); del state["event_ids"][:-2000]; state["opportunities"].append(record); del state["opportunities"][:-500]
-    return True
+    record = {"event_id": identifier, "kind": kind, "room": room, "seq": seq, "ts": message.get("ts"), "did": did, "text_excerpt": excerpt(message.get("text", "")), "untrusted": True, "observed_at": now(), **(extra or {})}; state["event_ids"].append(identifier); del state["event_ids"][:-2000]; state["opportunities"].append(record); del state["opportunities"][:-500]; return True
 def metric_event(state: dict, metric: str, kind: str, room: str, message: dict, did: str | None = None, *, extra: dict | None = None) -> None:
     if emit_event(state, kind, room, message, did, extra=extra): state["metrics"][metric] += 1
-def set_error(state: dict, room: str, kind: str, detail: str = "") -> None:
-    record = {"room": room, "kind": kind, "at": now(), "detail": detail[:120]}; state["error_history"].append(record); del state["error_history"][:-100]; state["health"]["current"] = "degraded"; state["health"]["rooms"][room] = {"status": "error", **record}
-def set_success(state: dict, room: str) -> None:
-    state["health"]["rooms"][room] = {"status": "ok", "at": now()}; state["health"]["current"] = "degraded" if any(v.get("status") == "error" for v in state["health"]["rooms"].values()) else "ok"
+
+def set_error(state: dict, room: str, kind: str, detail: str = "") -> bool:
+    record = {"room": room, "kind": kind, "at": now(), "detail": detail[:120]}; state["error_history"].append(record); del state["error_history"][:-100]; state["health"]["current"] = "degraded"; state["health"]["rooms"][room] = {"status": "error", **record}; return True
+
+def set_success(state: dict, room: str) -> bool:
+    previous = state["health"]["rooms"].get(room, {}); changed = previous.get("status") != "ok"
+    if changed: state["health"]["rooms"][room] = {"status": "ok", "at": now()}
+    current = "degraded" if any(v.get("status") == "error" for v in state["health"]["rooms"].values()) else "ok"
+    if state["health"].get("current") != current: state["health"]["current"] = current; changed = True
+    return changed
 
 
 def queue_public_room(state: dict, config: dict, room: str, source: str, message: dict, topic: str | None = None) -> None:
@@ -322,18 +309,14 @@ def queue_public_room(state: dict, config: dict, room: str, source: str, message
     except ValueError: return
     if room in state["discovered_rooms"]: return
     if len(state["discovery_queue"]) >= config["discovery_queue_limit"]:
-        metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", source, message, extra={"discovered_room": room, "reason": "queue_limit"})
-        return
-    record = {"room": room, "event_seq": message.get("seq"), "enqueued_at": now(), "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None, "next_attempt_at": None, "source": source, "topic_excerpt": excerpt(topic) if isinstance(topic, str) else "", "untrusted": True}
-    state["discovery_queue"].append(room); state["discovered_rooms"][room] = record
-    emit_event(state, "new_room", source, message, extra={"discovered_room": room, "source": source})
+        metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", source, message, extra={"discovered_room": room, "reason": "queue_limit"}); return
+    record = {"room": room, "event_seq": message.get("seq"), "enqueued_at": now(), "sample_status": "queued", "attempts": 0, "last_attempt_at": None, "last_error": None, "sampled_at": None, "next_attempt_at": None, "source": source, "topic_excerpt": excerpt(topic) if isinstance(topic, str) else "", "untrusted": True}; state["discovery_queue"].append(room); state["discovered_rooms"][room] = record; emit_event(state, "new_room", source, message, extra={"discovered_room": room, "source": source})
 
 
 def queue_discovered_room(state: dict, config: dict, message: dict) -> None:
     if message.get("from") != "server": return
     match = CREATED_ROOM_RE.fullmatch(message.get("text", ""))
     if match: queue_public_room(state, config, match.group(1), "events", message)
-
 
 def parse_time(value: str | None) -> datetime | None:
     try: return datetime.fromisoformat(value) if value else None
@@ -346,18 +329,15 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     if room == "events": queue_discovered_room(state, config, message)
     if room == tclk_watch.OFFER_ROOM and text.startswith(tclk_watch.TCLK_PREFIX):
         offer = tclk_watch.observe_offer(state, message, did)
-        if offer is not None:
-            emit_event(state, "tclk_offer", room, message, did, extra={"offer_id": offer["id"], "rail": offer["rail"], "frame_type": offer["frame_type"]})
+        if offer is not None: emit_event(state, "tclk_offer", room, message, did, extra={"offer_id": offer["id"], "rail": offer["rail"], "frame_type": offer["frame_type"]})
         return
-    if room not in state["rooms"]:
-        state["rooms"][room] = {"first_seen": now(), "last_seen": now(), "message_count": 0, "signed_count": 0, "unsigned_count": 0}; metric_event(state, "rooms_observed", "new_room", room, message)
+    if room not in state["rooms"]: state["rooms"][room] = {"first_seen": now(), "last_seen": now(), "message_count": 0, "signed_count": 0, "unsigned_count": 0}; metric_event(state, "rooms_observed", "new_room", room, message)
     room_state = state["rooms"][room]; room_state["last_seen"] = now(); room_state["message_count"] += 1; room_state["signed_count" if did else "unsigned_count"] += 1
     if not did: room_state["last_unsigned_seen"] = {"seq": message["seq"], "ts": message.get("ts"), "untrusted": True}; return
     if did == own_did: state["metrics"]["self_messages"] += 1; return
     fingerprint = core.did_note_location(did)[2]; agent = state["agents"].get(fingerprint)
     if agent is None:
-        if len(state["agents"]) >= config["max_agents"] and state.get("compaction_acknowledged"):
-            compact_state(state, config["memory_retention"], max_agents=config["max_agents"] - 1, max_rooms=config["max_rooms"], max_discovered_rooms=config["max_discovered_rooms"], evict=True)
+        if len(state["agents"]) >= config["max_agents"] and state.get("compaction_acknowledged"): _evict_weakest_agent(state)
         if len(state["agents"]) >= config["max_agents"]: return
         agent = {"did": did, "fingerprint": fingerprint, "facts": {"first_seen": now(), "last_seen": now(), "last_encounter_at": now(), "seen_count": 0, "rooms": [], "message_refs": [], "recent_messages": [], "signed_count": 0, "unsigned_count": 0, "interaction_with_us": False}, "inferences": {"contribution_url_candidates": [], "role_candidates": [], "repeat_seen": False}}; state["agents"][fingerprint] = agent; metric_event(state, "unique_dids_discovered", "new_did", room, message, did)
     else:
@@ -368,8 +348,7 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
         agent["facts"]["last_encounter_at"] = now()
     facts, inference = agent["facts"], agent["inferences"]; facts["last_seen"] = now(); facts["seen_count"] += 1; facts["signed_count"] += 1
     if room not in facts["rooms"]: facts["rooms"].append(room)
-    del facts["rooms"][:-16]
-    ref = {"room": room, "seq": message["seq"], "ts": message.get("ts")}
+    del facts["rooms"][:-16]; ref = {"room": room, "seq": message["seq"], "ts": message.get("ts")}
     if ref not in facts["message_refs"]: facts["message_refs"].append(ref); facts["recent_messages"].append({**ref, "text": excerpt(text), "signed": True, "untrusted": True})
     if room == mailbox: facts["interaction_with_us"] = True; metric_event(state, "inbound_mailbox_messages", "inbound_mailbox_message", room, message, did)
     for url in URL_RE.findall(text):
@@ -385,20 +364,21 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     del inference["contribution_url_candidates"][:-config["memory_retention"]]
 
 
-def process_payload(state: dict, config: dict, room: str, payload: dict | list, own_did: str | None, mailbox: str | None, *, bootstrap: bool) -> None:
+def process_payload(state: dict, config: dict, room: str, payload: dict | list, own_did: str | None, mailbox: str | None, *, bootstrap: bool) -> bool:
     messages = payload.get("messages", payload if isinstance(payload, list) else [])
-    if not isinstance(messages, list): set_error(state, room, "invalid_response"); return
-    since, valid = state["cursors"].get(room, 0), sorted((m for m in messages if isinstance(m, dict) and isinstance(m.get("seq"), int)), key=lambda m: m["seq"])
-    if bootstrap and room not in state["bootstrap_tails"]: state["bootstrap_tails"][room] = {"from_seq": valid[0]["seq"] if valid else None, "to_seq": valid[-1]["seq"] if valid else None, "returned_count": len(valid), "is_tail_only": True, "recorded_at": now()}
+    if not isinstance(messages, list): set_error(state, room, "invalid_response"); return True
+    since, valid = state["cursors"].get(room, 0), sorted((m for m in messages if isinstance(m, dict) and isinstance(m.get("seq"), int)), key=lambda m: m["seq"]); changed = False
+    if bootstrap and room not in state["bootstrap_tails"]: state["bootstrap_tails"][room] = {"from_seq": valid[0]["seq"] if valid else None, "to_seq": valid[-1]["seq"] if valid else None, "returned_count": len(valid), "is_tail_only": True, "recorded_at": now()}; changed = True
     previous, highest, seen = since, since, set()
     for message in valid:
         seq = message["seq"]
         if seq <= since or seq in seen: continue
-        seen.add(seq)
+        seen.add(seq); changed = True
         if not bootstrap and seq > previous + 1:
             missing = seq - previous - 1; metric_event(state, "message_gaps", "message_gap", room, message, extra={"missing_from": previous + 1, "missing_to": seq - 1, "estimated_missing": missing}); state["metrics"]["estimated_missing_messages"] += missing
         process_message(state, config, room, message, own_did, mailbox); previous, highest = seq, max(highest, seq)
     if highest > since: state["cursors"][room] = highest
+    return changed
 
 
 class ReadBudget:
@@ -422,26 +402,23 @@ async def read_room(client: httpx.AsyncClient, room: str, since: int, wait: int)
 
 
 async def read_rooms(client: httpx.AsyncClient) -> tuple[list[dict] | None, float | None, str | None]:
-    """Read only the server's listed public-room index; never follow room topics."""
     try:
         response = await client.get(f"{core.BASE_URL}/rooms", params={"format": "json", "limit": 200}, timeout=20)
         if response.status_code == 429:
             try: retry = max(0.0, float(response.headers.get("Retry-After", "1")))
             except ValueError: retry = 1.0
             return None, retry, "rate_limited"
-        response.raise_for_status()
-        payload = response.json(); rooms = payload.get("rooms", payload if isinstance(payload, list) else None)
-        return rooms if isinstance(rooms, list) else None, None, None if isinstance(rooms, list) else "invalid_response"
+        response.raise_for_status(); payload = response.json(); rooms = payload.get("rooms", payload if isinstance(payload, list) else None); return rooms if isinstance(rooms, list) else None, None, None if isinstance(rooms, list) else "invalid_response"
     except httpx.HTTPError as error: return None, None, type(error).__name__
 
 
-async def backfill_into_state(client: httpx.AsyncClient, budget: "ReadBudget", state: dict, config: dict) -> None:
-    await budget.acquire(); rooms, retry, error = await read_rooms(client)
-    if error: set_error(state, "rooms", error, str(retry or "")); return
+async def backfill_into_state(client: httpx.AsyncClient, budget: "ReadBudget", state: dict, config: dict) -> bool:
+    before_rooms, before_queue = len(state.get("discovered_rooms", {})), len(state.get("discovery_queue", [])); await budget.acquire(); rooms, retry, error = await read_rooms(client)
+    if error: set_error(state, "rooms", error, str(retry or "")); return True
     for item in rooms or []:
         if not isinstance(item, dict) or not isinstance(item.get("room"), str) or not isinstance(item.get("last_seq"), int) or not isinstance(item.get("topic"), str): continue
         queue_public_room(state, config, item["room"], "rooms", {"seq": None, "text": item["topic"]}, item["topic"])
-    set_success(state, "rooms")
+    return set_success(state, "rooms") or len(state.get("discovered_rooms", {})) != before_rooms or len(state.get("discovery_queue", [])) != before_queue
 
 
 async def discover_backfill_async(client: httpx.AsyncClient | None = None) -> dict:
@@ -449,12 +426,9 @@ async def discover_backfill_async(client: httpx.AsyncClient | None = None) -> di
         config, state, owned = load_config(), load_state(), client is None
         if owned: client = httpx.AsyncClient()
         try:
-            await backfill_into_state(client, ReadBudget(config["read_budget_per_minute"]), state, config)
-            save_state(state); return observer_status(config, state)
+            await backfill_into_state(client, ReadBudget(config["read_budget_per_minute"]), state, config); save_state(state); return observer_status(config, state)
         finally:
             if owned: await client.aclose()
-
-
 def discover_backfill() -> dict: return asyncio.run(discover_backfill_async())
 
 
@@ -464,30 +438,23 @@ async def snapshot_room(client: httpx.AsyncClient, budget: ReadBudget, state: di
     process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]); set_success(state, room)
 
 
-async def consume_discovery_queue(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, own_did: str | None, mailbox: str | None) -> None:
-    """Sample queued public rooms once; acknowledge only a successful read."""
-    candidates = list(state["discovery_queue"][:config["discovery_sample_limit"]])
+async def consume_discovery_queue(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, own_did: str | None, mailbox: str | None) -> bool:
+    changed = False; candidates = list(state["discovery_queue"][:config["discovery_sample_limit"]])
     for room in candidates:
         record = state["discovered_rooms"].get(room)
         if not record or record.get("sample_status") != "queued":
-            if room in state["discovery_queue"]: state["discovery_queue"].remove(room)
+            if room in state["discovery_queue"]: state["discovery_queue"].remove(room); changed = True
             continue
         next_attempt = parse_time(record.get("next_attempt_at"))
         if next_attempt and datetime.now(UTC) < next_attempt: continue
-        record["attempts"] += 1; record["last_attempt_at"] = now()
-        await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), 0)
+        record["attempts"] += 1; record["last_attempt_at"] = now(); changed = True; await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), 0)
         if error:
-            record["last_error"] = error
-            delay = retry if retry is not None else min(300.0, float(2 ** min(record["attempts"], 8)))
-            record["next_attempt_at"] = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+            record["last_error"] = error; delay = retry if retry is not None else min(300.0, float(2 ** min(record["attempts"], 8))); record["next_attempt_at"] = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
             if record["attempts"] >= config["discovery_max_attempts"]:
-                record["sample_status"] = "dropped"
-                state["discovery_queue"].remove(room)
-                metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", "events", {"seq": record["event_seq"], "text": f"created {room}"}, extra={"discovered_room": room, "reason": error})
+                record["sample_status"] = "dropped"; state["discovery_queue"].remove(room); metric_event(state, "discovery_queue_dropped", "discovery_queue_drop", "events", {"seq": record["event_seq"], "text": f"created {room}"}, extra={"discovered_room": room, "reason": error})
             continue
-        process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"])
-        set_success(state, room); record["sample_status"] = "sampled"; record["sampled_at"] = now(); record["last_error"] = None; record["next_attempt_at"] = None
-        state["discovery_queue"].remove(room); state["metrics"]["discovery_samples"] += 1
+        changed = process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]) or changed; changed = set_success(state, room) or changed; record["sample_status"] = "sampled"; record["sampled_at"] = now(); record["last_error"] = None; record["next_attempt_at"] = None; state["discovery_queue"].remove(room); state["metrics"]["discovery_samples"] += 1
+    return changed
 
 
 async def observe_once_async(client: httpx.AsyncClient | None = None) -> dict:
@@ -495,15 +462,9 @@ async def observe_once_async(client: httpx.AsyncClient | None = None) -> dict:
         config = load_config(); state, own_did = load_state(config["memory_retention"]), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
         if owned: client = httpx.AsyncClient()
         try:
-            await asyncio.gather(*(snapshot_room(client, budget, state, config, room, own_did, mailbox) for room in observed_rooms(config)))
-            await consume_discovery_queue(client, budget, state, config, own_did, mailbox)
-            save_state(state)
-            append_log(config, {"kind": "snapshot_complete", "at": state["updated_at"]})
-            return observer_status(config, state)
+            await asyncio.gather(*(snapshot_room(client, budget, state, config, room, own_did, mailbox) for room in observed_rooms(config))); await consume_discovery_queue(client, budget, state, config, own_did, mailbox); save_state(state); append_log(config, {"kind": "snapshot_complete", "at": state["updated_at"]}); return observer_status(config, state)
         finally:
             if owned: await client.aclose()
-
-
 def observe_once() -> dict: return asyncio.run(observe_once_async())
 def room_interval(config: dict, room: str, mailbox: str | None) -> int: return config["room_intervals_seconds"]["lobby" if room == "lobby" else "events" if room == "events" else "mailbox" if room == mailbox else "watch"]
 
@@ -511,32 +472,31 @@ def room_interval(config: dict, room: str, mailbox: str | None) -> int: return c
 async def room_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, room: str, own_did: str | None, mailbox: str | None, stop: asyncio.Event, writer: StateWriter | None = None) -> None:
     backoff = 0.0
     while not stop.is_set():
-        await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), config["long_poll_seconds"])
-        if error: set_error(state, room, error, str(retry or "")); backoff = retry if retry is not None else min(300.0, max(1.0, backoff * 2 or 1.0))
-        else: process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]); set_success(state, room); backoff = 0.0
-        if writer: writer.mark_dirty()
+        await budget.acquire(); payload, retry, error = await read_room(client, room, state["cursors"].get(room, 0), config["long_poll_seconds"]); changed = False
+        if error: changed = set_error(state, room, error, str(retry or "")); backoff = retry if retry is not None else min(300.0, max(1.0, backoff * 2 or 1.0))
+        else: changed = process_payload(state, config, room, payload or {}, own_did, mailbox, bootstrap=room not in state["cursors"]); changed = set_success(state, room) or changed; backoff = 0.0
+        if writer and changed: writer.mark_dirty()
         try: await asyncio.wait_for(stop.wait(), timeout=backoff or room_interval(config, room, mailbox))
         except TimeoutError: pass
 
 
 async def discovery_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, own_did: str | None, mailbox: str | None, stop: asyncio.Event, writer: StateWriter | None = None) -> None:
     while not stop.is_set():
-        await consume_discovery_queue(client, budget, state, config, own_did, mailbox)
-        if writer: writer.mark_dirty()
+        changed = await consume_discovery_queue(client, budget, state, config, own_did, mailbox)
+        if writer and changed: writer.mark_dirty()
         try: await asyncio.wait_for(stop.wait(), timeout=config["poll_interval_seconds"])
         except TimeoutError: pass
 
 
 async def backfill_worker(client: httpx.AsyncClient, budget: ReadBudget, state: dict, config: dict, stop: asyncio.Event, writer: StateWriter | None = None) -> None:
     while not stop.is_set():
-        await backfill_into_state(client, budget, state, config)
-        if writer: writer.mark_dirty()
+        changed = await backfill_into_state(client, budget, state, config)
+        if writer and changed: writer.mark_dirty()
         try: await asyncio.wait_for(stop.wait(), timeout=config["rooms_backfill_interval_seconds"])
         except TimeoutError: pass
 
 
 async def resident_worker(config: dict, stop: asyncio.Event, state: dict | None = None) -> None:
-    """Local-only candidate refresh; deliberately has no network client."""
     from . import resident
     while not stop.is_set():
         try:
@@ -553,19 +513,14 @@ async def observe_forever_async(stop: asyncio.Event | None = None, client: httpx
     with ObserverLock():
         config = load_config(); state, own_did = load_state(config["memory_retention"]), verified_did(); mailbox = selected_mailbox(config); budget, owned = ReadBudget(config["read_budget_per_minute"]), client is None
         if owned: client = httpx.AsyncClient()
-        writer = StateWriter(state, config["state_flush_interval_seconds"], config); writer.mark_dirty()
-        writer_task = asyncio.create_task(writer.run(stop))
+        writer = StateWriter(state, config["state_flush_interval_seconds"], config); writer.mark_dirty(); writer_task = asyncio.create_task(writer.run(stop))
         try:
-            tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop, writer)) for room in observed_rooms(config)]
-            tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop, writer)))
-            tasks.append(asyncio.create_task(backfill_worker(client, budget, state, config, stop, writer)))
-            tasks.append(asyncio.create_task(resident_worker(config, stop, state)))
+            tasks = [asyncio.create_task(room_worker(client, budget, state, config, room, own_did, mailbox, stop, writer)) for room in observed_rooms(config)]; tasks.append(asyncio.create_task(discovery_worker(client, budget, state, config, own_did, mailbox, stop, writer))); tasks.append(asyncio.create_task(backfill_worker(client, budget, state, config, stop, writer))); tasks.append(asyncio.create_task(resident_worker(config, stop, state)))
             try: await asyncio.gather(*tasks)
             finally:
                 stop.set()
                 for task in tasks: task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                await writer_task
+                await asyncio.gather(*tasks, return_exceptions=True); await writer_task
         finally:
             if owned: await client.aclose()
 
@@ -584,8 +539,7 @@ def observe_forever(stop: Event | None = None) -> None:
 
 
 def observer_status(config: dict | None = None, state: dict | None = None) -> dict:
-    config, state = config or load_config(), state or load_state()
-    return {"read_only": True, "schema_version": SCHEMA_VERSION, "rooms": observed_rooms(config), "cursors": state["cursors"], "metrics": state["metrics"], "agent_count": len(state["agents"]), "health": state["health"], "error_history": state["error_history"]}
+    config, state = config or load_config(), state or load_state(); return {"read_only": True, "schema_version": SCHEMA_VERSION, "rooms": observed_rooms(config), "cursors": state["cursors"], "metrics": state["metrics"], "agent_count": len(state["agents"]), "health": state["health"], "error_history": state["error_history"]}
 def list_agents() -> dict:
     state = load_state(); return {"agents": [{"fingerprint": fp, "did": agent["did"], "facts": {k: v for k, v in agent["facts"].items() if k != "recent_messages"}, "inferences": agent["inferences"]} for fp, agent in state["agents"].items()]}
 def get_agent(identifier: str) -> dict:
@@ -595,20 +549,13 @@ def get_agent(identifier: str) -> dict:
 
 
 def intelligence_report() -> dict:
-    """Summarize local observer facts only; this function performs no network access."""
-    state, own_did = load_state(), verified_did()
-    rooms = state["discovered_rooms"]
-    discovery = {status: sum(1 for record in rooms.values() if record.get("sample_status") == status) for status in ("sampled", "queued", "dropped")}
-    discovery["retrying"] = sum(1 for record in rooms.values() if record.get("sample_status") == "queued" and record.get("last_error"))
-    drop_reasons: dict[str, int] = {}
+    state, own_did = load_state(), verified_did(); rooms = state["discovered_rooms"]; discovery = {status: sum(1 for record in rooms.values() if record.get("sample_status") == status) for status in ("sampled", "queued", "dropped")}; discovery["retrying"] = sum(1 for record in rooms.values() if record.get("sample_status") == "queued" and record.get("last_error")); drop_reasons: dict[str, int] = {}
     for record in state["opportunities"]:
         if record["kind"] == "discovery_queue_drop": drop_reasons[record.get("reason", "unknown")] = drop_reasons.get(record.get("reason", "unknown"), 0) + 1
-    grouped: dict[tuple, dict] = {}
-    reportable = {"question_candidate", "help_candidate", "collaboration_candidate", "contribution_candidate", "inbound_mailbox_message", "new_did", "returning_did", "new_room", "message_gap"}
+    grouped: dict[tuple, dict] = {}; reportable = {"question_candidate", "help_candidate", "collaboration_candidate", "contribution_candidate", "inbound_mailbox_message", "new_did", "returning_did", "new_room", "message_gap"}
     for record in state["opportunities"]:
         if record["kind"] not in reportable: continue
-        key = (record["room"], record.get("seq"), record.get("did"), record.get("discovered_room") if record["kind"] == "new_room" else None)
-        group = grouped.setdefault(key, {"room": record["room"], "seq": record.get("seq"), "did": record.get("did"), "discovered_room": record.get("discovered_room"), "kinds": [], "text_excerpt": record["text_excerpt"], "untrusted": True})
+        key = (record["room"], record.get("seq"), record.get("did"), record.get("discovered_room") if record["kind"] == "new_room" else None); group = grouped.setdefault(key, {"room": record["room"], "seq": record.get("seq"), "did": record.get("did"), "discovered_room": record.get("discovered_room"), "kinds": [], "text_excerpt": record["text_excerpt"], "untrusted": True})
         if record["kind"] not in group["kinds"]: group["kinds"].append(record["kind"])
     signals_by_did: dict[str, set[str]] = {}
     for group in grouped.values():
