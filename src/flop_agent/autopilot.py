@@ -65,6 +65,10 @@ _CONCRETE_TASK_RE = re.compile(
     r"code|patch|issue|pull\s+request|pr|result|acceptance|validate|reproduce)\b",
     re.I,
 )
+_REPO_TEST_HELP_RE = re.compile(
+    r"\b(?:test\s+vectors?|did\s+publish\s+path|reproduc(?:e|ible|tion))\b",
+    re.I,
+)
 
 _TRUST_CACHE_KEY: tuple | None = None
 _TRUST_CACHE: dict[str, str] = {}
@@ -190,6 +194,12 @@ def first_contact_eligible(candidate: dict) -> tuple[bool, str, str | None]:
         and incremental_value_supported(text, resolved, category)[0]
     ):
         return True, "concrete_public_technical_request", resolved
+
+    # Preserve the isolated Signer's proven deterministic renderer while making
+    # concrete DID-publish/test-vector help actionable through its existing
+    # repo_tests_bugs template.  No inbound text is copied into the reply.
+    if category == "help_request" and _REPO_TEST_HELP_RE.search(text):
+        return True, "concrete_public_technical_request", "repo_tests_bugs"
 
     # For explicit help/collaboration only, the old deterministic generic
     # templates are safe because they contain no untrusted text or live facts.
