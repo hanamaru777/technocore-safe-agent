@@ -2,8 +2,9 @@
 
 The proven transport/publisher lives in ``autopilot_core``. The first-contact
 policy lives in ``autopilot_policy``. This facade keeps legacy monkeypatch/config
-compatibility, rejects hostile cold prompts, and caches autonomous trust lookup
-so activation remains cheap on large production state.
+compatibility, rejects hostile cold prompts, preserves the already-running
+Signer's deterministic render behavior, and caches autonomous trust lookup so
+activation remains cheap on large production state.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ autopilot_policy = _policy
 _BASE_DEFAULT_STATE = _policy.default_state
 _POLICY_ELIGIBLE = _policy.eligible
 _POLICY_FIRST_CONTACT = _policy.first_contact_eligible
+_BASE_RENDER = _policy._BASE_RENDER
 _HUMAN_TRUSTED = _policy._BASE_SENDER_TRUSTED
 _HUMAN_ACTIVE_TRUSTED = _policy._BASE_ACTIVE_TRUSTED
 
@@ -78,6 +80,11 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     if result[0] and candidate.get("category") not in TRANSPORT_SAFE_CATEGORIES:
         return False, "category_not_allowlisted", None
     return result
+
+
+def render(intent: dict) -> str:
+    """Use the exact renderer already loaded by the isolated production Signer."""
+    return _BASE_RENDER(intent)
 
 
 def _autonomous_trust_map(local_state: dict, auto_state: dict) -> dict[str, str]:
@@ -158,10 +165,12 @@ def active_trusted_relationships(
 _policy.default_state = default_state
 _policy.first_contact_eligible = first_contact_eligible
 _policy.eligible = eligible
+_policy.render = render
 _policy.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy.active_trusted_relationships = active_trusted_relationships
 _policy._core.default_state = default_state
 _policy._core.eligible = eligible
+_policy._core.render = render
 _policy._core.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy._core.active_trusted_relationships = active_trusted_relationships
 
