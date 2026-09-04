@@ -78,6 +78,7 @@ def test_source_backed_cutover_acceptance_covers_required_boundaries() -> None:
     assert "'/knowledge nonce'" in text
     assert "'/knowledge tclk_alpha'" in text
     assert "'/candidate acceptance-local-only'" in text
+    assert "resident.candidate = lambda _candidate_id: {'untrusted_data': True, 'candidate': synthetic}" in text
     assert "Knowledge: tclk_alpha | verified | read-only" in text
     assert "'/collab'" in text
     assert "'/status'" in text
