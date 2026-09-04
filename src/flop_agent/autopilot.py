@@ -264,6 +264,13 @@ def make_intent(candidate: dict, topic: str, reason: str) -> dict:
 def _decision_key(allowed: bool, reason: str, topic: str | None) -> str: return hashlib.sha256(json.dumps([allowed, reason, topic], separators=(",", ":")).encode()).hexdigest()[:20]
 def _prune_recent_decisions(records: list[dict]) -> list[dict]:
     cutoff = datetime.now(UTC) - timedelta(hours=24); current = [item for item in records if isinstance(item, dict) and (stamp := observer.parse_time(item.get("at"))) and stamp > cutoff]; return current[-RECENT_DECISION_LIMIT:]
+def _remember_recent_decision(state: dict, record: dict) -> bool:
+    recent = _prune_recent_decisions(state.get("recent_decisions", [])); source = record.get("source_candidate")
+    latest = next((item for item in reversed(recent) if item.get("source_candidate") == source), None)
+    changed = not (latest and all(latest.get(key) == record.get(key) for key in ("action", "eligible", "why", "rate_limit")))
+    if changed: recent.append(record)
+    state["recent_decisions"] = _prune_recent_decisions(recent)
+    return changed
 def _resident_state_revision() -> str | None:
     try:
         info = resident.state_path().stat(); return f"{info.st_mtime_ns}:{info.st_size}"
@@ -395,7 +402,10 @@ def publish(intent_id: str, confirm: bool) -> dict:
     if state["paused"] or not state["enabled"]: raise RuntimeError("autopilot is not enabled")
     if observer.parse_time(intent["expires_at"]) <= datetime.now(UTC): raise RuntimeError("intent expired")
     text = render(intent); allowed, reason = rate_ok(state, intent)
-    if not allowed: audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": reason, "action": "blocked"}); save(state); raise RuntimeError("autopilot rate limit blocked publish")
+    if not allowed:
+        record = {"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": reason, "action": "blocked"}
+        if _remember_recent_decision(state, record): audit(record)
+        save(state); raise RuntimeError("autopilot rate limit blocked publish")
     did = core.current_did(); core.require_verified_did(did)
     if not core.signer_matches_pinned(): raise RuntimeError("official signer integrity check failed")
     core.post_signed(intent["room"], text, True, did=did, action="safe_autopilot_publish", record_permalink=False); state["receipts"][intent_id] = {"at": now()}; state["rate_history"].append({"at": now(), "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(text.encode()).hexdigest()}); save(state); audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "pass", "action": "published"}); return {"intent_id": intent_id, "action": "posted"}
