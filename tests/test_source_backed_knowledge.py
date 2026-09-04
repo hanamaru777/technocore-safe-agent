@@ -67,6 +67,17 @@ def test_registry_is_versioned_pinned_and_narrow():
             assert len(source["commit"]) == 40
 
 
+def test_registry_rejects_future_review_time(monkeypatch, tmp_path):
+    data = json.loads(knowledge.REGISTRY_PATH.read_text("utf-8"))
+    data["checked_at"] = "2099-01-01T00:00:00+00:00"
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(data), "utf-8")
+    monkeypatch.setattr(knowledge, "REGISTRY_PATH", path)
+
+    with pytest.raises(RuntimeError, match="in the future"):
+        knowledge.load_registry()
+
+
 def test_signed_preview_reuses_exact_existing_signer_renderer():
     answer = knowledge.preview("nonce", current=FIXED_NOW)
 
@@ -162,6 +173,7 @@ def test_acknowledged_reply_gets_bounded_source_provenance_audit(monkeypatch, tm
     assert record["topic"] == "repo_tests_bugs"
     assert record["registry_id"] == "flop-onboarding-knowledge-v1"
     assert record["source_ids"] == ["project-profile-3d90733d", "project-readme-3d90733d"]
+    assert record["provenance_mode"] == "retroactive_mapping"
     assert len(record["answer_sha256"]) == 64
     serialized = json.dumps(payload).lower()
     assert "private key" not in serialized
