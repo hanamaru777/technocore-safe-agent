@@ -21,6 +21,7 @@ for _name in dir(_policy):
 autopilot_core = _policy.autopilot_core
 autopilot_policy = _policy
 
+_BASE_DEFAULT_STATE = _policy.default_state
 _POLICY_ELIGIBLE = _policy.eligible
 _POLICY_FIRST_CONTACT = _policy.first_contact_eligible
 _HUMAN_TRUSTED = _policy._BASE_SENDER_TRUSTED
@@ -51,6 +52,12 @@ _UNTRUSTED_ACTION_RE = re.compile(
 
 _TRUST_CACHE_KEY: tuple | None = None
 _TRUST_CACHE: dict[str, str] = {}
+
+
+def default_state() -> dict:
+    state = _BASE_DEFAULT_STATE()
+    state.setdefault("first_contact_intents", {})
+    return state
 
 
 def _candidate_excerpt(candidate: dict) -> str:
@@ -148,10 +155,12 @@ def active_trusted_relationships(
 
 # Functions retained in policy/core resolve globals in their defining modules.
 # Patch the activation guards back into both modules.
+_policy.default_state = default_state
 _policy.first_contact_eligible = first_contact_eligible
 _policy.eligible = eligible
 _policy.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy.active_trusted_relationships = active_trusted_relationships
+_policy._core.default_state = default_state
 _policy._core.eligible = eligible
 _policy._core.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy._core.active_trusted_relationships = active_trusted_relationships
