@@ -3,8 +3,8 @@
 The proven transport/publisher lives in ``autopilot_core``. The first-contact
 policy lives in ``autopilot_policy``. This facade keeps legacy monkeypatch/config
 compatibility, rejects hostile cold prompts, preserves the already-running
-Signer's deterministic render behavior, and caches autonomous trust lookup so
-activation remains cheap on large production state.
+Signer's deterministic render behavior, and gates autonomous cold-start behind an
+explicit local feature flag.
 """
 from __future__ import annotations
 
@@ -23,11 +23,11 @@ autopilot_core = _policy.autopilot_core
 autopilot_policy = _policy
 
 _BASE_DEFAULT_STATE = _policy.default_state
-_POLICY_ELIGIBLE = _policy.eligible
-_POLICY_FIRST_CONTACT = _policy.first_contact_eligible
+_BASE_ELIGIBLE = _policy._BASE_ELIGIBLE
 _BASE_RENDER = _policy._BASE_RENDER
 _HUMAN_TRUSTED = _policy._BASE_SENDER_TRUSTED
 _HUMAN_ACTIVE_TRUSTED = _policy._BASE_ACTIVE_TRUSTED
+_POLICY_BUILD_OUTBOX = _policy.build_outbox
 
 TRANSPORT_SAFE_CATEGORIES = {
     "help_request",
@@ -37,9 +37,15 @@ TRANSPORT_SAFE_CATEGORIES = {
     "conversation",
 }
 
-# Cold-start classification never follows these instructions. Rejecting them
-# before semantic fallback also preserves the prior fail-closed behavior for
-# prompt-injection shaped requests.
+# Cold start stays much narrower than the normal trusted lane.  In particular,
+# artifact/returning-agent bulk observations never bootstrap autonomous contact.
+FIRST_CONTACT_CATEGORIES = {
+    "help_request",
+    "specific_question",
+    "technical_collaboration",
+    "conversation",
+}
+
 _UNTRUSTED_ACTION_RE = re.compile(
     r"(?:"
     r"\bignore\s+(?:all|previous|prior)\b|"
@@ -51,15 +57,47 @@ _UNTRUSTED_ACTION_RE = re.compile(
     r")",
     re.I,
 )
+_HELP_RE = re.compile(r"\b(?:help|assist|support|could\s+you|can\s+you)\b", re.I)
+_COLLAB_RE = re.compile(r"\b(?:collaborat(?:e|ion)?|partner|together|work\s+with)\b", re.I)
+_CONCRETE_TASK_RE = re.compile(
+    r"\b(?:task|artifact|repo|repository|test|bug|build|implement|review|"
+    r"code|patch|issue|pull\s+request|pr|result|acceptance|validate|reproduce)\b",
+    re.I,
+)
 
 _TRUST_CACHE_KEY: tuple | None = None
 _TRUST_CACHE: dict[str, str] = {}
+_BUILD_ACTIVATION_CONTEXT = False
 
 
 def default_state() -> dict:
     state = _BASE_DEFAULT_STATE()
     state.setdefault("first_contact_intents", {})
+    state.setdefault("first_contact_enabled", False)
     return state
+
+
+def load(*, allow_legacy: bool = True) -> dict:
+    state = _policy._BASE_LOAD(allow_legacy=allow_legacy)
+    state.setdefault("first_contact_intents", {})
+    state.setdefault("first_contact_enabled", False)
+    if not isinstance(state["first_contact_intents"], dict):
+        raise RuntimeError("autopilot first-contact state is invalid")
+    if not isinstance(state["first_contact_enabled"], bool):
+        raise RuntimeError("autopilot first-contact feature flag is invalid")
+    return state
+
+
+def set_first_contact_enabled(value: bool) -> dict:
+    if not isinstance(value, bool):
+        raise ValueError("first-contact feature flag must be boolean")
+    state = load()
+    state["first_contact_enabled"] = value
+    save(state)
+    return {
+        "first_contact_enabled": value,
+        "queued": status(state)["queued"],
+    }
 
 
 def _candidate_excerpt(candidate: dict) -> str:
@@ -68,18 +106,107 @@ def _candidate_excerpt(candidate: dict) -> str:
     return value[:560] if isinstance(value, str) else ""
 
 
+def _signed_source(candidate: dict) -> bool:
+    signals = candidate.get("signals", {})
+    if not isinstance(signals, dict):
+        return False
+    if candidate.get("category") == "conversation":
+        return signals.get("direct_public_signed") is True
+    facts = signals.get("facts", {})
+    return isinstance(facts, dict) and int(facts.get("signed_message_count", 0) or 0) >= 1
+
+
 def first_contact_eligible(candidate: dict) -> tuple[bool, str, str | None]:
+    """Strict bootstrap lane; never reflects untrusted room text into output."""
+    if candidate.get("status") != "pending":
+        return False, "candidate_not_pending", None
+    room = candidate.get("room")
+    if not isinstance(room, str) or not PUBLIC_ROOMS.fullmatch(room):
+        return False, "non_public_or_owned_room", None
+    category = candidate.get("category")
+    if category not in FIRST_CONTACT_CATEGORIES:
+        return False, "first_contact_category_blocked", None
+
     text = _candidate_excerpt(candidate)
-    if text and _UNTRUSTED_ACTION_RE.search(text):
+    if not text:
+        return False, "candidate_subject_unresolved", None
+    if _UNTRUSTED_ACTION_RE.search(text):
         return False, "untrusted_sensitive_or_action_content", None
-    return _POLICY_FIRST_CONTACT(candidate)
+    if UNSUPPORTED_PUBLIC_FACT_RE.search(text):
+        return False, "unsupported_public_fact", None
+    if UNSUPPORTED_PROTOCOL_SEMANTICS_RE.search(text):
+        return False, "reply_semantics_unsupported", None
+    if not _signed_source(candidate):
+        return False, "first_contact_unsigned_source", None
+
+    signals = candidate.get("signals", {})
+    if category == "conversation":
+        if (
+            signals.get("direct_public_signed") is True
+            and signals.get("conversation_topic") == "agent_use_case"
+            and is_explicit_agent_use_case_question(text)
+        ):
+            return True, "signed_public_direct_request", "agent_use_case"
+        return False, "conversation_not_verified", None
+
+    facts = signals.get("facts", {}) if isinstance(signals, dict) else {}
+    if isinstance(facts, dict) and facts.get("inbound_to_us"):
+        return False, "direct_context_is_never_auto_posted", None
+    if (
+        not isinstance(signals, dict)
+        or signals.get("spam_noise_probability", 1) >= 0.20
+        or signals.get("generic_template_probability", 1) > 0
+        or signals.get("poetic_filler_count", 0)
+    ):
+        return False, "generic_or_noise", None
+    if signals.get("concrete_evidence") is not True:
+        return False, "no_public_concrete_evidence", None
+
+    # A specific question may bootstrap only when the already-proven semantic
+    # policy can answer that exact subject.  No generic fallback for vague facts,
+    # current state, DID rotation details, or unsupported protocol semantics.
+    if category == "specific_question":
+        original = _BASE_ELIGIBLE(candidate)
+        if original[0]:
+            return original
+        return False, original[1], original[2]
+
+    explicit = observer.is_question_or_explicit_request(text)
+    if category == "help_request":
+        if not (explicit or _HELP_RE.search(text)) or not _CONCRETE_TASK_RE.search(text):
+            return False, "help_request_context_unverified", None
+    elif category == "technical_collaboration":
+        if not (explicit or _COLLAB_RE.search(text)) or not _CONCRETE_TASK_RE.search(text):
+            return False, "collaboration_not_concrete", None
+
+    resolved, _ = resolve_candidate_topic(text)
+    if (
+        resolved is not None
+        and reply_semantics_supported(text, resolved)
+        and incremental_value_supported(text, resolved, category)[0]
+    ):
+        return True, "concrete_public_technical_request", resolved
+
+    # For explicit help/collaboration only, the old deterministic generic
+    # templates are safe because they contain no untrusted text or live facts.
+    if category == "technical_collaboration" and _COLLAB_RE.search(text):
+        return True, "concrete_public_technical_request", "collaboration"
+    if category == "help_request" and _HELP_RE.search(text):
+        return True, "concrete_public_technical_request", "follow_up"
+    return False, "candidate_subject_unresolved", None
 
 
 def eligible(candidate: dict) -> tuple[bool, str, str | None]:
-    result = _POLICY_ELIGIBLE(candidate)
-    if result[0] and candidate.get("category") not in TRANSPORT_SAFE_CATEGORIES:
+    original = _BASE_ELIGIBLE(candidate)
+    if original[0] and candidate.get("category") not in TRANSPORT_SAFE_CATEGORIES:
         return False, "category_not_allowlisted", None
-    return result
+    if original[0]:
+        return original
+    if _BUILD_ACTIVATION_CONTEXT:
+        bootstrap = first_contact_eligible(candidate)
+        if bootstrap[0]:
+            return bootstrap
+    return original
 
 
 def render(intent: dict) -> str:
@@ -160,15 +287,28 @@ def active_trusted_relationships(
     ]
 
 
+def build_outbox() -> dict:
+    """Run the policy builder; cold-start overlay is active only when explicitly enabled."""
+    global _BUILD_ACTIVATION_CONTEXT
+    state = load()
+    _BUILD_ACTIVATION_CONTEXT = bool(state.get("first_contact_enabled"))
+    try:
+        return _POLICY_BUILD_OUTBOX()
+    finally:
+        _BUILD_ACTIVATION_CONTEXT = False
+
+
 # Functions retained in policy/core resolve globals in their defining modules.
-# Patch the activation guards back into both modules.
+# Patch activation guards back into both modules.
 _policy.default_state = default_state
+_policy.load = load
 _policy.first_contact_eligible = first_contact_eligible
 _policy.eligible = eligible
 _policy.render = render
 _policy.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy.active_trusted_relationships = active_trusted_relationships
 _policy._core.default_state = default_state
+_policy._core.load = load
 _policy._core.eligible = eligible
 _policy._core.render = render
 _policy._core.sender_trusted_for_autopilot = sender_trusted_for_autopilot
