@@ -22,6 +22,11 @@ SHARED_DIR = "autopilot"
 PROFILE = core.ROOT / "public-profile.json"
 PUBLIC_ROOMS = re.compile(r"^(?!p-|mb-)[a-z0-9][a-z0-9_-]{0,47}$")
 ALLOWED_TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution", "did_signature", "nonce", "technocore_api", "prompt_injection_safety", "repo_tests_bugs", "contribution_artifact", "collaboration", "follow_up", "agent_use_case"}
+FIRST_ACTION_CATEGORIES = {"conversation", "specific_question", "help_request", "technical_collaboration"}
+FIRST_ACTION_TOPICS = {"agent_use_case", "repo_tests_bugs", "nonce", "did_signature", "technocore_api", "prompt_injection_safety", "collaboration"}
+FIRST_ACTION_DAILY_LIMIT = 2
+FIRST_ACTION_DID_COOLDOWN = timedelta(hours=24)
+FIRST_ACTION_PREVIEW_LIMIT = 5
 DLP = re.compile(r"(?ix)(?:sign_seed|private[ _-]?key|\bseed\b|api[ _-]?key|token|authorization:|discord|\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b|\b\+?\d[\d -]{7,}\d\b|(?:[a-z]:\\|/home/|/users/|/etc/|/var/)|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9_+=-]{32,}\b)")
 UNSUPPORTED_PUBLIC_FACT_RE = re.compile(r"\b(?:airdrop\s+snapshot|snapshot\s+airdrop|reward(?:s)?\s+(?:timing|date)|tge|token\s+(?:timing|date)|current\s+event)\b", re.I)
 UNSUPPORTED_PROTOCOL_SEMANTICS_RE = re.compile(r"\b(?:author\s+proof|acceptance\s+proof|protocol\s+acceptance|governance\s+acceptance|consensus\s+acceptance)\b", re.I)
@@ -229,6 +234,47 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     return False, "category_not_allowlisted", None
 
 
+def first_action_eligible(candidate: dict) -> tuple[bool, str, str | None]:
+    """Allow only a deterministic, public, signed high-signal first contact.
+
+    This lane intentionally does not interpolate untrusted text and never admits the
+    artifact-heavy backlog. It is a bootstrap path, not a relaxation of the trusted
+    follow-up lane.
+    """
+    if candidate.get("status") != "pending": return False, "candidate_not_pending", None
+    room = candidate.get("room")
+    if not isinstance(room, str) or not PUBLIC_ROOMS.fullmatch(room): return False, "non_public_or_owned_room", None
+    category = candidate.get("category")
+    if category not in FIRST_ACTION_CATEGORIES: return False, "first_action_category_blocked", None
+    signals = candidate.get("signals", {}) if isinstance(candidate.get("signals"), dict) else {}
+    context = candidate.get("context", {}) if isinstance(candidate.get("context"), dict) else {}
+    excerpt = context.get("excerpt")
+    if not isinstance(excerpt, str) or not excerpt.strip(): return False, "candidate_subject_unresolved", None
+    if UNSUPPORTED_PUBLIC_FACT_RE.search(excerpt) or UNSUPPORTED_PROTOCOL_SEMANTICS_RE.search(excerpt): return False, "unsupported_public_fact", None
+
+    if category == "conversation":
+        if signals.get("direct_public_signed") is not True or signals.get("conversation_topic") != "agent_use_case": return False, "conversation_not_verified", None
+        if not is_explicit_agent_use_case_question(excerpt): return False, "specific_question_context_unverified", None
+        return True, "explicit_signed_agent_use_case", "agent_use_case"
+
+    facts = signals.get("facts", {}) if isinstance(signals.get("facts"), dict) else {}
+    if facts.get("inbound_to_us"): return False, "direct_context_is_never_auto_posted", None
+    if int(facts.get("signed_message_count", 0) or 0) < 1: return False, "first_action_unsigned_source", None
+    if signals.get("spam_noise_probability", 1) >= 0.20 or signals.get("generic_template_probability", 1) > 0 or signals.get("poetic_filler_count", 0): return False, "generic_or_noise", None
+    if signals.get("concrete_evidence") is not True: return False, "no_public_concrete_evidence", None
+
+    explicit = observer.is_question_or_explicit_request(excerpt)
+    explicit_collaboration = bool(re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b.*\b(?:public|testable|task|artifact|repo|repository|test|bug)\b", excerpt, re.I))
+    if not explicit and not (category == "technical_collaboration" and explicit_collaboration): return False, "first_action_not_explicit_request", None
+
+    topic, relevance = resolve_candidate_topic(excerpt)
+    if topic is None: return False, relevance, None
+    if topic not in FIRST_ACTION_TOPICS: return False, "first_action_topic_blocked", topic
+    incremental, incremental_reason = incremental_value_supported(excerpt, topic, category)
+    if not incremental and not explicit_collaboration: return False, incremental_reason, topic
+    return True, "safe_first_action", topic
+
+
 def eligible_approved_candidate(candidate: dict) -> tuple[bool, str, str | None]: pending = dict(candidate); pending["status"] = "pending"; return eligible(pending)
 
 
@@ -245,17 +291,30 @@ def durable_publication_at(candidate_id: str, fingerprint: str, local_state: dic
     return None
 
 
+def durable_first_action_at(fingerprint: str, local_state: dict, auto_state: dict) -> str | None:
+    stamps = []
+    for item in auto_state.get("outbox", {}).values():
+        if not isinstance(item, dict) or item.get("fingerprint") != fingerprint: continue
+        if not str(item.get("safety_decision", "")).startswith("safe_first_action"): continue
+        stamp = durable_publication_at(str(item.get("source_candidate_id", "")), fingerprint, local_state, auto_state)
+        if stamp: stamps.append(stamp)
+    return max(stamps) if stamps else None
+
+
 def active_trusted_relationships(local_state: dict | None = None, auto_state: dict | None = None) -> list[dict]:
     state = local_state or resident.load_state(); auto = auto_state or load(); rows = []
     for fingerprint, relationship in state.get("relationships", {}).items():
         history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []; successes = [stamp for item in history if isinstance(item, dict) and item.get("decision") == "approved" for stamp in [durable_publication_at(str(item.get("candidate_id", "")), fingerprint, state, auto)] if stamp]
+        first_action = durable_first_action_at(fingerprint, state, auto)
+        if first_action: successes.append(first_action)
         if successes: rows.append({"fingerprint": fingerprint, "at": max(successes)})
     return sorted(rows, key=lambda item: item["at"], reverse=True)
 
 
 def sender_trusted_for_autopilot(candidate: dict, local_state: dict | None = None, auto_state: dict | None = None) -> bool:
-    state = local_state or resident.load_state(); auto = auto_state or load(); relationship = state.get("relationships", {}).get(candidate.get("fingerprint"), {}); history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []; current_id = candidate.get("candidate_id")
-    return any(isinstance(item, dict) and item.get("decision") == "approved" and item.get("candidate_id") != current_id and durable_publication_at(str(item.get("candidate_id", "")), str(candidate.get("fingerprint", "")), state, auto) for item in history)
+    state = local_state or resident.load_state(); auto = auto_state or load(); fingerprint = str(candidate.get("fingerprint", "")); relationship = state.get("relationships", {}).get(fingerprint, {}); history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []; current_id = candidate.get("candidate_id")
+    approved = any(isinstance(item, dict) and item.get("decision") == "approved" and item.get("candidate_id") != current_id and durable_publication_at(str(item.get("candidate_id", "")), fingerprint, state, auto) for item in history)
+    return bool(approved or durable_first_action_at(fingerprint, state, auto))
 
 
 def make_intent(candidate: dict, topic: str, reason: str) -> dict:
@@ -277,6 +336,58 @@ def _resident_state_revision() -> str | None:
     except OSError: return None
 
 
+def _is_first_action_intent(item: dict) -> bool: return str(item.get("safety_decision", "")).startswith("safe_first_action")
+
+def _first_action_history(state: dict) -> list[dict]:
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    return [item for item in state.get("rate_history", []) if isinstance(item, dict) and item.get("lane") == "first_action" and (stamp := observer.parse_time(item.get("at"))) and stamp > cutoff]
+
+def _first_action_slots(state: dict) -> int:
+    used = len(_first_action_history(state))
+    queued = sum(isinstance(item, dict) and item.get("status", "queued") == "queued" and _is_first_action_intent(item) for item in state.get("outbox", {}).values())
+    return max(0, FIRST_ACTION_DAILY_LIMIT - used - queued)
+
+def _first_action_rank(candidate: dict) -> tuple:
+    signals = candidate.get("signals", {}) if isinstance(candidate.get("signals"), dict) else {}
+    context = candidate.get("context", {}) if isinstance(candidate.get("context"), dict) else {}
+    excerpt = context.get("excerpt") if isinstance(context.get("excerpt"), str) else ""
+    category_weight = {"conversation": 5, "help_request": 4, "specific_question": 3, "technical_collaboration": 2}.get(candidate.get("category"), 0)
+    direct = 1 if signals.get("direct_public_signed") is True else 0
+    explicit = 1 if observer.is_question_or_explicit_request(excerpt) else 0
+    useful = float(signals.get("useful_agent_probability", 0.0) or 0.0)
+    continuity = 1 if signals.get("conversation_continuity") else 0
+    created = observer.parse_time(candidate.get("created_at")); created_score = created.timestamp() if created else 0.0
+    return (direct, category_weight, explicit, useful, continuity, created_score, str(candidate.get("candidate_id", "")))
+
+
+def preview_first_actions(local_state: dict | None = None, auto_state: dict | None = None, limit: int = FIRST_ACTION_PREVIEW_LIMIT) -> dict:
+    """Read-only preview of bounded first actions; never stages, signs, or posts."""
+    local = local_state or resident.load_state(); state = auto_state or load(); slots = min(max(0, int(limit)), _first_action_slots(state))
+    if slots <= 0: return {"slots": 0, "candidates": []}
+    candidates = []
+    for candidate in local.get("candidates", {}).values():
+        if not isinstance(candidate, dict): continue
+        allowed, reason, topic = first_action_eligible(candidate)
+        if not allowed or topic is None or sender_trusted_for_autopilot(candidate, local, state): continue
+        intent = make_intent(candidate, topic, f"safe_first_action:{reason}")
+        if intent["id"] in state.get("outbox", {}) or intent["id"] in state.get("receipts", {}): continue
+        try: text = render(intent)
+        except RuntimeError: continue
+        rate_allowed, rate_reason = rate_ok_preview(state, intent)
+        if not rate_allowed: continue
+        candidates.append((candidate, topic, reason, intent, text, rate_reason))
+    candidates.sort(key=lambda row: _first_action_rank(row[0]), reverse=True)
+    selected = []
+    fingerprints = set()
+    for candidate, topic, reason, intent, text, _ in candidates:
+        fingerprint = str(candidate.get("fingerprint", ""))
+        if fingerprint in fingerprints: continue
+        selected.append({"candidate_id": candidate["candidate_id"], "fingerprint": fingerprint, "room": candidate["room"], "category": candidate["category"], "topic": topic, "reason": reason, "rendered_text": text})
+        fingerprints.add(fingerprint)
+        if len(selected) >= slots: break
+    return {"slots": slots, "candidates": selected}
+
+
 def build_outbox() -> dict:
     """Evaluate only when Resident state changed; decision transitions remain durable."""
     migrate_old_candidates(); state = load()
@@ -286,17 +397,33 @@ def build_outbox() -> dict:
         if changed: state["recent_decisions"] = recent; save(state)
         return status(state)
     local = resident.load_state(); cache = state["decision_cache"]; pending_ids: set[str] = set()
+    first_preview = preview_first_actions(local, state, FIRST_ACTION_DAILY_LIMIT)
+    first_selected = {item["candidate_id"]: item for item in first_preview["candidates"]}
     for candidate in local.get("candidates", {}).values():
         if not isinstance(candidate, dict) or candidate.get("status") != "pending": continue
         candidate_id = str(candidate.get("candidate_id", ""))
         if not candidate_id: continue
         pending_ids.add(candidate_id); allowed, reason, topic = eligible(candidate)
-        if allowed and not sender_trusted_for_autopilot(candidate, local, state): allowed, reason, topic = False, "sender_not_previously_approved", None
+        trusted = allowed and sender_trusted_for_autopilot(candidate, local, state)
+        if allowed and trusted:
+            pass
+        elif candidate_id in first_selected:
+            item = first_selected[candidate_id]; allowed, reason, topic = True, f"safe_first_action:{item['reason']}", item["topic"]
+        else:
+            first_allowed, _, _ = first_action_eligible(candidate)
+            if first_allowed and not trusted: allowed, reason, topic = False, "first_action_budget_or_rank_blocked", None
+            elif allowed and not trusted: allowed, reason, topic = False, "sender_not_previously_approved", None
         decision_key = _decision_key(allowed, reason, topic)
         if cache.get(candidate_id) != decision_key:
             record = {"at": now(), "source_candidate": candidate_id, "eligible": allowed, "why": reason, "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_created" if allowed else "ignored"}; audit(record); recent.append(record); cache[candidate_id] = decision_key; changed = True
         if not allowed or not topic: continue
         intent = make_intent(candidate, topic, reason)
+        if _is_first_action_intent(intent):
+            render(intent); rate_allowed, rate_reason = rate_ok_preview(state, intent)
+            if not rate_allowed:
+                record = {"at": now(), "source_candidate": candidate_id, "eligible": True, "why": reason, "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": rate_reason, "action": "blocked"}
+                if _remember_recent_decision(state, record): audit(record)
+                changed = True; continue
         if intent["id"] not in state["outbox"]: state["outbox"][intent["id"]] = intent; changed = True
     for candidate_id in list(cache):
         if candidate_id not in pending_ids: del cache[candidate_id]; changed = True
@@ -389,6 +516,11 @@ def rate_ok(state: dict, intent: dict) -> tuple[bool, str]:
     cutoff = datetime.now(UTC) - timedelta(hours=24); history = [item for item in state["rate_history"] if observer.parse_time(item.get("at")) and observer.parse_time(item["at"]) > cutoff]; state["rate_history"] = history
     if len(history) >= 6: return False, "daily_limit"
     if sum(item["room"] == intent["room"] for item in history) >= 2: return False, "room_limit"
+    if _is_first_action_intent(intent):
+        first = [item for item in history if item.get("lane") == "first_action"]
+        if len(first) >= FIRST_ACTION_DAILY_LIMIT: return False, "first_action_daily_limit"
+        did_cutoff = datetime.now(UTC) - FIRST_ACTION_DID_COOLDOWN
+        if any(item.get("fingerprint") == intent["fingerprint"] and observer.parse_time(item.get("at")) and observer.parse_time(item["at"]) > did_cutoff for item in first): return False, "first_action_did_limit"
     six_hours = datetime.now(UTC) - timedelta(hours=6)
     if any(item["fingerprint"] == intent["fingerprint"] and observer.parse_time(item["at"]) > six_hours for item in history): return False, "did_limit"
     return True, "ok"
@@ -408,4 +540,4 @@ def publish(intent_id: str, confirm: bool) -> dict:
         save(state); raise RuntimeError("autopilot rate limit blocked publish")
     did = core.current_did(); core.require_verified_did(did)
     if not core.signer_matches_pinned(): raise RuntimeError("official signer integrity check failed")
-    core.post_signed(intent["room"], text, True, did=did, action="safe_autopilot_publish", record_permalink=False); state["receipts"][intent_id] = {"at": now()}; state["rate_history"].append({"at": now(), "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(text.encode()).hexdigest()}); save(state); audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "pass", "action": "published"}); return {"intent_id": intent_id, "action": "posted"}
+    core.post_signed(intent["room"], text, True, did=did, action="safe_autopilot_publish", record_permalink=False); state["receipts"][intent_id] = {"at": now()}; state["rate_history"].append({"at": now(), "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(text.encode()).hexdigest(), "lane": "first_action" if _is_first_action_intent(intent) else "trusted"}); save(state); audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "pass", "action": "published"}); return {"intent_id": intent_id, "action": "posted"}
