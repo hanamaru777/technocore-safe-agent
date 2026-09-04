@@ -6,8 +6,15 @@ then delegates every existing command to ``discord_control``.
 """
 from __future__ import annotations
 
-from . import collaboration
+import time
+
+from . import collaboration, collaboration_hardening
 from . import discord_control as base
+
+collaboration_hardening.install()
+
+NOTICE_POLL_SECONDS = 60
+_LAST_NOTICE_POLL = 0.0
 
 STAGE_LABELS = {
     "discovered": "発見",
@@ -42,9 +49,18 @@ def _next_text(record: dict) -> str:
     return f"/collab {record_id} を確認。"
 
 
+def _counts(rows: list[dict]) -> dict:
+    counts = {stage: 0 for stage in STAGE_LABELS}
+    for row in rows:
+        stage = row.get("stage")
+        if stage in counts:
+            counts[stage] += 1
+    return counts
+
+
 def _list_message() -> str:
     rows = collaboration.records(include_tclk=False)
-    metrics = collaboration.metrics()
+    metrics = _counts(rows)
     lines = [
         "🤝 FLOP Collaboration Pipeline",
         (
@@ -169,8 +185,12 @@ class Control(base.Control):
         collaboration.ensure_notification_baseline()
 
     def system_notices(self) -> list[str]:
+        global _LAST_NOTICE_POLL
         notices = super().system_notices()
-        notices.extend(_notice_message(item) for item in collaboration.transition_notices())
+        current = time.monotonic()
+        if current - _LAST_NOTICE_POLL >= NOTICE_POLL_SECONDS:
+            _LAST_NOTICE_POLL = current
+            notices.extend(_notice_message(item) for item in collaboration.transition_notices())
         return notices
 
 
