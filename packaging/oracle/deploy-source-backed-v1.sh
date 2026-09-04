@@ -181,7 +181,7 @@ synthetic = {
     'signals': {},
 }
 original_candidate = resident.candidate
-resident.candidate = lambda _candidate_id: synthetic
+resident.candidate = lambda _candidate_id: {'untrusted_data': True, 'candidate': synthetic}
 try:
     candidate_detail = control.command('acceptance', '/candidate acceptance-local-only', 'acceptance-channel')
 finally:
