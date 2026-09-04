@@ -188,7 +188,10 @@ def test_direct_reply_index_avoids_records_times_candidates_scan(monkeypatch):
     assert all(record["stage"] == "replied" for record in state["records"].values())
 
 
-def test_discord_service_runs_collaboration_wrapper():
+def test_discord_service_runs_collaboration_stack():
     text = Path("packaging/oracle/discord.service").read_text("utf-8")
-    assert "-m flop_agent.discord_collaboration" in text
+    assert "-m flop_agent.discord_knowledge" in text
     assert "-m flop_agent.discord_control" not in text
+    # The knowledge wrapper must continue layering the accepted collaboration UX.
+    wrapper = Path("src/flop_agent/discord_knowledge.py").read_text("utf-8")
+    assert "from . import discord_collaboration as base" in wrapper

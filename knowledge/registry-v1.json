@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "registry_id": "flop-onboarding-knowledge-v1",
+  "checked_at": "2026-09-04T10:38:00+00:00",
+  "topics": {
+    "nonce": {
+      "renderer_topic": "nonce",
+      "signable": true,
+      "freshness": "stable",
+      "ttl_days": null,
+      "sources": [
+        {
+          "source_id": "technocore-readme-82d94293",
+          "authority": "official",
+          "repo": "flop-labs/technocore-chat",
+          "commit": "82d942936050f1ab0fb9f34db17893b89f3e064b",
+          "path": "README.md"
+        },
+        {
+          "source_id": "technocore-signpy-82d94293",
+          "authority": "official",
+          "repo": "flop-labs/technocore-chat",
+          "commit": "82d942936050f1ab0fb9f34db17893b89f3e064b",
+          "path": "scripts/sign.py"
+        }
+      ]
+    },
+    "did_signature": {
+      "renderer_topic": "did_signature",
+      "signable": true,
+      "freshness": "stable",
+      "ttl_days": null,
+      "sources": [
+        {
+          "source_id": "technocore-readme-82d94293",
+          "authority": "official",
+          "repo": "flop-labs/technocore-chat",
+          "commit": "82d942936050f1ab0fb9f34db17893b89f3e064b",
+          "path": "README.md"
+        },
+        {
+          "source_id": "project-agents-3d90733d",
+          "authority": "project_approved",
+          "repo": "hanamaru777/technocore-safe-agent",
+          "commit": "3d90733d046dc24bef374e649893fe88e9003b49",
+          "path": "AGENTS.md"
+        }
+      ]
+    },
+    "technocore_api": {
+      "renderer_topic": "technocore_api",
+      "signable": true,
+      "freshness": "stable",
+      "ttl_days": null,
+      "sources": [
+        {
+          "source_id": "technocore-manual-82d94293",
+          "authority": "official",
+          "repo": "flop-labs/technocore-chat",
+          "commit": "82d942936050f1ab0fb9f34db17893b89f3e064b",
+          "path": "src/manual.md"
+        },
+        {
+          "source_id": "project-security-3d90733d",
+          "authority": "project_approved",
+          "repo": "hanamaru777/technocore-safe-agent",
+          "commit": "3d90733d046dc24bef374e649893fe88e9003b49",
+          "path": "SECURITY.md"
+        }
+      ]
+    },
+    "prompt_injection_safety": {
+      "renderer_topic": "prompt_injection_safety",
+      "signable": true,
+      "freshness": "stable",
+      "ttl_days": null,
+      "sources": [
+        {
+          "source_id": "project-agents-3d90733d",
+          "authority": "project_approved",
+          "repo": "hanamaru777/technocore-safe-agent",
+          "commit": "3d90733d046dc24bef374e649893fe88e9003b49",
+          "path": "AGENTS.md"
+        },
+        {
+          "source_id": "project-security-3d90733d",
+          "authority": "project_approved",
+          "repo": "hanamaru777/technocore-safe-agent",
+          "commit": "3d90733d046dc24bef374e649893fe88e9003b49",
+          "path": "SECURITY.md"
+        }
+      ]
+    },
+    "repo_tests_bugs": {
+      "renderer_topic": "repo_tests_bugs",
+      "signable": true,
+      "freshness": "stable",
+      "ttl_days": null,
+      "sources": [
+        {
+          "source_id": "project-profile-3d90733d",
+          "authority": "project_approved",
+          "repo": "hanamaru777/technocore-safe-agent",
+          "commit": "3d90733d046dc24bef374e649893fe88e9003b49",
+          "path": "public-profile.json"
+        },
+        {
+          "source_id": "project-readme-3d90733d",
+          "authority": "project_approved",
+          "repo": "hanamaru777/technocore-safe-agent",
+          "commit": "3d90733d046dc24bef374e649893fe88e9003b49",
+          "path": "README.md"
+        }
+      ]
+    },
+    "agent_use_case": {
+      "renderer_topic": "agent_use_case",
+      "signable": true,
+      "freshness": "stable",
+      "ttl_days": null,
+      "sources": [
+        {
+          "source_id": "project-profile-3d90733d",
+          "authority": "project_approved",
+          "repo": "hanamaru777/technocore-safe-agent",
+          "commit": "3d90733d046dc24bef374e649893fe88e9003b49",
+          "path": "public-profile.json"
+        }
+      ]
+    },
+    "tclk_alpha": {
+      "renderer_topic": null,
+      "signable": false,
+      "freshness": "time_sensitive",
+      "ttl_days": 7,
+      "read_only_text": "At the pinned FLOP Labs tclk source, tclk/1 is Alpha. PaperRail records the lifecycle but carries no real value, and the shipped Alpha has no value-bearing rail. This agent keeps tclk read-only and will not accept or move value.",
+      "sources": [
+        {
+          "source_id": "tclk-readme-5cc4ab93",
+          "authority": "official",
+          "repo": "flop-labs/tclk",
+          "commit": "5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+          "path": "README.md"
+        },
+        {
+          "source_id": "tclk-package-5cc4ab93",
+          "authority": "official",
+          "repo": "flop-labs/tclk",
+          "commit": "5cc4ab93efbc8999a3a7e1471b639deca25998ea",
+          "path": "package.json"
+        }
+      ]
+    }
+  }
+}
