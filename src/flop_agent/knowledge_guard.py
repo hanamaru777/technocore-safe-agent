@@ -21,14 +21,16 @@ _ORIGINAL_ELIGIBLE = autopilot.eligible
 # All signed topics in v1 are stable. Production code is root-owned/read-only and
 # Resident/Discord are restarted on a reviewed registry deployment, so one
 # validation per topic/process avoids JSON I/O inside the large-candidate hot path
-# without weakening freshness semantics.
-_SOURCE_READY_CACHE: dict[str, bool] = {}
+# without weakening freshness semantics. Include the validator identity in the
+# key so tests/reloads cannot inherit a result from a replaced validator.
+_SOURCE_READY_CACHE: dict[tuple[str, int], bool] = {}
 
 
 def _source_ready(topic: str) -> bool:
-    if topic not in _SOURCE_READY_CACHE:
-        _SOURCE_READY_CACHE[topic] = knowledge.signable_now(topic)
-    return _SOURCE_READY_CACHE[topic]
+    key = (topic, id(knowledge.signable_now))
+    if key not in _SOURCE_READY_CACHE:
+        _SOURCE_READY_CACHE[key] = knowledge.signable_now(topic)
+    return _SOURCE_READY_CACHE[key]
 
 
 def guarded_eligible(candidate: dict) -> tuple[bool, str, str | None]:
