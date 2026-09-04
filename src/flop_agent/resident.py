@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
     "schema_version": SCHEMA_VERSION,
     "candidate_cooldown_seconds": 21600,
     "candidate_ttl_seconds": 604800,
-    "refresh_interval_seconds": 300,
+    "refresh_interval_seconds": 30,
     "discord_digest_interval_seconds": 3600,
     "max_relationships": 8000,
     "max_expired_candidates": 2000,
@@ -79,11 +79,25 @@ def _write_control(paused: bool) -> None:
     observer.atomic_json_write(control_path(), {"schema_version": 1, "paused": paused, "updated_at": now()}, compact=True)
 
 
+def _read_heartbeat_status() -> dict | None:
+    path = heartbeat_path()
+    if not path.exists(): return None
+    try: data = json.loads(path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError): return None
+    status = data.get("resident_status") if isinstance(data, dict) and data.get("schema_version") == 1 else None
+    return status if isinstance(status, dict) and status.get("read_only") is True else None
+
+
 def load_state() -> dict:
     state = local_json(state_path(), default_state())
     for key, value in default_state().items(): state.setdefault(key, value)
     override = _control_override()
     if override is not None: state["control"]["paused"] = override
+    heartbeat = _read_heartbeat_status()
+    if heartbeat is not None and observer.parse_time(heartbeat.get("last_refresh_at")):
+        current = observer.parse_time(state.get("daemon", {}).get("last_refresh_at"))
+        cached = observer.parse_time(heartbeat.get("last_refresh_at"))
+        if cached is not None and (current is None or cached > current): state["daemon"]["last_refresh_at"] = heartbeat["last_refresh_at"]
     return state
 
 
@@ -93,6 +107,12 @@ def _status_from_state(state: dict, observed: dict | None = None) -> dict:
         cached = {"health": observed["health"], "cursors": observed["cursors"], "message_gaps": observed["metrics"]["message_gaps"], "discovery_queue": len(observed["discovery_queue"]), "agents_known": len(observed["agents"]), "returning_agents": observed["metrics"]["unique_returning_dids"], "inbound": observed["metrics"]["inbound_mailbox_messages"]}
     candidates = state.get("candidates", {}).values()
     pending = [item for item in candidates if isinstance(item, dict) and item.get("status") == "pending"]
+    actionable = sum(
+        item.get("priority") == "critical"
+        or item.get("signals", {}).get("direct_public_signed") is True
+        or (item.get("priority") == "high" and not item.get("signals"))
+        for item in pending
+    )
     return {
         "read_only": True,
         "uptime_started_at": state["daemon"]["started_at"],
@@ -105,6 +125,7 @@ def _status_from_state(state: dict, observed: dict | None = None) -> dict:
         "useful_candidates": len(pending),
         "critical_candidates": sum(item.get("priority") == "critical" for item in pending),
         "direct_candidates": sum(item.get("signals", {}).get("direct_public_signed") is True for item in pending),
+        "actionable_candidates": actionable,
         "noise_ignored": state.get("metrics", {}).get("noise_ignored", 0),
         "returning_agents": cached.get("returning_agents", 0),
         "inbound": cached.get("inbound", 0),
@@ -123,13 +144,7 @@ def write_heartbeat(state: dict | None = None, status: str = "ok", *, snapshot: 
     observer.atomic_json_write(heartbeat_path(), {"schema_version": 1, "updated_at": now(), "status": status, "resident_status": snapshot}, compact=True)
 
 
-def _heartbeat_status() -> dict | None:
-    path = heartbeat_path()
-    if not path.exists(): return None
-    try: data = json.loads(path.read_text("utf-8"))
-    except (OSError, json.JSONDecodeError): return None
-    status = data.get("resident_status") if isinstance(data, dict) and data.get("schema_version") == 1 else None
-    return status if isinstance(status, dict) and status.get("read_only") is True else None
+def _heartbeat_status() -> dict | None: return _read_heartbeat_status()
 
 
 def save_state(state: dict) -> None:
@@ -251,7 +266,7 @@ def _prune_relationships(state: dict, observed: dict, limit: int) -> bool:
         if not isinstance(record, dict): continue
         if record.get("approval_rejection_history") or record.get("relationship_state") == "contacted" or record.get("our_previous_action") in {"approved", "rejected"}: protected.add(fingerprint)
     removable = [(fingerprint, record) for fingerprint, record in relationships.items() if fingerprint not in protected]
-    removable.sort(key=lambda pair: observer.parse_time(pair[1].get("last_seen")) if isinstance(pair[1], dict) else None or datetime.min.replace(tzinfo=UTC))
+    removable.sort(key=lambda pair: (observer.parse_time(pair[1].get("last_seen")) if isinstance(pair[1], dict) else None) or datetime.min.replace(tzinfo=UTC))
     excess = max(0, len(relationships) - limit); changed = False
     for fingerprint, _ in removable[:excess]: del relationships[fingerprint]; changed = True
     return changed
