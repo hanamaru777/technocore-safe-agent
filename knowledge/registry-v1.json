@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "registry_id": "flop-onboarding-knowledge-v1",
-  "checked_at": "2026-09-04T10:55:00+00:00",
+  "checked_at": "2026-09-04T10:38:00+00:00",
   "topics": {
     "nonce": {
       "renderer_topic": "nonce",
