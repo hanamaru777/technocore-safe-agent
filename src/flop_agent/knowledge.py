@@ -52,8 +52,11 @@ def load_registry() -> dict:
         raise RuntimeError("knowledge registry is unavailable") from error
     if not isinstance(data, dict) or set(data) != {"schema_version", "registry_id", "checked_at", "topics"}:
         raise RuntimeError("knowledge registry schema is invalid")
-    if data["schema_version"] != 1 or data["registry_id"] != "flop-onboarding-knowledge-v1" or _parse_time(data["checked_at"]) is None:
+    checked = _parse_time(data.get("checked_at"))
+    if data.get("schema_version") != 1 or data.get("registry_id") != "flop-onboarding-knowledge-v1" or checked is None:
         raise RuntimeError("knowledge registry metadata is invalid")
+    if checked > datetime.now(UTC) + timedelta(minutes=5):
+        raise RuntimeError("knowledge registry review time is in the future")
     if not isinstance(data["topics"], dict) or not 1 <= len(data["topics"]) <= 32:
         raise RuntimeError("knowledge topic registry is invalid")
     for topic, item in data["topics"].items():
@@ -218,6 +221,9 @@ def sync_acknowledged_usage() -> dict:
     auto = autopilot.load()
     audit = _load_audit()
     seen = {str(record.get("intent_id")) for record in audit["records"] if isinstance(record, dict)}
+    registry = load_registry()
+    checked = _parse_time(registry["checked_at"])
+    assert checked is not None
     added = 0
     for intent_id, intent in auto.get("outbox", {}).items():
         if not isinstance(intent, dict) or intent_id in seen:
@@ -238,13 +244,16 @@ def sync_acknowledged_usage() -> dict:
             rendered = autopilot.render({key: intent[key] for key in required})
         except RuntimeError:
             continue
+        acknowledged_at = intent.get("acknowledged_at") or auto.get("receipts", {}).get(intent_id, {}).get("at")
+        acknowledged = _parse_time(acknowledged_at)
         audit["records"].append({
             "intent_id": intent_id,
             "topic": topic,
             "source_ids": status["source_ids"],
             "registry_id": status["registry_id"],
             "answer_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-            "acknowledged_at": intent.get("acknowledged_at") or auto.get("receipts", {}).get(intent_id, {}).get("at"),
+            "acknowledged_at": acknowledged_at,
+            "provenance_mode": "source_guarded" if acknowledged is not None and acknowledged >= checked else "retroactive_mapping",
         })
         seen.add(intent_id)
         added += 1
