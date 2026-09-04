@@ -28,6 +28,7 @@ _BASE_RENDER = _policy._BASE_RENDER
 _HUMAN_TRUSTED = _policy._BASE_SENDER_TRUSTED
 _HUMAN_ACTIVE_TRUSTED = _policy._BASE_ACTIVE_TRUSTED
 _POLICY_BUILD_OUTBOX = _policy.build_outbox
+_POLICY_RATE_OK_PREVIEW = _policy.rate_ok_preview
 
 TRANSPORT_SAFE_CATEGORIES = {
     "help_request",
@@ -68,6 +69,7 @@ _CONCRETE_TASK_RE = re.compile(
 _TRUST_CACHE_KEY: tuple | None = None
 _TRUST_CACHE: dict[str, str] = {}
 _BUILD_ACTIVATION_CONTEXT = False
+_BUILD_RUNNING = False
 
 
 def default_state() -> dict:
@@ -118,6 +120,8 @@ def _signed_source(candidate: dict) -> bool:
 
 def first_contact_eligible(candidate: dict) -> tuple[bool, str, str | None]:
     """Strict bootstrap lane; never reflects untrusted room text into output."""
+    if _BUILD_RUNNING and not _BUILD_ACTIVATION_CONTEXT:
+        return False, "first_contact_disabled", None
     if candidate.get("status") != "pending":
         return False, "candidate_not_pending", None
     room = candidate.get("room")
@@ -287,15 +291,27 @@ def active_trusted_relationships(
     ]
 
 
+def _activation_rate_ok_preview(state: dict, intent: dict) -> tuple[bool, str]:
+    """Preserve legacy trusted-lane queue semantics; Signer still enforces limits."""
+    candidate_id = str(intent.get("source_candidate_id", ""))
+    local = resident.load_state()
+    candidate = local.get("candidates", {}).get(candidate_id)
+    if isinstance(candidate, dict) and sender_trusted_for_autopilot(candidate, local, state):
+        return True, "trusted_lane_signer_enforced"
+    return _POLICY_RATE_OK_PREVIEW(state, intent)
+
+
 def build_outbox() -> dict:
     """Run the policy builder; cold-start overlay is active only when explicitly enabled."""
-    global _BUILD_ACTIVATION_CONTEXT
+    global _BUILD_ACTIVATION_CONTEXT, _BUILD_RUNNING
     state = load()
+    _BUILD_RUNNING = True
     _BUILD_ACTIVATION_CONTEXT = bool(state.get("first_contact_enabled"))
     try:
         return _POLICY_BUILD_OUTBOX()
     finally:
         _BUILD_ACTIVATION_CONTEXT = False
+        _BUILD_RUNNING = False
 
 
 # Functions retained in policy/core resolve globals in their defining modules.
@@ -307,6 +323,7 @@ _policy.eligible = eligible
 _policy.render = render
 _policy.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy.active_trusted_relationships = active_trusted_relationships
+_policy.rate_ok_preview = _activation_rate_ok_preview
 _policy._core.default_state = default_state
 _policy._core.load = load
 _policy._core.eligible = eligible
