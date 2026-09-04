@@ -1,12 +1,15 @@
 """Public Autopilot facade with activation safety compatibility.
 
-The proven transport/publisher lives in ``autopilot_core``.  The first-contact
-policy lives in ``autopilot_policy``.  This facade adds transport-category
-compatibility and caches autonomous trust resolution so the activation path
-remains cheap on large production state.
+The proven transport/publisher lives in ``autopilot_core``. The first-contact
+policy lives in ``autopilot_policy``. This facade keeps legacy monkeypatch/config
+compatibility, rejects hostile cold prompts, and caches autonomous trust lookup
+so activation remains cheap on large production state.
 """
 from __future__ import annotations
 
+import re
+import sys
+import types
 from datetime import UTC, datetime, timedelta
 
 from . import autopilot_policy as _policy
@@ -19,6 +22,7 @@ autopilot_core = _policy.autopilot_core
 autopilot_policy = _policy
 
 _POLICY_ELIGIBLE = _policy.eligible
+_POLICY_FIRST_CONTACT = _policy.first_contact_eligible
 _HUMAN_TRUSTED = _policy._BASE_SENDER_TRUSTED
 _HUMAN_ACTIVE_TRUSTED = _policy._BASE_ACTIVE_TRUSTED
 
@@ -30,8 +34,36 @@ TRANSPORT_SAFE_CATEGORIES = {
     "conversation",
 }
 
+# Cold-start classification never follows these instructions. Rejecting them
+# before semantic fallback also preserves the prior fail-closed behavior for
+# prompt-injection shaped requests.
+_UNTRUSTED_ACTION_RE = re.compile(
+    r"(?:"
+    r"\bignore\s+(?:all|previous|prior)\b|"
+    r"\b(?:run|execute)\s+(?:a\s+|the\s+)?(?:command|shell|script)\b|"
+    r"\bopen\s+https?://|"
+    r"\b(?:curl|wget|powershell|cmd(?:\.exe)?|bash)\b|"
+    r"\b(?:read|show|reveal|send)\s+(?:(?:the|your|my)\s+)?"
+    r"(?:env(?:ironment)?|env\s+file|credentials?|password|secrets?|seed|private\s+key)\b"
+    r")",
+    re.I,
+)
+
 _TRUST_CACHE_KEY: tuple | None = None
 _TRUST_CACHE: dict[str, str] = {}
+
+
+def _candidate_excerpt(candidate: dict) -> str:
+    context = candidate.get("context", {})
+    value = context.get("excerpt") if isinstance(context, dict) else None
+    return value[:560] if isinstance(value, str) else ""
+
+
+def first_contact_eligible(candidate: dict) -> tuple[bool, str, str | None]:
+    text = _candidate_excerpt(candidate)
+    if text and _UNTRUSTED_ACTION_RE.search(text):
+        return False, "untrusted_sensitive_or_action_content", None
+    return _POLICY_FIRST_CONTACT(candidate)
 
 
 def eligible(candidate: dict) -> tuple[bool, str, str | None]:
@@ -114,11 +146,28 @@ def active_trusted_relationships(
     ]
 
 
-# Functions retained in the policy/core modules resolve their globals in those
-# modules, so patch the public compatibility guards back into both.
+# Functions retained in policy/core resolve globals in their defining modules.
+# Patch the activation guards back into both modules.
+_policy.first_contact_eligible = first_contact_eligible
 _policy.eligible = eligible
 _policy.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy.active_trusted_relationships = active_trusted_relationships
 _policy._core.eligible = eligible
 _policy._core.sender_trusted_for_autopilot = sender_trusted_for_autopilot
 _policy._core.active_trusted_relationships = active_trusted_relationships
+
+
+class _FacadeModule(types.ModuleType):
+    """Propagate legacy monkeypatch/config assignments into implementation modules."""
+
+    def __setattr__(self, name: str, value: object) -> None:
+        super().__setattr__(name, value)
+        if name.startswith("__") or name in {"autopilot_core", "autopilot_policy"}:
+            return
+        if hasattr(_policy, name):
+            setattr(_policy, name, value)
+        if hasattr(_policy._core, name):
+            setattr(_policy._core, name, value)
+
+
+sys.modules[__name__].__class__ = _FacadeModule
