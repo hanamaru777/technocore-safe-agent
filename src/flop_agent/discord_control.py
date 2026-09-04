@@ -333,7 +333,6 @@ def bootstrap_pending_approvals() -> list[dict]:
         history = state.get("relationships", {}).get(item.get("fingerprint"), {}).get("approval_rejection_history", []); approved = any(isinstance(record, dict) and record.get("candidate_id") == item.get("candidate_id") and record.get("decision") == "approved" for record in history)
         if approved and not autopilot.durable_publication_at(str(item.get("candidate_id", "")), str(item.get("fingerprint", "")), state, auto): pending.append(item)
     return pending
-
 def trust_candidates_message() -> str:
     rows = trust_candidates()
     if not rows: return "🤝 trust候補\n現在、safeな初回trust候補はありません。監視は継続中です。"
@@ -374,6 +373,9 @@ def status_message() -> str:
     if latest_interaction: lines.append(f"最終やりとり: {short_fingerprint(latest_interaction.get('fingerprint'))} / {latest_interaction.get('direction')} / {human_age(latest_interaction.get('at'))}")
     if activity["reasons"]: lines.append("主な非投稿理由: " + max(activity["reasons"], key=activity["reasons"].get))
     if activity["zero_reason"]: lines.append(f"0投稿の理由: {activity['zero_reason']}")
+    if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and snapshot["direct"]:
+        trusted = trusted_relationships(); trust_rows = trust_candidates(); bootstrap = bootstrap_pending_approvals()
+        if not trusted and (trust_rows or bootstrap): lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
     if snapshot["problems"]: lines.append("異常: " + " / ".join(snapshot["problems"])); lines.append("結論: 対応が必要です。詳細は /status を再確認してください。")
     elif needs_attention: lines.append("結論: 確認事項があります。直接リクエストまたはqueueを確認してください。")
     else: lines.append("結論: 対応不要。そのまま稼働中。")
@@ -439,12 +441,12 @@ class Control:
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
     def notifications(self) -> list[dict]:
         summary = resident.resident_status()
-        if not int(summary.get("critical_candidates", 0)) and not int(summary.get("direct_candidates", 0)): return []
+        if not int(summary.get("actionable_candidates", 0)): return []
         state = resident.load_state(); notices = []; current = datetime.now(UTC); old_times = list(state.get("notification_times", [])); recent = [entry for entry in old_times if (observer.parse_time(entry.get("at")) or current) > current - timedelta(hours=1)]; state["notification_times"] = recent; capacity = max(0, 3 - len(recent)); changed = recent != old_times
         for item in state["candidates"].values():
             if capacity <= 0: break
             if item.get("status") != "pending" or item.get("candidate_id") in state["notifications"]: continue
-            signals = item.get("signals", {}); actionable = item.get("priority") == "critical" or signals.get("direct_public_signed") is True
+            signals = item.get("signals", {}); legacy_high = item.get("priority") == "high" and not signals; actionable = item.get("priority") == "critical" or signals.get("direct_public_signed") is True or legacy_high
             if not actionable: continue
             state["notifications"].append(item["candidate_id"]); state["notification_times"].append({"candidate_id": item["candidate_id"], "at": current.isoformat()}); notices.append(item); capacity -= 1; changed = True
         if changed: resident.save_state(state)
