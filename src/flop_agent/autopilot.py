@@ -98,8 +98,15 @@ def set_first_contact_enabled(value: bool) -> dict:
     if not isinstance(value, bool):
         raise ValueError("first-contact feature flag must be boolean")
     state = load()
-    state["first_contact_enabled"] = value
-    save(state)
+    if value and not state["paused"]:
+        raise RuntimeError("first-contact enable requires paused autopilot")
+    if state["first_contact_enabled"] != value:
+        state["first_contact_enabled"] = value
+        # Enabling a new policy must invalidate the #49 no-change fast path so
+        # already-observed candidates are evaluated immediately, not only after
+        # a future Resident state mutation.
+        state["resident_revision"] = None
+        save(state)
     return {
         "first_contact_enabled": value,
         "queued": status(state)["queued"],
