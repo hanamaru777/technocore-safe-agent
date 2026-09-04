@@ -247,9 +247,11 @@ def _observer_revision(observed: dict, config: dict) -> str:
 
 def _paused_heartbeat_refresh() -> dict | None:
     if _control_override() is not True: return None
-    status = _heartbeat_status()
-    if status is None: return None
-    status = dict(status); status["last_refresh_at"] = now(); status["paused"] = True; write_heartbeat(snapshot=status); return status
+    payload = _read_heartbeat_payload(); status = _heartbeat_status()
+    if payload is None or status is None or "next_candidate_expiry" not in payload: return None
+    next_expiry = observer.parse_time(payload.get("next_candidate_expiry"))
+    if next_expiry is not None and next_expiry <= datetime.now(UTC): return None
+    status = dict(status); status["last_refresh_at"] = now(); status["paused"] = True; write_heartbeat(snapshot=status, observer_revision=payload.get("observer_revision"), next_candidate_expiry=payload.get("next_candidate_expiry")); return status
 
 
 def _unchanged_observer_refresh(observed: dict, config: dict) -> dict | None:
@@ -270,7 +272,9 @@ def refresh(observed_state: dict | None = None) -> dict:
     if observed_state is not None:
         unchanged = _unchanged_observer_refresh(observed_state, config)
         if unchanged is not None: return unchanged
-    state = load_state(); current = datetime.now(UTC); expired_changed = expire_candidates(state, current); paused = bool(state["control"].get("paused"))
+    state = load_state()
+    if not control_path().exists() and state.get("control", {}).get("paused") is True: _write_control(True)
+    current = datetime.now(UTC); expired_changed = expire_candidates(state, current); paused = bool(state["control"].get("paused"))
     if paused:
         state["daemon"]["last_refresh_at"] = now()
         if expired_changed: save_state(state)
