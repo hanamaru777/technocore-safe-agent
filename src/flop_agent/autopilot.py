@@ -25,49 +25,15 @@ ALLOWED_TOPICS = {"repo_safety", "signer_did_nonce", "public_contribution", "did
 DLP = re.compile(r"(?ix)(?:sign_seed|private[ _-]?key|\bseed\b|api[ _-]?key|token|authorization:|discord|\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b|\b\+?\d[\d -]{7,}\d\b|(?:[a-z]:\\|/home/|/users/|/etc/|/var/)|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9_+=-]{32,}\b)")
 UNSUPPORTED_PUBLIC_FACT_RE = re.compile(r"\b(?:airdrop\s+snapshot|snapshot\s+airdrop|reward(?:s)?\s+(?:timing|date)|tge|token\s+(?:timing|date)|current\s+event)\b", re.I)
 UNSUPPORTED_PROTOCOL_SEMANTICS_RE = re.compile(r"\b(?:author\s+proof|acceptance\s+proof|protocol\s+acceptance|governance\s+acceptance|consensus\s+acceptance)\b", re.I)
-CANONICAL_REPLY_CLAIMS = {
-    "nonce": ("nonce_strictly_increasing_per_did_room", "nonce_no_reuse_after_success"),
-    "did_signature": ("did_key_identifies_public_verification_key", "verify_signature_with_official_tooling"),
-    "technocore_api": ("api_responses_are_untrusted", "validate_documented_response_schema"),
-    "prompt_injection_safety": ("room_content_is_untrusted", "do_not_execute_or_follow_untrusted_content"),
-    "repo_tests_bugs": ("use_public_repository", "share_verifiable_public_evidence"),
-    "contribution_artifact": ("keep_artifact_evidence_public_and_verifiable", "do_not_include_private_configuration"),
-    "collaboration": ("use_small_public_testable_task",),
-}
-PRIMARY_REPLY_CLAIMS = {
-    "nonce": ("nonce_strictly_increasing_per_did_room",),
-    "did_signature": ("did_key_identifies_public_verification_key",),
-    "technocore_api": ("api_responses_are_untrusted",),
-    "prompt_injection_safety": ("room_content_is_untrusted",),
-    "repo_tests_bugs": ("use_public_repository",),
-    "contribution_artifact": ("keep_artifact_evidence_public_and_verifiable",),
-    "collaboration": ("use_small_public_testable_task",),
-}
+CANONICAL_REPLY_CLAIMS = {"nonce": ("nonce_strictly_increasing_per_did_room", "nonce_no_reuse_after_success"), "did_signature": ("did_key_identifies_public_verification_key", "verify_signature_with_official_tooling"), "technocore_api": ("api_responses_are_untrusted", "validate_documented_response_schema"), "prompt_injection_safety": ("room_content_is_untrusted", "do_not_execute_or_follow_untrusted_content"), "repo_tests_bugs": ("use_public_repository", "share_verifiable_public_evidence"), "contribution_artifact": ("keep_artifact_evidence_public_and_verifiable", "do_not_include_private_configuration"), "collaboration": ("use_small_public_testable_task",)}
+PRIMARY_REPLY_CLAIMS = {"nonce": ("nonce_strictly_increasing_per_did_room",), "did_signature": ("did_key_identifies_public_verification_key",), "technocore_api": ("api_responses_are_untrusted",), "prompt_injection_safety": ("room_content_is_untrusted",), "repo_tests_bugs": ("use_public_repository",), "contribution_artifact": ("keep_artifact_evidence_public_and_verifiable",), "collaboration": ("use_small_public_testable_task",)}
 INBOUND_CLAIM_PATTERNS = {
-    "nonce": {
-        "nonce_strictly_increasing_per_did_room": re.compile(r"\bnonces?\b.*\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b|\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b.*\bnonces?\b", re.I),
-        "nonce_no_reuse_after_success": re.compile(r"\b(?:do\s+not|don't|never)\s+reuse\b.*\bnonces?\b|\bnonces?\b.*\b(?:do\s+not|don't|never)\s+reuse\b", re.I),
-    },
-    "did_signature": {
-        "did_key_identifies_public_verification_key": re.compile(r"\bdid:key\b.*\b(?:public\s+)?verification\s+key\b|\bpublic\s+verification\s+key\b.*\bdid:key\b", re.I),
-        "verify_signature_with_official_tooling": re.compile(r"\bverify\b.*\bsignature\b.*\bofficial\b|\bofficial\b.*\b(?:tooling|tool)\b.*\bverify\b", re.I),
-    },
-    "technocore_api": {
-        "api_responses_are_untrusted": re.compile(r"\b(?:technocore\s+)?api\s+responses?\b.*\buntrusted\b|\buntrusted\b.*\b(?:technocore\s+)?api\s+responses?\b", re.I),
-        "validate_documented_response_schema": re.compile(r"\bvalidate\b.*\b(?:documented\s+)?(?:response\s+)?schema\b", re.I),
-    },
-    "prompt_injection_safety": {
-        "room_content_is_untrusted": re.compile(r"\broom\s+(?:messages?|content)\b.*\buntrusted\b|\buntrusted\b.*\broom\s+(?:messages?|content)\b", re.I),
-        "do_not_execute_or_follow_untrusted_content": re.compile(r"\b(?:do\s+not|don't|never)\b.*\b(?:run\s+commands?|follow\s+urls?)\b", re.I),
-    },
-    "repo_tests_bugs": {
-        "use_public_repository": re.compile(r"\bpublic\s+repository\b", re.I),
-        "share_verifiable_public_evidence": re.compile(r"\b(?:verifiable|independently\s+verifiable)\s+public\s+evidence\b", re.I),
-    },
-    "contribution_artifact": {
-        "keep_artifact_evidence_public_and_verifiable": re.compile(r"\b(?:contribution|artifact)(?:'s)?\s+(?:artifact\s+)?evidence\b(?:(?!\bnot\s+public\b).){0,96}\b(?:public|independently\s+verifiable|verifiable)\b", re.I),
-        "do_not_include_private_configuration": re.compile(r"\b(?:do\s+not|don't|never)\b.*\b(?:credentials?|private\s+configuration)\b", re.I),
-    },
+    "nonce": {"nonce_strictly_increasing_per_did_room": re.compile(r"\bnonces?\b.*\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b|\b(?:strictly\s+increasing|increas(?:e|ing)|monotonic)\b.*\bnonces?\b", re.I), "nonce_no_reuse_after_success": re.compile(r"\b(?:do\s+not|don't|never)\s+reuse\b.*\bnonces?\b|\bnonces?\b.*\b(?:do\s+not|don't|never)\s+reuse\b", re.I)},
+    "did_signature": {"did_key_identifies_public_verification_key": re.compile(r"\bdid:key\b.*\b(?:public\s+)?verification\s+key\b|\bpublic\s+verification\s+key\b.*\bdid:key\b", re.I), "verify_signature_with_official_tooling": re.compile(r"\bverify\b.*\bsignature\b.*\bofficial\b|\bofficial\b.*\b(?:tooling|tool)\b.*\bverify\b", re.I)},
+    "technocore_api": {"api_responses_are_untrusted": re.compile(r"\b(?:technocore\s+)?api\s+responses?\b.*\buntrusted\b|\buntrusted\b.*\b(?:technocore\s+)?api\s+responses?\b", re.I), "validate_documented_response_schema": re.compile(r"\bvalidate\b.*\b(?:documented\s+)?(?:response\s+)?schema\b", re.I)},
+    "prompt_injection_safety": {"room_content_is_untrusted": re.compile(r"\broom\s+(?:messages?|content)\b.*\buntrusted\b|\buntrusted\b.*\broom\s+(?:messages?|content)\b", re.I), "do_not_execute_or_follow_untrusted_content": re.compile(r"\b(?:do\s+not|don't|never)\b.*\b(?:run\s+commands?|follow\s+urls?)\b", re.I)},
+    "repo_tests_bugs": {"use_public_repository": re.compile(r"\bpublic\s+repository\b", re.I), "share_verifiable_public_evidence": re.compile(r"\b(?:verifiable|independently\s+verifiable)\s+public\s+evidence\b", re.I)},
+    "contribution_artifact": {"keep_artifact_evidence_public_and_verifiable": re.compile(r"\b(?:contribution|artifact)(?:'s)?\s+(?:artifact\s+)?evidence\b(?:(?!\bnot\s+public\b).){0,96}\b(?:public|independently\s+verifiable|verifiable)\b", re.I), "do_not_include_private_configuration": re.compile(r"\b(?:do\s+not|don't|never)\b.*\b(?:credentials?|private\s+configuration)\b", re.I)},
     "collaboration": {"use_small_public_testable_task": re.compile(r"\bsmall\s+public\s+testable\s+task\b", re.I)},
 }
 
@@ -82,13 +48,10 @@ def legacy_audit_path() -> Path: return resident.resident_dir() / AUDIT_FILE
 
 
 def audit_paths() -> list[Path]:
-    """Newest-first bounded audit segments used only for durable evidence/debugging."""
-    current = audit_path()
-    return [current, *(current.with_name(f"{AUDIT_FILE}.{index}") for index in range(1, AUDIT_ROTATIONS + 1))]
+    current = audit_path(); return [current, *(current.with_name(f"{AUDIT_FILE}.{index}") for index in range(1, AUDIT_ROTATIONS + 1))]
 
 
 def migrate_legacy_shared_state(*, allow_legacy: bool = True) -> None:
-    """Move the former observer-local shared files once, without merging data."""
     if not allow_legacy:
         if path().exists(): return
         raise RuntimeError("dedicated autopilot state is missing and legacy observer state is inaccessible")
@@ -96,23 +59,12 @@ def migrate_legacy_shared_state(*, allow_legacy: bool = True) -> None:
         if not old.exists() and not old.is_symlink(): continue
         if not stat.S_ISREG(old.lstat().st_mode): raise RuntimeError("legacy autopilot state is not a regular file")
         if current.exists(): raise RuntimeError("legacy and dedicated autopilot state both exist; refusing to lose data")
-        current.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
-        os.replace(old, current)
+        current.parent.mkdir(parents=True, exist_ok=True, mode=0o770); os.replace(old, current)
         if os.name == "posix": os.chmod(current, 0o660)
 
 
 def default_state() -> dict:
-    return {
-        "schema_version": 1,
-        "enabled": False,
-        "paused": True,
-        "outbox": {},
-        "receipts": {},
-        "rate_history": [],
-        "migrated_at": None,
-        "decision_cache": {},
-        "recent_decisions": [],
-    }
+    return {"schema_version": 1, "enabled": False, "paused": True, "outbox": {}, "receipts": {}, "rate_history": [], "migrated_at": None, "decision_cache": {}, "recent_decisions": [], "resident_revision": None}
 
 
 def load(*, allow_legacy: bool = True) -> dict:
@@ -122,43 +74,32 @@ def load(*, allow_legacy: bool = True) -> dict:
     except (OSError, json.JSONDecodeError) as error: raise RuntimeError("autopilot state is corrupt; refusing to continue") from error
     if not isinstance(state, dict) or state.get("schema_version") != 1: raise RuntimeError("autopilot state schema is invalid")
     for key, value in default_state().items(): state.setdefault(key, value)
-    if not isinstance(state.get("decision_cache"), dict) or not isinstance(state.get("recent_decisions"), list):
-        raise RuntimeError("autopilot performance state is invalid")
+    if not isinstance(state.get("decision_cache"), dict) or not isinstance(state.get("recent_decisions"), list): raise RuntimeError("autopilot performance state is invalid")
     return state
 
 
 def save(state: dict, *, allow_legacy: bool = True) -> None:
-    migrate_legacy_shared_state(allow_legacy=allow_legacy)
-    resident.observer.atomic_json_write(path(), state, mode=0o660)
+    migrate_legacy_shared_state(allow_legacy=allow_legacy); resident.observer.atomic_json_write(path(), state, mode=0o660)
 
 
 def _validate_audit_file(target: Path) -> None:
     info = target.lstat()
-    if not stat.S_ISREG(info.st_mode) or (os.name == "posix" and stat.S_IMODE(info.st_mode) != 0o660):
-        raise RuntimeError("autopilot audit file is unsafe")
+    if not stat.S_ISREG(info.st_mode) or (os.name == "posix" and stat.S_IMODE(info.st_mode) != 0o660): raise RuntimeError("autopilot audit file is unsafe")
 
 
 @contextmanager
 def _audit_lock():
-    """Serialize audit rotation/appends across Resident and isolated Signer processes."""
-    target = audit_lock_path(); target.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(target, flags, 0o660)
+    target = audit_lock_path(); target.parent.mkdir(parents=True, exist_ok=True, mode=0o770); flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0); descriptor = os.open(target, flags, 0o660)
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode): raise RuntimeError("autopilot audit lock is unsafe")
         if os.name == "posix":
-            os.fchmod(descriptor, 0o660)
-            import fcntl
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            os.fchmod(descriptor, 0o660); import fcntl; fcntl.flock(descriptor, fcntl.LOCK_EX)
         yield
     finally:
         if os.name == "posix":
-            try:
-                import fcntl
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            except OSError:
-                pass
+            try: import fcntl; fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError: pass
         os.close(descriptor)
 
 
@@ -166,46 +107,30 @@ def _rotate_audit_if_needed(extra_bytes: int) -> None:
     current = audit_path()
     if current.exists():
         _validate_audit_file(current)
-        if current.stat().st_size + extra_bytes <= AUDIT_MAX_BYTES:
-            return
-    elif current.is_symlink():
-        raise RuntimeError("autopilot audit file is unsafe")
+        if current.stat().st_size + extra_bytes <= AUDIT_MAX_BYTES: return
+    elif current.is_symlink(): raise RuntimeError("autopilot audit file is unsafe")
     oldest = current.with_name(f"{AUDIT_FILE}.{AUDIT_ROTATIONS}")
-    if oldest.exists() or oldest.is_symlink():
-        _validate_audit_file(oldest)
-        oldest.unlink()
+    if oldest.exists() or oldest.is_symlink(): _validate_audit_file(oldest); oldest.unlink()
     for index in range(AUDIT_ROTATIONS - 1, 0, -1):
         source = current.with_name(f"{AUDIT_FILE}.{index}")
         if not source.exists() and not source.is_symlink(): continue
-        _validate_audit_file(source)
-        os.replace(source, current.with_name(f"{AUDIT_FILE}.{index + 1}"))
-    if current.exists():
-        os.replace(current, current.with_name(f"{AUDIT_FILE}.1"))
+        _validate_audit_file(source); os.replace(source, current.with_name(f"{AUDIT_FILE}.{index + 1}"))
+    if current.exists(): os.replace(current, current.with_name(f"{AUDIT_FILE}.1"))
 
 
 def audit(record: dict, *, allow_legacy: bool = True) -> None:
-    migrate_legacy_shared_state(allow_legacy=allow_legacy)
-    target = audit_path(); target.parent.mkdir(parents=True, exist_ok=True, mode=0o770)
-    encoded = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
+    migrate_legacy_shared_state(allow_legacy=allow_legacy); target = audit_path(); target.parent.mkdir(parents=True, exist_ok=True, mode=0o770); encoded = (json.dumps(record, sort_keys=True) + "\n").encode("utf-8")
     with _audit_lock():
-        _rotate_audit_if_needed(len(encoded))
-        flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-        created = False
-        if target.exists() or target.is_symlink():
-            _validate_audit_file(target)
-            descriptor = os.open(target, flags)
+        _rotate_audit_if_needed(len(encoded)); flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0); created = False
+        if target.exists() or target.is_symlink(): _validate_audit_file(target); descriptor = os.open(target, flags)
         else:
-            try:
-                descriptor = os.open(target, flags | os.O_CREAT | os.O_EXCL, 0o660); created = True
-            except FileExistsError:
-                _validate_audit_file(target)
-                descriptor = os.open(target, flags)
+            try: descriptor = os.open(target, flags | os.O_CREAT | os.O_EXCL, 0o660); created = True
+            except FileExistsError: _validate_audit_file(target); descriptor = os.open(target, flags)
         try:
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode): raise RuntimeError("autopilot audit file is unsafe")
             if created: os.fchmod(descriptor, 0o660)
-            with os.fdopen(descriptor, "ab", buffering=0) as handle:
-                descriptor = -1; handle.write(encoded)
+            with os.fdopen(descriptor, "ab", buffering=0) as handle: descriptor = -1; handle.write(encoded)
         finally:
             if descriptor != -1: os.close(descriptor)
 
@@ -221,17 +146,13 @@ def migrate_old_candidates() -> int:
     if state["migrated_at"]: return 0
     local = resident.load_state(); changed = 0
     for candidate in local["candidates"].values():
-        if candidate.get("status") == "pending" and candidate.get("category") != "conversation":
-            candidate["status"] = "expired"; candidate["expired_at"] = now(); candidate["expiration_reason"] = "filter_upgrade_safe_autopilot_v1"; changed += 1
-    resident.save_state(local); state["migrated_at"] = now(); save(state)
-    return changed
+        if candidate.get("status") == "pending" and candidate.get("category") != "conversation": candidate["status"] = "expired"; candidate["expired_at"] = now(); candidate["expiration_reason"] = "filter_upgrade_safe_autopilot_v1"; changed += 1
+    resident.save_state(local); state["migrated_at"] = now(); save(state); return changed
 
 
 def is_explicit_agent_use_case_question(value: object) -> bool:
-    """Recognize only a standalone question about this agent's use case."""
     if not isinstance(value, str): return False
-    text = observer.URL_RE.sub(" ", value[:560]).strip()
-    return bool(re.search(r"(?:^|[\s.!—-])what(?:'s|\s+is)\s+your\s+use\s+case\s*\?\s*$", text, re.I))
+    text = observer.URL_RE.sub(" ", value[:560]).strip(); return bool(re.search(r"(?:^|[\s.!—-])what(?:'s|\s+is)\s+your\s+use\s+case\s*\?\s*$", text, re.I))
 
 
 def resolve_candidate_topic(value: object) -> tuple[str | None, str]:
@@ -261,22 +182,15 @@ def reply_semantics_supported(value: object, topic: str) -> bool:
     if topic == "repo_tests_bugs": return bool(re.search(r"\b(?:how|can)\b.*\b(?:reproduc(?:e|ible)|share)\b.*\b(?:repo|repository|test|bug|pr|commit)\b", text))
     if topic == "prompt_injection_safety": return bool(re.search(r"\b(?:how|what|can|should)\b.*\b(?:prompt\s+injection|suspicious\s+url|unsafe\s+url|command\s+safety)\b", text))
     if topic == "contribution_artifact":
-        evidence = r"\b(?:contribution|artifact)(?:'s)?\s+(?:artifact\s+)?(?:public\s+)?evidence\b|\b(?:public\s+)?evidence\s+(?:for|of)\s+(?:this\s+)?(?:contribution|artifact)\b"
-        hygiene = r"\b(?:public|independently\s+verif(?:y|iable)|verif(?:y|iable)|credentials?|private\s+configuration)\b"
-        return bool(re.search(rf"(?:{evidence}).{{0,96}}(?:{hygiene})|(?:{hygiene}).{{0,96}}(?:{evidence})", text))
+        evidence = r"\b(?:contribution|artifact)(?:'s)?\s+(?:artifact\s+)?(?:public\s+)?evidence\b|\b(?:public\s+)?evidence\s+(?:for|of)\s+(?:this\s+)?(?:contribution|artifact)\b"; hygiene = r"\b(?:public|independently\s+verif(?:y|iable)|verif(?:y|iable)|credentials?|private\s+configuration)\b"; return bool(re.search(rf"(?:{evidence}).{{0,96}}(?:{hygiene})|(?:{hygiene}).{{0,96}}(?:{evidence})", text))
     if topic == "collaboration": return bool(re.search(r"\b(?:collaborat(?:e|ion)?|partner|together)\b.*\b(?:small|public|testable|artifact|task)\b", text))
     return False
 
 
 def inbound_canonical_claims(value: object, topic: str) -> set[str]:
     if not isinstance(value, str): return set()
-    text = observer.URL_RE.sub(" ", value[:560]); patterns = INBOUND_CLAIM_PATTERNS.get(topic, {})
-    return {claim for claim in CANONICAL_REPLY_CLAIMS.get(topic, ()) if (pattern := patterns.get(claim)) and pattern.search(text)}
-
-
+    text = observer.URL_RE.sub(" ", value[:560]); patterns = INBOUND_CLAIM_PATTERNS.get(topic, {}); return {claim for claim in CANONICAL_REPLY_CLAIMS.get(topic, ()) if (pattern := patterns.get(claim)) and pattern.search(text)}
 def canonical_claim_delta(value: object, topic: str) -> set[str]: return set(CANONICAL_REPLY_CLAIMS.get(topic, ())) - inbound_canonical_claims(value, topic)
-
-
 def incremental_value_supported(value: object, topic: str, category: object = None) -> tuple[bool, str]:
     if not isinstance(value, str): return False, "no_incremental_value"
     if observer.is_question_or_explicit_request(value): return True, "incremental_value_confirmed"
@@ -315,8 +229,7 @@ def eligible(candidate: dict) -> tuple[bool, str, str | None]:
     return False, "category_not_allowlisted", None
 
 
-def eligible_approved_candidate(candidate: dict) -> tuple[bool, str, str | None]:
-    pending = dict(candidate); pending["status"] = "pending"; return eligible(pending)
+def eligible_approved_candidate(candidate: dict) -> tuple[bool, str, str | None]: pending = dict(candidate); pending["status"] = "pending"; return eligible(pending)
 
 
 def durable_publication_at(candidate_id: str, fingerprint: str, local_state: dict, auto_state: dict) -> str | None:
@@ -335,62 +248,58 @@ def durable_publication_at(candidate_id: str, fingerprint: str, local_state: dic
 def active_trusted_relationships(local_state: dict | None = None, auto_state: dict | None = None) -> list[dict]:
     state = local_state or resident.load_state(); auto = auto_state or load(); rows = []
     for fingerprint, relationship in state.get("relationships", {}).items():
-        history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []
-        successes = [stamp for item in history if isinstance(item, dict) and item.get("decision") == "approved" for stamp in [durable_publication_at(str(item.get("candidate_id", "")), fingerprint, state, auto)] if stamp]
+        history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []; successes = [stamp for item in history if isinstance(item, dict) and item.get("decision") == "approved" for stamp in [durable_publication_at(str(item.get("candidate_id", "")), fingerprint, state, auto)] if stamp]
         if successes: rows.append({"fingerprint": fingerprint, "at": max(successes)})
     return sorted(rows, key=lambda item: item["at"], reverse=True)
 
 
 def sender_trusted_for_autopilot(candidate: dict, local_state: dict | None = None, auto_state: dict | None = None) -> bool:
-    state = local_state or resident.load_state(); auto = auto_state or load(); relationship = state.get("relationships", {}).get(candidate.get("fingerprint"), {})
-    history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []; current_id = candidate.get("candidate_id")
+    state = local_state or resident.load_state(); auto = auto_state or load(); relationship = state.get("relationships", {}).get(candidate.get("fingerprint"), {}); history = relationship.get("approval_rejection_history", []) if isinstance(relationship, dict) else []; current_id = candidate.get("candidate_id")
     return any(isinstance(item, dict) and item.get("decision") == "approved" and item.get("candidate_id") != current_id and durable_publication_at(str(item.get("candidate_id", "")), str(candidate.get("fingerprint", "")), state, auto) for item in history)
 
 
 def make_intent(candidate: dict, topic: str, reason: str) -> dict:
-    intent_id = hashlib.sha256(f"{candidate['candidate_id']}|{topic}".encode()).hexdigest()[:20]
-    return {"id": intent_id, "source_candidate_id": candidate["candidate_id"], "source_did": candidate["did"], "fingerprint": candidate["fingerprint"], "room": candidate["room"], "seq": candidate["seq"], "category": candidate["category"], "topic": topic, "public_evidence_ids": ["public-profile:1", f"candidate:{candidate['candidate_id']}"], "created_at": now(), "expires_at": candidate["expires_at"], "safety_decision": reason}
+    intent_id = hashlib.sha256(f"{candidate['candidate_id']}|{topic}".encode()).hexdigest()[:20]; return {"id": intent_id, "source_candidate_id": candidate["candidate_id"], "source_did": candidate["did"], "fingerprint": candidate["fingerprint"], "room": candidate["room"], "seq": candidate["seq"], "category": candidate["category"], "topic": topic, "public_evidence_ids": ["public-profile:1", f"candidate:{candidate['candidate_id']}"], "created_at": now(), "expires_at": candidate["expires_at"], "safety_decision": reason}
 
-
-def _decision_key(allowed: bool, reason: str, topic: str | None) -> str:
-    return hashlib.sha256(json.dumps([allowed, reason, topic], separators=(",", ":")).encode()).hexdigest()[:20]
-
-
+def _decision_key(allowed: bool, reason: str, topic: str | None) -> str: return hashlib.sha256(json.dumps([allowed, reason, topic], separators=(",", ":")).encode()).hexdigest()[:20]
 def _prune_recent_decisions(records: list[dict]) -> list[dict]:
-    cutoff = datetime.now(UTC) - timedelta(hours=24)
-    current = [item for item in records if isinstance(item, dict) and (stamp := observer.parse_time(item.get("at"))) and stamp > cutoff]
-    return current[-RECENT_DECISION_LIMIT:]
+    cutoff = datetime.now(UTC) - timedelta(hours=24); current = [item for item in records if isinstance(item, dict) and (stamp := observer.parse_time(item.get("at"))) and stamp > cutoff]; return current[-RECENT_DECISION_LIMIT:]
+def _resident_state_revision() -> str | None:
+    try:
+        info = resident.state_path().stat(); return f"{info.st_mtime_ns}:{info.st_size}"
+    except OSError: return None
 
 
 def build_outbox() -> dict:
-    """Evaluate pending candidates once per decision transition, not once per daemon tick."""
+    """Evaluate only when Resident state changed; decision transitions remain durable."""
     migrate_old_candidates(); state = load()
     if state["paused"] or not state["enabled"]: return status(state)
-    local = resident.load_state(); cache = state["decision_cache"]; recent = _prune_recent_decisions(state["recent_decisions"])
-    pending_ids: set[str] = set(); changed = recent != state["recent_decisions"]
+    recent = _prune_recent_decisions(state["recent_decisions"]); changed = recent != state["recent_decisions"]; revision_before = _resident_state_revision()
+    if revision_before is not None and state.get("resident_revision") == revision_before:
+        if changed: state["recent_decisions"] = recent; save(state)
+        return status(state)
+    local = resident.load_state(); cache = state["decision_cache"]; pending_ids: set[str] = set()
     for candidate in local.get("candidates", {}).values():
         if not isinstance(candidate, dict) or candidate.get("status") != "pending": continue
         candidate_id = str(candidate.get("candidate_id", ""))
         if not candidate_id: continue
-        pending_ids.add(candidate_id)
-        allowed, reason, topic = eligible(candidate)
+        pending_ids.add(candidate_id); allowed, reason, topic = eligible(candidate)
         if allowed and not sender_trusted_for_autopilot(candidate, local, state): allowed, reason, topic = False, "sender_not_previously_approved", None
         decision_key = _decision_key(allowed, reason, topic)
         if cache.get(candidate_id) != decision_key:
-            record = {"at": now(), "source_candidate": candidate_id, "eligible": allowed, "why": reason, "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_created" if allowed else "ignored"}
-            audit(record); recent.append(record); cache[candidate_id] = decision_key; changed = True
+            record = {"at": now(), "source_candidate": candidate_id, "eligible": allowed, "why": reason, "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "intent_created" if allowed else "ignored"}; audit(record); recent.append(record); cache[candidate_id] = decision_key; changed = True
         if not allowed or not topic: continue
         intent = make_intent(candidate, topic, reason)
         if intent["id"] not in state["outbox"]: state["outbox"][intent["id"]] = intent; changed = True
     for candidate_id in list(cache):
         if candidate_id not in pending_ids: del cache[candidate_id]; changed = True
-    state["recent_decisions"] = _prune_recent_decisions(recent)
+    state["recent_decisions"] = _prune_recent_decisions(recent); revision_after = _resident_state_revision(); new_revision = revision_after if revision_before == revision_after else None
+    if state.get("resident_revision") != new_revision: state["resident_revision"] = new_revision; changed = True
     if changed: save(state)
     return status(state)
 
 
-def rate_ok_preview(state: dict, intent: dict) -> tuple[bool, str]:
-    preview = dict(state); preview["rate_history"] = list(state.get("rate_history", [])); return rate_ok(preview, intent)
+def rate_ok_preview(state: dict, intent: dict) -> tuple[bool, str]: preview = dict(state); preview["rate_history"] = list(state.get("rate_history", [])); return rate_ok(preview, intent)
 
 
 def stage_approved_reply(candidate_id: str) -> dict:
@@ -408,37 +317,26 @@ def stage_approved_reply(candidate_id: str) -> dict:
     if intent["id"] in state["outbox"] or intent["id"] in state["receipts"]: raise RuntimeError("approved candidate was already staged")
     render(intent); rate_allowed, rate_reason = rate_ok_preview(state, intent)
     if not rate_allowed: raise RuntimeError(f"rate limit precheck failed: {rate_reason}")
-    state["outbox"][intent["id"]] = intent; save(state)
-    audit({"at": now(), "source_candidate": candidate_id, "eligible": True, "why": reason, "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "precheck_pass", "action": "approved_reply_staged"})
-    return {"intent_id": intent["id"], "status": "staged"}
+    state["outbox"][intent["id"]] = intent; save(state); audit({"at": now(), "source_candidate": candidate_id, "eligible": True, "why": reason, "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "precheck_pass", "action": "approved_reply_staged"}); return {"intent_id": intent["id"], "status": "staged"}
 
 
 def status(state: dict | None = None) -> dict:
     state = state or load(); return {"enabled": state["enabled"], "paused": state["paused"], "queued": sum(item.get("status", "queued") == "queued" for item in state["outbox"].values()), "receipts": len(state["receipts"]), "migration_complete": bool(state["migrated_at"])}
 def queue() -> dict: return {"outbox": list(load()["outbox"].values())}
-def enable() -> dict:
-    state = load(); state["enabled"] = True; state["paused"] = True; save(state); return status(state)
-def disable() -> dict:
-    state = load(); state["enabled"] = False; state["paused"] = True; save(state); return status(state)
+def enable() -> dict: state = load(); state["enabled"] = True; state["paused"] = True; save(state); return status(state)
+def disable() -> dict: state = load(); state["enabled"] = False; state["paused"] = True; save(state); return status(state)
 
 
 def controlled_e2e_id(version: str) -> str:
     if version not in {"v1", "v2", "v3"}: raise ValueError("invalid controlled E2E version")
     return hashlib.sha256(f"controlled-e2e-{version}".encode()).hexdigest()[:20]
-
-
 def _stage_e2e(version: str) -> dict:
     state = load()
     if not state["enabled"] or not state["paused"]: raise RuntimeError("controlled E2E staging requires enabled autopilot paused=true")
     intent_id = controlled_e2e_id(version); existing = state["outbox"].get(intent_id)
     if existing is not None: return {"intent_id": intent_id, "staged": False, "status": existing.get("status", "queued")}
     if any(item.get("status", "queued") == "queued" for item in state["outbox"].values()): raise RuntimeError("controlled E2E staging refuses a nonempty queued outbox")
-    created = now(); intent = {"id": intent_id, "source_candidate_id": f"controlled-e2e-{version}", "source_did": "did:key:controlled-e2e", "fingerprint": hashlib.sha256(f"controlled-e2e-{version}-fingerprint".encode()).hexdigest()[:16], "room": "lobby", "seq": 0, "category": "controlled_e2e", "topic": "prompt_injection_safety", "public_evidence_ids": ["public-profile:1"], "created_at": created, "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "safety_decision": "controlled_pause_only_e2e"}
-    render(intent); state["outbox"][intent_id] = intent; save(state)
-    audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "not_applicable", "action": "controlled_e2e_staged"})
-    return {"intent_id": intent_id, "staged": True, "status": "queued"}
-
-
+    created = now(); intent = {"id": intent_id, "source_candidate_id": f"controlled-e2e-{version}", "source_did": "did:key:controlled-e2e", "fingerprint": hashlib.sha256(f"controlled-e2e-{version}-fingerprint".encode()).hexdigest()[:16], "room": "lobby", "seq": 0, "category": "controlled_e2e", "topic": "prompt_injection_safety", "public_evidence_ids": ["public-profile:1"], "created_at": created, "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(), "safety_decision": "controlled_pause_only_e2e"}; render(intent); state["outbox"][intent_id] = intent; save(state); audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "pass", "rate_limit": "not_applicable", "action": "controlled_e2e_staged"}); return {"intent_id": intent_id, "staged": True, "status": "queued"}
 def stage_e2e() -> dict: return _stage_e2e("v1")
 def stage_e2e_v2() -> dict:
     state = load(); prior = state["outbox"].get(controlled_e2e_id("v1"))
@@ -455,11 +353,8 @@ def pause(value: bool) -> dict:
     if not value and not state["enabled"]: raise RuntimeError("autopilot must be enabled before it can resume")
     state["paused"] = value; save(state); return status(state)
 
-
-def export_intent(item: dict) -> dict:
-    return {"schema_version": 1, "intent_id": item["id"], "source_fingerprint": item["fingerprint"], "room": item["room"], "seq": item["seq"], "category": item["category"], "topic": item["topic"], "public_knowledge_ids": ["public-profile:1"], "created_at": item["created_at"], "expires_at": item["expires_at"], "safety_decision": item["safety_decision"]}
-def export_pending(*, allow_legacy: bool = True) -> dict:
-    return {"schema_version": 1, "intents": [export_intent(item) for item in load(allow_legacy=allow_legacy)["outbox"].values() if item.get("status", "queued") == "queued"]}
+def export_intent(item: dict) -> dict: return {"schema_version": 1, "intent_id": item["id"], "source_fingerprint": item["fingerprint"], "room": item["room"], "seq": item["seq"], "category": item["category"], "topic": item["topic"], "public_knowledge_ids": ["public-profile:1"], "created_at": item["created_at"], "expires_at": item["expires_at"], "safety_decision": item["safety_decision"]}
+def export_pending(*, allow_legacy: bool = True) -> dict: return {"schema_version": 1, "intents": [export_intent(item) for item in load(allow_legacy=allow_legacy)["outbox"].values() if item.get("status", "queued") == "queued"]}
 
 
 def acknowledge_export(payload: dict) -> dict:
@@ -468,9 +363,7 @@ def acknowledge_export(payload: dict) -> dict:
     if not re.fullmatch(r"[a-f0-9]{20}", str(payload["intent_id"])) or not re.fullmatch(r"[a-f0-9]{64}", str(payload["receipt_hash"])): raise RuntimeError("autopilot ACK fields rejected")
     state = load(); item = state["outbox"].get(payload["intent_id"])
     if item is None: raise RuntimeError("autopilot ACK intent is unknown")
-    item["status"] = "acknowledged"; item["receipt_hash"] = payload["receipt_hash"]; item["acknowledged_at"] = now(); save(state)
-    audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": True, "why": item["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "oracle_acknowledged"})
-    return {"schema_version": 1, "acknowledged": payload["intent_id"]}
+    item["status"] = "acknowledged"; item["receipt_hash"] = payload["receipt_hash"]; item["acknowledged_at"] = now(); save(state); audit({"at": now(), "source_candidate": item["source_candidate_id"], "eligible": True, "why": item["safety_decision"], "public_knowledge_ids": ["public-profile:1"], "dlp": "not_applicable", "rate_limit": "not_applicable", "action": "oracle_acknowledged"}); return {"schema_version": 1, "acknowledged": payload["intent_id"]}
 
 
 def render(intent: dict) -> str:
@@ -505,7 +398,4 @@ def publish(intent_id: str, confirm: bool) -> dict:
     if not allowed: audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": reason, "action": "blocked"}); save(state); raise RuntimeError("autopilot rate limit blocked publish")
     did = core.current_did(); core.require_verified_did(did)
     if not core.signer_matches_pinned(): raise RuntimeError("official signer integrity check failed")
-    core.post_signed(intent["room"], text, True, did=did, action="safe_autopilot_publish", record_permalink=False)
-    state["receipts"][intent_id] = {"at": now()}; state["rate_history"].append({"at": now(), "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(text.encode()).hexdigest()}); save(state)
-    audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "pass", "action": "published"})
-    return {"intent_id": intent_id, "action": "posted"}
+    core.post_signed(intent["room"], text, True, did=did, action="safe_autopilot_publish", record_permalink=False); state["receipts"][intent_id] = {"at": now()}; state["rate_history"].append({"at": now(), "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(text.encode()).hexdigest()}); save(state); audit({"at": now(), "source_candidate": intent["source_candidate_id"], "eligible": True, "why": intent["safety_decision"], "public_knowledge_ids": intent["public_evidence_ids"], "dlp": "pass", "rate_limit": "pass", "action": "published"}); return {"intent_id": intent_id, "action": "posted"}
