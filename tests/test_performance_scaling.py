@@ -113,3 +113,35 @@ def test_observer_agent_cap_evicts_one_without_exceeding_bound(monkeypatch, tmp_
     observer.process_message(state, config, "lobby", {"seq": 1, "text": "hello", "from": "did:key:z6MkNew", "ts": "2026-09-04T00:00:00+00:00"}, None, None)
     assert len(state["agents"]) == 100
     assert "new-fingerprint" in state["agents"]
+
+
+def test_shared_observer_unchanged_refresh_skips_resident_state_reload(monkeypatch, tmp_path):
+    setup_paths(monkeypatch, tmp_path)
+    observed = observer.default_state()
+    observed["health"]["current"] = "ok"
+    first = resident.refresh(observed_state=observed)
+    assert first["last_refresh_at"]
+    state_mtime = resident.state_path().stat().st_mtime_ns
+
+    monkeypatch.setattr(resident, "load_state", lambda: (_ for _ in ()).throw(AssertionError("unchanged shared Observer state must stay on heartbeat fast path")))
+    second = resident.refresh(observed_state=observed)
+    assert second["last_refresh_at"]
+    assert resident.state_path().stat().st_mtime_ns == state_mtime
+
+
+def test_autopilot_skips_unchanged_resident_file_after_first_scan(monkeypatch, tmp_path):
+    setup_paths(monkeypatch, tmp_path)
+    resident_state = resident.default_state()
+    resident_state["cached_observer"]["health"] = {"current": "ok"}
+    resident_state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat()
+    resident.save_state(resident_state)
+    auto = autopilot.default_state()
+    auto.update({"enabled": True, "paused": False, "migrated_at": datetime.now(UTC).isoformat()})
+    autopilot.save(auto)
+
+    autopilot.build_outbox()
+    revision = autopilot.load()["resident_revision"]
+    assert revision
+    monkeypatch.setattr(resident, "load_state", lambda: (_ for _ in ()).throw(AssertionError("unchanged Resident state must not be reparsed")))
+    autopilot.build_outbox()
+    assert autopilot.load()["resident_revision"] == revision
