@@ -103,6 +103,91 @@ def test_advanced_task_stage_is_not_erased_by_later_general_reply(monkeypatch, t
     assert "later" in record["related_candidate_ids"]
 
 
+def test_discovery_eligibility_checks_are_bounded_on_large_pending_state(monkeypatch):
+    state = collaboration.default_state()
+    local = {"candidates": {}}
+    for number in range(1000):
+        candidate_id = f"candidate-{number}"
+        local["candidates"][candidate_id] = {
+            "candidate_id": candidate_id,
+            "did": f"did:key:z6Mk{number}",
+            "fingerprint": f"{number:016x}",
+            "room": "lobby",
+            "seq": number,
+            "category": "help_request",
+            "created_at": f"{number:04d}",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+            "status": "pending",
+        }
+
+    calls = 0
+
+    def eligible(candidate):
+        nonlocal calls
+        calls += 1
+        return True, "ok", "repo_tests_bugs"
+
+    monkeypatch.setattr(collaboration.autopilot, "first_contact_eligible", eligible)
+
+    changed = collaboration_hardening.bounded_discovery(state, local)
+
+    assert changed is True
+    assert calls <= collaboration_hardening.DISCOVERY_SCAN_LIMIT
+    assert len(state["records"]) == collaboration_hardening.DISCOVERY_CREATE_LIMIT
+    assert all(
+        int(record["source_candidate_id"].split("-")[-1]) >= 1000 - collaboration_hardening.DISCOVERY_SCAN_LIMIT
+        for record in state["records"].values()
+    )
+
+
+def test_direct_reply_index_avoids_records_times_candidates_scan(monkeypatch):
+    state = collaboration.default_state()
+    state["records"] = {}
+    for number in range(100):
+        record_id = f"{number:016x}"
+        state["records"][record_id] = {
+            "id": record_id,
+            "fingerprint": f"fp-{number}",
+            "source_candidate_id": f"origin-{number}",
+            "source_seq": 0,
+            "contacted_at": "2026-09-04T09:00:00+00:00",
+            "stage": "contacted",
+            "related_candidate_ids": [],
+            "history": [],
+        }
+
+    local = {"candidates": {}}
+    for number in range(1000):
+        candidate_id = f"reply-{number}"
+        local["candidates"][candidate_id] = {
+            "candidate_id": candidate_id,
+            "fingerprint": f"fp-{number}",
+            "category": "conversation",
+            "signals": {"direct_public_signed": True},
+            "created_at": "2026-09-04T10:00:00+00:00",
+            "seq": number + 1,
+        }
+
+    candidate_after_calls = 0
+
+    def after(record, candidate):
+        nonlocal candidate_after_calls
+        candidate_after_calls += 1
+        return True
+
+    monkeypatch.setattr(collaboration, "_candidate_after", after)
+    monkeypatch.setattr(
+        collaboration,
+        "_classify_reply",
+        lambda candidate: ("replied", "safe_reply", "watch_reply", None, "safe"),
+    )
+
+    collaboration_hardening.advance_from_new_replies(state, local)
+
+    assert candidate_after_calls == 100
+    assert all(record["stage"] == "replied" for record in state["records"].values())
+
+
 def test_discord_service_runs_collaboration_wrapper():
     text = Path("packaging/oracle/discord.service").read_text("utf-8")
     assert "-m flop_agent.discord_collaboration" in text
