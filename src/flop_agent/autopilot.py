@@ -279,6 +279,12 @@ def sender_trusted_for_autopilot(
     local_state: dict | None = None,
     auto_state: dict | None = None,
 ) -> bool:
+    # Trust is only an identity/relationship gate. It must never widen the
+    # semantics that are eligible for a follow-up. A trusted sender's current
+    # candidate still has to pass the original pre-first-contact safety policy.
+    base_allowed, _, _ = _BASE_ELIGIBLE(candidate)
+    if not base_allowed or candidate.get("category") not in TRANSPORT_SAFE_CATEGORIES:
+        return False
     state = local_state or resident.load_state()
     auto = auto_state or load()
     if _HUMAN_TRUSTED(candidate, state, auto):
