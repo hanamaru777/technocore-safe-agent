@@ -1,14 +1,16 @@
 """Production-only resilience overlay for the read-only Technocore Observer.
 
-The base Observer remains intentionally simple and heavily tested.  This module
-adds two operational safeguards discovered in production:
+The base Observer remains intentionally simple and heavily tested. This module
+adds operational safeguards discovered in production:
 
 * hot-room gap recovery from the official retained-ring export before a cursor
   is allowed to advance past unseen sequence numbers;
 * optional-lane health isolation so the secondary ``tclk-offers`` watcher can
-  fail visibly without turning the core Agent red.
+  fail visibly without turning the core Agent red;
+* bounded hot-core polling/retry behavior so a transient connection stall does
+  not leave ``lobby`` blind long enough to outrun the retained ring.
 
-This module is read-only with respect to Technocore.  It performs GETs only and
+This module is read-only with respect to Technocore. It performs GETs only and
 never signs, posts, follows URLs found in room text, executes commands, or reads
 Signer secrets.
 """
@@ -26,6 +28,14 @@ LIVE_SLICE_LIMIT = 200
 EXPORT_MAX_BYTES = 12 * 1024 * 1024
 RECOVERY_CHUNK_MESSAGES = 2000
 OPTIONAL_ROOMS = frozenset({tclk_watch.OFFER_ROOM})
+HOT_LOBBY_INTERVAL_SECONDS = 1
+CORE_CONNECT_TIMEOUT_SECONDS = 3.0
+LIVE_READ_TIMEOUT_SECONDS = 15.0
+EXPORT_READ_TIMEOUT_SECONDS = 20.0
+CORE_BACKOFF_MAX_SECONDS = 5.0
+OPTIONAL_BACKOFF_MAX_SECONDS = 60.0
+CORE_RECOVERY_RETRY_SECONDS = 1.0
+OPTIONAL_RECOVERY_RETRY_SECONDS = 5.0
 
 _BASE_DEFAULT_STATE = observer.default_state
 _BASE_SET_ERROR = observer.set_error
@@ -118,6 +128,40 @@ def _retry_after(response: Any) -> float:
         return 1.0
 
 
+def _http_timeout(read_seconds: float):
+    return observer.httpx.Timeout(
+        read_seconds,
+        connect=CORE_CONNECT_TIMEOUT_SECONDS,
+        pool=CORE_CONNECT_TIMEOUT_SECONDS,
+    )
+
+
+async def read_room_live(
+    client,
+    room: str,
+    since: int,
+    wait: int,
+) -> tuple[dict | list | None, float | None, str | None]:
+    """Read one live tail with a fail-fast connect and a long-poll-safe read timeout."""
+    try:
+        response = await client.get(
+            f"{core.BASE_URL}/r/{quote(room, safe='')}",
+            params={
+                "format": "json",
+                "since": since,
+                "wait": min(max(wait, 0), 10),
+                "limit": LIVE_SLICE_LIMIT,
+            },
+            timeout=_http_timeout(LIVE_READ_TIMEOUT_SECONDS),
+        )
+        if response.status_code == 429:
+            return None, _retry_after(response), "rate_limited"
+        response.raise_for_status()
+        return response.json(), None, None
+    except observer.httpx.HTTPError as error:
+        return None, None, type(error).__name__
+
+
 async def read_room_export(
     client,
     room: str,
@@ -126,7 +170,7 @@ async def read_room_export(
     try:
         response = await client.get(
             f"{core.BASE_URL}/r/{quote(room, safe='')}/export",
-            timeout=20,
+            timeout=_http_timeout(EXPORT_READ_TIMEOUT_SECONDS),
         )
         if response.status_code == 429:
             return None, _retry_after(response), "rate_limited"
@@ -260,6 +304,55 @@ def _contiguous_chunk(
     return chunk
 
 
+def _next_error_backoff(
+    room: str,
+    previous: float,
+    retry: float | None,
+    *,
+    recovery: bool = False,
+) -> float:
+    if retry is not None:
+        return max(1.0, float(retry))
+    if recovery:
+        return (
+            OPTIONAL_RECOVERY_RETRY_SECONDS
+            if room in OPTIONAL_ROOMS
+            else CORE_RECOVERY_RETRY_SECONDS
+        )
+    cap = (
+        OPTIONAL_BACKOFF_MAX_SECONDS
+        if room in OPTIONAL_ROOMS
+        else CORE_BACKOFF_MAX_SECONDS
+    )
+    return min(cap, max(1.0, previous * 2 or 1.0))
+
+
+def _gap_recovery_failed(state: dict, room: str) -> bool:
+    record = state.get("health", {}).get("rooms", {}).get(room, {})
+    return (
+        isinstance(record, dict)
+        and record.get("status") == "error"
+        and str(record.get("kind", "")).startswith("gap_recovery_")
+    )
+
+
+def _gap_retry_hint(state: dict, room: str) -> float | None:
+    record = state.get("health", {}).get("rooms", {}).get(room, {})
+    if not isinstance(record, dict) or record.get("kind") != "gap_recovery_rate_limited":
+        return None
+    try:
+        return float(record.get("detail", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _effective_room_interval(config: dict, room: str, mailbox: str | None) -> float:
+    interval = float(observer.room_interval(config, room, mailbox))
+    if room == "lobby":
+        return min(interval, float(HOT_LOBBY_INTERVAL_SECONDS))
+    return interval
+
+
 async def process_live_payload_with_recovery(
     client,
     budget,
@@ -274,12 +367,12 @@ async def process_live_payload_with_recovery(
 ) -> tuple[bool, bool]:
     """Process one live slice without advancing across a recoverable hole.
 
-    One retained-ring export is a point-in-time recovery snapshot.  Drain every
+    One retained-ring export is a point-in-time recovery snapshot. Drain every
     recoverable record from that same snapshot in bounded in-memory chunks before
-    touching the newer live slice.  This avoids repeatedly spending shared read
+    touching the newer live slice. This avoids repeatedly spending shared read
     budget and re-fetching a moving/compacting ring for one logical gap.
 
-    Returns ``(changed, drain_immediately)``.  A true drain hint skips the normal
+    Returns ``(changed, drain_immediately)``. A true drain hint skips the normal
     room sleep, but the shared ReadBudget still paces the next GET.
     """
     live = _valid_messages(payload)
@@ -374,7 +467,7 @@ async def process_live_payload_with_recovery(
                 await asyncio.sleep(0)
             continue
 
-        # The retained snapshot has a hole at the next expected sequence.  Mark
+        # The retained snapshot has a hole at the next expected sequence. Mark
         # only that absent interval unrecoverable, then continue draining any
         # later contiguous records still present in this same snapshot.
         index = bisect_left(ordered_seqs, expected)
@@ -423,11 +516,11 @@ async def room_worker(
     stop: asyncio.Event,
     writer=None,
 ) -> None:
-    """Hot-room worker with bounded catch-up and no unpaced busy loop."""
+    """Hot-room worker with bounded catch-up and bounded core retry delay."""
     backoff = 0.0
     while not stop.is_set():
         await budget.acquire()
-        payload, retry, error = await observer.read_room(
+        payload, retry, error = await read_room_live(
             client,
             room,
             state.get("cursors", {}).get(room, 0),
@@ -437,11 +530,7 @@ async def room_worker(
         drain_immediately = False
         if error:
             changed = set_error(state, room, error, str(retry or ""))
-            backoff = (
-                retry
-                if retry is not None
-                else min(300.0, max(1.0, backoff * 2 or 1.0))
-            )
+            backoff = _next_error_backoff(room, backoff, retry)
         else:
             changed, drain_immediately = await process_live_payload_with_recovery(
                 client,
@@ -454,11 +543,23 @@ async def room_worker(
                 mailbox,
                 bootstrap=room not in state.get("cursors", {}),
             )
-            changed = set_success(state, room) or changed
-            backoff = 0.0
+            if _gap_recovery_failed(state, room):
+                backoff = _next_error_backoff(
+                    room,
+                    backoff,
+                    _gap_retry_hint(state, room),
+                    recovery=True,
+                )
+            else:
+                changed = set_success(state, room) or changed
+                backoff = 0.0
         if writer and changed:
             writer.mark_dirty()
-        delay = backoff or (0 if drain_immediately else observer.room_interval(config, room, mailbox))
+        delay = backoff or (
+            0
+            if drain_immediately
+            else _effective_room_interval(config, room, mailbox)
+        )
         if delay <= 0:
             await asyncio.sleep(0)
             continue
