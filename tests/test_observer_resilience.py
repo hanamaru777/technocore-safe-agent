@@ -24,6 +24,13 @@ def export_body(start, end):
     return "\n".join(json.dumps(message(seq)) for seq in range(start, end + 1)) + "\n"
 
 
+def export_body_ranges(*ranges):
+    rows = []
+    for start, end in ranges:
+        rows.extend(json.dumps(message(seq)) for seq in range(start, end + 1))
+    return "\n".join(rows) + "\n"
+
+
 class ExportResponse:
     def __init__(self, body="", status=200, headers=None):
         self.content = body.encode("utf-8")
@@ -100,7 +107,7 @@ def test_recoverable_hot_room_gap_is_drained_before_live_slice(monkeypatch, tmp_
     assert len(client.calls) == 1
 
 
-def test_bounded_recovery_never_advances_into_newer_live_slice(monkeypatch, tmp_path):
+def test_single_export_snapshot_drains_all_bounded_chunks_before_live_slice(monkeypatch, tmp_path):
     config = setup(monkeypatch, tmp_path)
     state = observer_resilience.default_state()
     state["cursors"]["lobby"] = 100
@@ -116,14 +123,41 @@ def test_bounded_recovery_never_advances_into_newer_live_slice(monkeypatch, tmp_
 
     assert changed is True
     assert drain is True
-    assert state["cursors"]["lobby"] == 150
-    assert state["metrics"]["gap_recovered_messages"] == 50
+    assert state["cursors"]["lobby"] == 500
+    assert state["metrics"]["gap_recovered_messages"] == 200
+    assert state["metrics"]["gap_recovery_batches"] == 4
     assert state["metrics"]["message_gaps"] == 0
-    assert all(
-        ref["seq"] <= 150
+    assert len(client.calls) == 1
+    assert max(
+        ref["seq"]
         for agent in state["agents"].values()
         for ref in agent["facts"]["message_refs"]
+    ) == 500
+
+
+def test_production_sized_gap_uses_one_export_for_multiple_2000_message_chunks(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path)
+    config["memory_retention"] = 8
+    state = observer_resilience.default_state()
+    state["cursors"]["lobby"] = 1000
+    client = ExportClient(export_body(1001, 9000))
+
+    changed, drain = run_recovery(
+        client,
+        state,
+        config,
+        [message(seq) for seq in range(8801, 9001)],
     )
+
+    assert changed is True
+    assert drain is True
+    assert state["cursors"]["lobby"] == 9000
+    assert state["metrics"]["gap_recovery_attempts"] == 1
+    assert state["metrics"]["gap_recovery_batches"] == 4
+    assert state["metrics"]["gap_recovered_messages"] == 7800
+    assert state["metrics"]["message_gaps"] == 0
+    assert state["metrics"]["unrecoverable_gap_events"] == 0
+    assert len(client.calls) == 1
 
 
 def test_unrecoverable_ring_loss_is_explicit_then_retained_tail_is_recovered(monkeypatch, tmp_path):
@@ -145,6 +179,9 @@ def test_unrecoverable_ring_loss_is_explicit_then_retained_tail_is_recovered(mon
     assert state["metrics"]["estimated_missing_messages"] == 99
     assert state["metrics"]["unrecoverable_gap_events"] == 1
     assert state["metrics"]["unrecoverable_gap_messages"] == 99
+    assert state["metrics"]["unrecoverable_retained_ring_start_events"] == 1
+    assert state["metrics"]["unrecoverable_retained_ring_start_messages"] == 99
+    assert state["metrics"]["unrecoverable_not_in_retained_export_events"] == 0
     assert state["metrics"]["gap_recovered_messages"] == 101
     gap = next(
         item
@@ -154,6 +191,39 @@ def test_unrecoverable_ring_loss_is_explicit_then_retained_tail_is_recovered(mon
     assert gap["missing_from"] == 101
     assert gap["missing_to"] == 199
     assert gap["recovery"] == "unrecoverable"
+    assert gap["recovery_reason"] == "retained_ring_start"
+
+
+def test_internal_export_hole_marks_only_missing_interval_then_recovers_tail(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path)
+    state = observer_resilience.default_state()
+    state["cursors"]["lobby"] = 100
+    client = ExportClient(export_body_ranges((101, 150), (160, 500)))
+
+    changed, _ = run_recovery(
+        client,
+        state,
+        config,
+        [message(seq) for seq in range(301, 501)],
+    )
+
+    assert changed is True
+    assert state["cursors"]["lobby"] == 500
+    assert state["metrics"]["message_gaps"] == 1
+    assert state["metrics"]["estimated_missing_messages"] == 9
+    assert state["metrics"]["unrecoverable_gap_messages"] == 9
+    assert state["metrics"]["unrecoverable_not_in_retained_export_events"] == 1
+    assert state["metrics"]["unrecoverable_not_in_retained_export_messages"] == 9
+    assert state["metrics"]["gap_recovered_messages"] == 191
+    gap = next(
+        item
+        for item in state["opportunities"]
+        if item.get("kind") == "message_gap"
+    )
+    assert gap["missing_from"] == 151
+    assert gap["missing_to"] == 159
+    assert gap["recovery_reason"] == "not_in_retained_export"
+    assert len(client.calls) == 1
 
 
 def test_export_failure_does_not_advance_cursor(monkeypatch, tmp_path):

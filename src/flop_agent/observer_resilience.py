@@ -15,6 +15,7 @@ Signer secrets.
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_left
 import json
 from typing import Any
 from urllib.parse import quote
@@ -41,6 +42,10 @@ def _metrics(state: dict) -> dict:
         "gap_recovered_messages",
         "unrecoverable_gap_events",
         "unrecoverable_gap_messages",
+        "unrecoverable_retained_ring_start_events",
+        "unrecoverable_retained_ring_start_messages",
+        "unrecoverable_not_in_retained_export_events",
+        "unrecoverable_not_in_retained_export_messages",
     ):
         metrics.setdefault(key, 0)
     return metrics
@@ -217,18 +222,20 @@ def _record_unrecoverable_gap(
         ) + count
         metrics["unrecoverable_gap_events"] += 1
         metrics["unrecoverable_gap_messages"] += count
+        if reason in {"retained_ring_start", "not_in_retained_export"}:
+            metrics[f"unrecoverable_{reason}_events"] += 1
+            metrics[f"unrecoverable_{reason}_messages"] += count
 
 
-def _contiguous_chunk(rows: list[dict], start: int, end: int) -> list[dict]:
-    by_seq = {
-        item["seq"]: item
-        for item in rows
-        if start <= item.get("seq", -1) <= end
-    }
+def _contiguous_chunk(
+    rows_by_seq: dict[int, dict],
+    start: int,
+    end: int,
+) -> list[dict]:
     chunk: list[dict] = []
     expected = start
     while expected <= end and len(chunk) < RECOVERY_CHUNK_MESSAGES:
-        item = by_seq.get(expected)
+        item = rows_by_seq.get(expected)
         if item is None:
             break
         chunk.append(item)
@@ -249,6 +256,11 @@ async def process_live_payload_with_recovery(
     bootstrap: bool,
 ) -> tuple[bool, bool]:
     """Process one live slice without advancing across a recoverable hole.
+
+    One retained-ring export is a point-in-time recovery snapshot.  Drain every
+    recoverable record from that same snapshot in bounded in-memory chunks before
+    touching the newer live slice.  This avoids repeatedly spending shared read
+    budget and re-fetching a moving/compacting ring for one logical gap.
 
     Returns ``(changed, drain_immediately)``.  A true drain hint skips the normal
     room sleep, but the shared ReadBudget still paces the next GET.
@@ -297,27 +309,30 @@ async def process_live_payload_with_recovery(
     gap_end = first_live - 1
     changed = False
     cursor = since
-    retained_after_cursor = [item for item in exported if item["seq"] > cursor]
+    rows_by_seq = {
+        item["seq"]: item
+        for item in exported
+        if cursor < item["seq"] <= gap_end
+    }
+    ordered_seqs = sorted(rows_by_seq)
 
-    if retained_after_cursor:
-        earliest = retained_after_cursor[0]["seq"]
-        if earliest > cursor + 1:
-            unrecoverable_end = min(gap_end, earliest - 1)
-            if unrecoverable_end >= cursor + 1:
-                _record_unrecoverable_gap(
-                    state,
-                    room,
-                    live[0],
-                    cursor + 1,
-                    unrecoverable_end,
-                    "retained_ring_start",
-                )
-                state.setdefault("cursors", {})[room] = unrecoverable_end
-                cursor = unrecoverable_end
-                changed = True
+    if ordered_seqs and ordered_seqs[0] > cursor + 1:
+        unrecoverable_end = min(gap_end, ordered_seqs[0] - 1)
+        _record_unrecoverable_gap(
+            state,
+            room,
+            live[0],
+            cursor + 1,
+            unrecoverable_end,
+            "retained_ring_start",
+        )
+        state.setdefault("cursors", {})[room] = unrecoverable_end
+        cursor = unrecoverable_end
+        changed = True
 
-    if cursor < gap_end:
-        chunk = _contiguous_chunk(exported, cursor + 1, gap_end)
+    while cursor < gap_end:
+        expected = cursor + 1
+        chunk = _contiguous_chunk(rows_by_seq, expected, gap_end)
         if chunk:
             start = chunk[0]["seq"]
             end = chunk[-1]["seq"]
@@ -337,24 +352,31 @@ async def process_live_payload_with_recovery(
             changed = True
             cursor = int(state.get("cursors", {}).get(room, cursor) or cursor)
             if cursor < gap_end:
-                # More retained messages remain.  Do not touch the newer live
-                # slice until the missing interval has been drained.
-                set_success(state, room)
-                return True, True
+                # Bound CPU/event-loop occupancy without throwing away this
+                # already-fetched recovery snapshot or consuming more network budget.
+                await asyncio.sleep(0)
+            continue
 
-    if cursor < gap_end:
-        # The export no longer contains the remaining interval.  This is the
-        # only path allowed to advance over unseen sequence numbers.
+        # The retained snapshot has a hole at the next expected sequence.  Mark
+        # only that absent interval unrecoverable, then continue draining any
+        # later contiguous records still present in this same snapshot.
+        index = bisect_left(ordered_seqs, expected)
+        next_retained = (
+            ordered_seqs[index]
+            if index < len(ordered_seqs) and ordered_seqs[index] <= gap_end
+            else None
+        )
+        unrecoverable_end = gap_end if next_retained is None else next_retained - 1
         _record_unrecoverable_gap(
             state,
             room,
             live[0],
-            cursor + 1,
-            gap_end,
+            expected,
+            unrecoverable_end,
             "not_in_retained_export",
         )
-        state.setdefault("cursors", {})[room] = gap_end
-        cursor = gap_end
+        state.setdefault("cursors", {})[room] = unrecoverable_end
+        cursor = unrecoverable_end
         changed = True
 
     changed = (
