@@ -59,6 +59,37 @@ class ExportClient:
         return ExportResponse(self.body, self.status, self.headers)
 
 
+class LiveResponse:
+    def __init__(self, payload=None, status=200, headers=None):
+        self.payload = payload if payload is not None else {"messages": []}
+        self.status_code = status
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise observer.httpx.HTTPStatusError(
+                "bad",
+                request=None,
+                response=self,
+            )
+
+    def json(self):
+        return self.payload
+
+
+class LiveClient:
+    def __init__(self, payload=None, status=200, headers=None):
+        self.payload = payload if payload is not None else {"messages": []}
+        self.status = status
+        self.headers = headers or {}
+        self.calls = []
+
+    async def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        assert not url.endswith("/export")
+        return LiveResponse(self.payload, self.status, self.headers)
+
+
 def run_recovery(
     client,
     state,
@@ -292,6 +323,10 @@ def test_export_failure_does_not_advance_cursor(monkeypatch, tmp_path):
     assert state["metrics"]["message_gaps"] == 0
     assert state["health"]["current"] == "degraded"
     assert state["health"]["rooms"]["lobby"]["kind"].startswith("gap_recovery_")
+    assert observer_resilience._gap_recovery_failed(state, "lobby") is True
+    timeout = client.calls[0][1]["timeout"]
+    assert timeout.connect == observer_resilience.CORE_CONNECT_TIMEOUT_SECONDS
+    assert timeout.read == observer_resilience.EXPORT_READ_TIMEOUT_SECONDS
 
 
 def test_optional_tclk_error_is_visible_but_does_not_degrade_core_health(monkeypatch, tmp_path):
@@ -346,6 +381,57 @@ def test_recovered_gap_uses_get_only_and_never_calls_post(monkeypatch, tmp_path)
     )
 
     assert all(call[0].endswith("/export") for call in client.calls)
+
+
+def test_live_reader_uses_fast_connect_and_long_poll_safe_read_timeout(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    client = LiveClient({"messages": []})
+
+    payload, retry, error = asyncio.run(
+        observer_resilience.read_room_live(client, "lobby", 123, 10)
+    )
+
+    assert payload == {"messages": []}
+    assert retry is None
+    assert error is None
+    assert len(client.calls) == 1
+    _, kwargs = client.calls[0]
+    assert kwargs["params"] == {
+        "format": "json",
+        "since": 123,
+        "wait": 10,
+        "limit": observer_resilience.LIVE_SLICE_LIMIT,
+    }
+    timeout = kwargs["timeout"]
+    assert timeout.connect == observer_resilience.CORE_CONNECT_TIMEOUT_SECONDS
+    assert timeout.pool == observer_resilience.CORE_CONNECT_TIMEOUT_SECONDS
+    assert timeout.read == observer_resilience.LIVE_READ_TIMEOUT_SECONDS
+
+
+def test_core_error_backoff_is_bounded_and_retry_after_is_honored(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+
+    assert observer_resilience._next_error_backoff("lobby", 0, None) == 1.0
+    assert observer_resilience._next_error_backoff("lobby", 1, None) == 2.0
+    assert observer_resilience._next_error_backoff("lobby", 4, None) == 5.0
+    assert observer_resilience._next_error_backoff("lobby", 5, None) == 5.0
+    assert observer_resilience._next_error_backoff("events", 8, None) == 5.0
+    assert observer_resilience._next_error_backoff("tclk-offers", 32, None) == 60.0
+    assert observer_resilience._next_error_backoff("lobby", 5, 17.0) == 17.0
+    assert observer_resilience._next_error_backoff(
+        "lobby", 5, None, recovery=True
+    ) == observer_resilience.CORE_RECOVERY_RETRY_SECONDS
+    assert observer_resilience._next_error_backoff(
+        "tclk-offers", 5, None, recovery=True
+    ) == observer_resilience.OPTIONAL_RECOVERY_RETRY_SECONDS
+
+
+def test_hot_lobby_interval_is_capped_without_changing_other_rooms(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path)
+
+    assert config["room_intervals_seconds"]["lobby"] == 3
+    assert observer_resilience._effective_room_interval(config, "lobby", None) == 1.0
+    assert observer_resilience._effective_room_interval(config, "events", None) == 10.0
 
 
 def test_install_is_idempotent_and_patches_only_read_side_functions(monkeypatch, tmp_path):
