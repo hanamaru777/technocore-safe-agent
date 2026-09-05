@@ -42,12 +42,17 @@ def _metrics(state: dict) -> dict:
         "gap_recovered_messages",
         "unrecoverable_gap_events",
         "unrecoverable_gap_messages",
+        "unrecoverable_core_gap_events",
+        "unrecoverable_core_gap_messages",
+        "unrecoverable_optional_gap_events",
+        "unrecoverable_optional_gap_messages",
         "unrecoverable_retained_ring_start_events",
         "unrecoverable_retained_ring_start_messages",
         "unrecoverable_not_in_retained_export_events",
         "unrecoverable_not_in_retained_export_messages",
     ):
         metrics.setdefault(key, 0)
+    state.setdefault("last_unrecoverable_gap", None)
     return metrics
 
 
@@ -222,9 +227,21 @@ def _record_unrecoverable_gap(
         ) + count
         metrics["unrecoverable_gap_events"] += 1
         metrics["unrecoverable_gap_messages"] += count
+        lane = "optional" if room in OPTIONAL_ROOMS else "core"
+        metrics[f"unrecoverable_{lane}_gap_events"] += 1
+        metrics[f"unrecoverable_{lane}_gap_messages"] += count
         if reason in {"retained_ring_start", "not_in_retained_export"}:
             metrics[f"unrecoverable_{reason}_events"] += 1
             metrics[f"unrecoverable_{reason}_messages"] += count
+        state["last_unrecoverable_gap"] = {
+            "room": room,
+            "lane": lane,
+            "observed_at": observer.now(),
+            "missing_from": start,
+            "missing_to": end,
+            "estimated_missing": count,
+            "recovery_reason": reason,
+        }
 
 
 def _contiguous_chunk(

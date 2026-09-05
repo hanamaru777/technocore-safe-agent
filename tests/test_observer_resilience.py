@@ -65,6 +65,7 @@ def run_recovery(
     config,
     live,
     *,
+    room="lobby",
     bootstrap=False,
 ):
     return asyncio.run(
@@ -73,7 +74,7 @@ def run_recovery(
             observer.ReadBudget(600),
             state,
             config,
-            "lobby",
+            room,
             {"messages": live},
             None,
             None,
@@ -179,10 +180,23 @@ def test_unrecoverable_ring_loss_is_explicit_then_retained_tail_is_recovered(mon
     assert state["metrics"]["estimated_missing_messages"] == 99
     assert state["metrics"]["unrecoverable_gap_events"] == 1
     assert state["metrics"]["unrecoverable_gap_messages"] == 99
+    assert state["metrics"]["unrecoverable_core_gap_events"] == 1
+    assert state["metrics"]["unrecoverable_core_gap_messages"] == 99
+    assert state["metrics"]["unrecoverable_optional_gap_events"] == 0
+    assert state["metrics"]["unrecoverable_optional_gap_messages"] == 0
     assert state["metrics"]["unrecoverable_retained_ring_start_events"] == 1
     assert state["metrics"]["unrecoverable_retained_ring_start_messages"] == 99
     assert state["metrics"]["unrecoverable_not_in_retained_export_events"] == 0
     assert state["metrics"]["gap_recovered_messages"] == 101
+    assert state["last_unrecoverable_gap"] == {
+        "room": "lobby",
+        "lane": "core",
+        "observed_at": state["last_unrecoverable_gap"]["observed_at"],
+        "missing_from": 101,
+        "missing_to": 199,
+        "estimated_missing": 99,
+        "recovery_reason": "retained_ring_start",
+    }
     gap = next(
         item
         for item in state["opportunities"]
@@ -192,6 +206,34 @@ def test_unrecoverable_ring_loss_is_explicit_then_retained_tail_is_recovered(mon
     assert gap["missing_to"] == 199
     assert gap["recovery"] == "unrecoverable"
     assert gap["recovery_reason"] == "retained_ring_start"
+
+
+def test_optional_gap_is_attributed_without_changing_legacy_totals(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path)
+    state = observer_resilience.default_state()
+    state["cursors"]["tclk-offers"] = 100
+    client = ExportClient(export_body(200, 500))
+
+    changed, _ = run_recovery(
+        client,
+        state,
+        config,
+        [message(seq) for seq in range(301, 501)],
+        room="tclk-offers",
+    )
+
+    assert changed is True
+    assert state["metrics"]["message_gaps"] == 1
+    assert state["metrics"]["unrecoverable_gap_events"] == 1
+    assert state["metrics"]["unrecoverable_gap_messages"] == 99
+    assert state["metrics"]["unrecoverable_core_gap_events"] == 0
+    assert state["metrics"]["unrecoverable_core_gap_messages"] == 0
+    assert state["metrics"]["unrecoverable_optional_gap_events"] == 1
+    assert state["metrics"]["unrecoverable_optional_gap_messages"] == 99
+    assert state["last_unrecoverable_gap"]["room"] == "tclk-offers"
+    assert state["last_unrecoverable_gap"]["lane"] == "optional"
+    assert state["last_unrecoverable_gap"]["estimated_missing"] == 99
+    assert state["last_unrecoverable_gap"]["recovery_reason"] == "retained_ring_start"
 
 
 def test_internal_export_hole_marks_only_missing_interval_then_recovers_tail(monkeypatch, tmp_path):
@@ -212,9 +254,14 @@ def test_internal_export_hole_marks_only_missing_interval_then_recovers_tail(mon
     assert state["metrics"]["message_gaps"] == 1
     assert state["metrics"]["estimated_missing_messages"] == 9
     assert state["metrics"]["unrecoverable_gap_messages"] == 9
+    assert state["metrics"]["unrecoverable_core_gap_events"] == 1
+    assert state["metrics"]["unrecoverable_core_gap_messages"] == 9
     assert state["metrics"]["unrecoverable_not_in_retained_export_events"] == 1
     assert state["metrics"]["unrecoverable_not_in_retained_export_messages"] == 9
     assert state["metrics"]["gap_recovered_messages"] == 191
+    assert state["last_unrecoverable_gap"]["room"] == "lobby"
+    assert state["last_unrecoverable_gap"]["lane"] == "core"
+    assert state["last_unrecoverable_gap"]["recovery_reason"] == "not_in_retained_export"
     gap = next(
         item
         for item in state["opportunities"]
