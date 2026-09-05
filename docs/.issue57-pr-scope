@@ -1,0 +1,3 @@
+observer_resilience.py
+tests/test_observer_resilience.py
+docs/issue57-single-snapshot-recovery.md
