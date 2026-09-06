@@ -8,7 +8,9 @@ adds operational safeguards discovered in production:
 * optional-lane health isolation so the secondary ``tclk-offers`` watcher can
   fail visibly without turning the core Agent red;
 * bounded hot-core polling/retry behavior so a transient connection stall does
-  not leave ``lobby`` blind long enough to outrun the retained ring.
+  not leave ``lobby`` blind long enough to outrun the retained ring;
+* an immediate retained-ring fallback when a core live read fails, so retained
+  rows can be captured before the next successful live tail reveals a gap.
 
 This module is read-only with respect to Technocore. It performs GETs only and
 never signs, posts, follows URLs found in room text, executes commands, or reads
@@ -28,6 +30,7 @@ LIVE_SLICE_LIMIT = 200
 EXPORT_MAX_BYTES = 12 * 1024 * 1024
 RECOVERY_CHUNK_MESSAGES = 2000
 OPTIONAL_ROOMS = frozenset({tclk_watch.OFFER_ROOM})
+CORE_FALLBACK_ROOMS = frozenset({"lobby", "events"})
 HOT_LOBBY_INTERVAL_SECONDS = 1
 CORE_CONNECT_TIMEOUT_SECONDS = 3.0
 LIVE_READ_TIMEOUT_SECONDS = 15.0
@@ -50,6 +53,10 @@ def _metrics(state: dict) -> dict:
         "gap_recovery_attempts",
         "gap_recovery_batches",
         "gap_recovered_messages",
+        "live_error_export_fallback_attempts",
+        "live_error_export_fallback_successes",
+        "live_error_export_fallback_messages",
+        "live_error_export_fallback_failures",
         "unrecoverable_gap_events",
         "unrecoverable_gap_messages",
         "unrecoverable_core_gap_events",
@@ -304,6 +311,105 @@ def _contiguous_chunk(
     return chunk
 
 
+async def _drain_export_snapshot(
+    state: dict,
+    config: dict,
+    room: str,
+    exported: list[dict],
+    own_did: str | None,
+    mailbox: str | None,
+    *,
+    gap_end: int | None = None,
+    event_message: dict | None = None,
+) -> tuple[bool, int]:
+    """Drain one retained-ring snapshot from the current cursor forward.
+
+    With ``gap_end`` set, this preserves the existing successful-live gap recovery
+    semantics. Without it, the newest sequence in the export becomes the bounded
+    fallback endpoint, allowing a failed live read to capture retained rows now
+    rather than waiting for the live endpoint to recover.
+    """
+    cursor = int(state.get("cursors", {}).get(room, 0) or 0)
+    candidates = [
+        item
+        for item in exported
+        if item["seq"] > cursor and (gap_end is None or item["seq"] <= gap_end)
+    ]
+    if gap_end is None:
+        if not candidates:
+            return False, 0
+        gap_end = candidates[-1]["seq"]
+        event_message = candidates[0]
+    elif event_message is None:
+        event_message = candidates[0] if candidates else {"seq": gap_end, "text": ""}
+
+    rows_by_seq = {item["seq"]: item for item in candidates}
+    ordered_seqs = sorted(rows_by_seq)
+    changed = False
+    recovered = 0
+
+    if ordered_seqs and ordered_seqs[0] > cursor + 1:
+        unrecoverable_end = min(gap_end, ordered_seqs[0] - 1)
+        _record_unrecoverable_gap(
+            state,
+            room,
+            event_message,
+            cursor + 1,
+            unrecoverable_end,
+            "retained_ring_start",
+        )
+        state.setdefault("cursors", {})[room] = unrecoverable_end
+        cursor = unrecoverable_end
+        changed = True
+
+    while cursor < gap_end:
+        expected = cursor + 1
+        chunk = _contiguous_chunk(rows_by_seq, expected, gap_end)
+        if chunk:
+            start = chunk[0]["seq"]
+            end = chunk[-1]["seq"]
+            changed = (
+                _BASE_PROCESS_PAYLOAD(
+                    state,
+                    config,
+                    room,
+                    {"messages": chunk},
+                    own_did,
+                    mailbox,
+                    bootstrap=False,
+                )
+                or changed
+            )
+            _record_recovered_batch(state, room, chunk[0], start, end)
+            recovered += max(0, end - start + 1)
+            changed = True
+            cursor = int(state.get("cursors", {}).get(room, cursor) or cursor)
+            if cursor < gap_end:
+                await asyncio.sleep(0)
+            continue
+
+        index = bisect_left(ordered_seqs, expected)
+        next_retained = (
+            ordered_seqs[index]
+            if index < len(ordered_seqs) and ordered_seqs[index] <= gap_end
+            else None
+        )
+        unrecoverable_end = gap_end if next_retained is None else next_retained - 1
+        _record_unrecoverable_gap(
+            state,
+            room,
+            event_message,
+            expected,
+            unrecoverable_end,
+            "not_in_retained_export",
+        )
+        state.setdefault("cursors", {})[room] = unrecoverable_end
+        cursor = unrecoverable_end
+        changed = True
+
+    return changed, recovered
+
+
 def _next_error_backoff(
     room: str,
     previous: float,
@@ -351,6 +457,37 @@ def _effective_room_interval(config: dict, room: str, mailbox: str | None) -> fl
     if room == "lobby":
         return min(interval, float(HOT_LOBBY_INTERVAL_SECONDS))
     return interval
+
+
+async def recover_after_live_error(
+    client,
+    budget,
+    state: dict,
+    config: dict,
+    room: str,
+    own_did: str | None,
+    mailbox: str | None,
+) -> tuple[bool, int, float | None, str | None]:
+    """Try exactly one retained-ring snapshot after a non-429 core live failure."""
+    metrics = _metrics(state)
+    metrics["live_error_export_fallback_attempts"] += 1
+    await budget.acquire()
+    exported, retry, error = await read_room_export(client, room)
+    if error:
+        metrics["live_error_export_fallback_failures"] += 1
+        return True, 0, retry, error
+
+    metrics["live_error_export_fallback_successes"] += 1
+    _, recovered = await _drain_export_snapshot(
+        state,
+        config,
+        room,
+        exported or [],
+        own_did,
+        mailbox,
+    )
+    metrics["live_error_export_fallback_messages"] += recovered
+    return True, recovered, None, None
 
 
 async def process_live_payload_with_recovery(
@@ -415,80 +552,16 @@ async def process_live_payload_with_recovery(
         set_error(state, room, f"gap_recovery_{error}", str(retry or ""))
         return True, False
 
-    exported = exported or []
-    gap_end = first_live - 1
-    changed = False
-    cursor = since
-    rows_by_seq = {
-        item["seq"]: item
-        for item in exported
-        if cursor < item["seq"] <= gap_end
-    }
-    ordered_seqs = sorted(rows_by_seq)
-
-    if ordered_seqs and ordered_seqs[0] > cursor + 1:
-        unrecoverable_end = min(gap_end, ordered_seqs[0] - 1)
-        _record_unrecoverable_gap(
-            state,
-            room,
-            live[0],
-            cursor + 1,
-            unrecoverable_end,
-            "retained_ring_start",
-        )
-        state.setdefault("cursors", {})[room] = unrecoverable_end
-        cursor = unrecoverable_end
-        changed = True
-
-    while cursor < gap_end:
-        expected = cursor + 1
-        chunk = _contiguous_chunk(rows_by_seq, expected, gap_end)
-        if chunk:
-            start = chunk[0]["seq"]
-            end = chunk[-1]["seq"]
-            changed = (
-                _BASE_PROCESS_PAYLOAD(
-                    state,
-                    config,
-                    room,
-                    {"messages": chunk},
-                    own_did,
-                    mailbox,
-                    bootstrap=False,
-                )
-                or changed
-            )
-            _record_recovered_batch(state, room, chunk[0], start, end)
-            changed = True
-            cursor = int(state.get("cursors", {}).get(room, cursor) or cursor)
-            if cursor < gap_end:
-                # Bound CPU/event-loop occupancy without throwing away this
-                # already-fetched recovery snapshot or consuming more network budget.
-                await asyncio.sleep(0)
-            continue
-
-        # The retained snapshot has a hole at the next expected sequence. Mark
-        # only that absent interval unrecoverable, then continue draining any
-        # later contiguous records still present in this same snapshot.
-        index = bisect_left(ordered_seqs, expected)
-        next_retained = (
-            ordered_seqs[index]
-            if index < len(ordered_seqs) and ordered_seqs[index] <= gap_end
-            else None
-        )
-        unrecoverable_end = gap_end if next_retained is None else next_retained - 1
-        _record_unrecoverable_gap(
-            state,
-            room,
-            live[0],
-            expected,
-            unrecoverable_end,
-            "not_in_retained_export",
-        )
-        state.setdefault("cursors", {})[room] = unrecoverable_end
-        cursor = unrecoverable_end
-        changed = True
-
+    changed, _ = await _drain_export_snapshot(
+        state,
+        config,
+        room,
+        exported or [],
+        own_did,
+        mailbox,
+        gap_end=first_live - 1,
+        event_message=live[0],
+    )
     changed = (
         _BASE_PROCESS_PAYLOAD(
             state,
@@ -530,7 +603,27 @@ async def room_worker(
         drain_immediately = False
         if error:
             changed = set_error(state, room, error, str(retry or ""))
-            backoff = _next_error_backoff(room, backoff, retry)
+            fallback_retry = None
+            fallback_error = None
+            if room in CORE_FALLBACK_ROOMS and error != "rate_limited":
+                fallback_changed, _, fallback_retry, fallback_error = (
+                    await recover_after_live_error(
+                        client,
+                        budget,
+                        state,
+                        config,
+                        room,
+                        own_did,
+                        mailbox,
+                    )
+                )
+                changed = fallback_changed or changed
+            effective_retry = (
+                fallback_retry
+                if fallback_error == "rate_limited" and fallback_retry is not None
+                else retry
+            )
+            backoff = _next_error_backoff(room, backoff, effective_retry)
         else:
             changed, drain_immediately = await process_live_payload_with_recovery(
                 client,
