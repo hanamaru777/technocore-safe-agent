@@ -1,7 +1,13 @@
 """Seedless production entrypoint for Observer plus Resident candidate refresh."""
 from __future__ import annotations
 
-from . import knowledge_guard, observer, observer_resilience
+from . import (
+    knowledge_guard,
+    observer,
+    observer_request_deadline,
+    observer_resilience,
+    observer_startup_resilience,
+)
 
 
 def main() -> None:
@@ -9,6 +15,13 @@ def main() -> None:
     # Observer creates workers. The isolated Signer service is not imported,
     # restarted, or invoked by this startup path.
     observer_resilience.install()
+    # HTTP client read timeouts are inactivity timers, not total request timers.
+    # Bound the whole live/export request so one trickling response cannot pin a
+    # hot-room worker until retained history has already moved past its cursor.
+    observer_request_deadline.install()
+    # A persisted core cursor must catch up from the retained ring before the
+    # first post-restart live tail is allowed to advance it.
+    observer_startup_resilience.install()
     # Source-backed onboarding topics fail closed when their pinned registry is
     # stale or invalid. This changes eligibility only; installation performs no
     # Technocore write and grants no signing authority to Resident.
