@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import ast
 import asyncio
 import inspect
-import threading
-import time
 
 import pytest
 
@@ -16,16 +13,21 @@ from flop_agent import (
 )
 
 
-def test_maintenance_cycle_reloads_persisted_observer_state(monkeypatch):
+class _OneCycleStop:
+    def __init__(self):
+        self.stopped = False
+
+    def is_set(self):
+        return self.stopped
+
+    def wait(self, _seconds):
+        self.stopped = True
+        return True
+
+
+def test_maintenance_cycle_uses_only_persisted_local_state(monkeypatch):
     calls: list[str] = []
-
-    def refresh(*args, **kwargs):
-        assert args == ()
-        assert kwargs == {}
-        calls.append("refresh")
-        return {}
-
-    monkeypatch.setattr(resident, "refresh", refresh)
+    monkeypatch.setattr(resident, "refresh", lambda: calls.append("refresh") or {})
     monkeypatch.setattr(autopilot, "build_outbox", lambda: calls.append("outbox") or {})
 
     observer_resident_isolation.maintenance_cycle()
@@ -33,89 +35,99 @@ def test_maintenance_cycle_reloads_persisted_observer_state(monkeypatch):
     assert calls == ["refresh", "outbox"]
 
 
-def test_isolated_worker_does_not_block_observer_event_loop(monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
-    completed = threading.Event()
-
-    def refresh():
-        started.set()
-        assert release.wait(2)
-        completed.set()
-        return {}
-
-    monkeypatch.setattr(resident, "refresh", refresh)
-    monkeypatch.setattr(autopilot, "build_outbox", lambda: {})
+def test_maintenance_process_runs_cycle_and_uses_positive_nice(monkeypatch):
+    calls: list[str] = []
+    stop = _OneCycleStop()
+    monkeypatch.setattr(observer_resident_isolation.os, "nice", lambda value: calls.append(f"nice:{value}"))
+    monkeypatch.setattr(observer_resident_isolation, "maintenance_cycle", lambda: calls.append("cycle"))
     monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 30})
 
-    async def run():
-        stop = asyncio.Event()
-        task = asyncio.create_task(
-            observer_resident_isolation.resident_worker({}, stop, observer.default_state())
-        )
-        deadline = time.monotonic() + 1
-        while not started.is_set() and time.monotonic() < deadline:
-            await asyncio.sleep(0.005)
-        assert started.is_set()
+    observer_resident_isolation._maintenance_process(stop)
 
-        # The maintenance thread is deliberately blocked above.  If maintenance
-        # still ran on the Observer loop, this sleep could not complete.
-        before = time.monotonic()
-        await asyncio.sleep(0.05)
-        assert time.monotonic() - before < 0.5
-        assert not completed.is_set()
-
-        release.set()
-        deadline = time.monotonic() + 1
-        while not completed.is_set() and time.monotonic() < deadline:
-            await asyncio.sleep(0.005)
-        assert completed.is_set()
-        stop.set()
-        await asyncio.wait_for(task, timeout=1)
-
-    asyncio.run(run())
+    assert calls == ["nice:10", "cycle"]
 
 
-def test_runtime_error_remains_fail_closed_and_worker_stays_alive(monkeypatch):
-    attempts = 0
-    second_attempt = threading.Event()
+class _FakeProcess:
+    def __init__(self, *, target, args, name, daemon):
+        self.target = target
+        self.args = args
+        self.name = name
+        self.daemon = daemon
+        self.exitcode = None
+        self.started = False
+        self.joined = False
+        self.terminated = False
 
-    def refresh():
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise RuntimeError("expected local refusal")
-        second_attempt.set()
-        return {}
+    def start(self):
+        self.started = True
 
-    monkeypatch.setattr(resident, "refresh", refresh)
-    monkeypatch.setattr(autopilot, "build_outbox", lambda: {})
-    monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 1})
+    def join(self, _timeout):
+        self.joined = True
 
-    async def run():
-        stop = asyncio.Event()
-        task = asyncio.create_task(observer_resident_isolation.resident_worker({}, stop))
-        deadline = time.monotonic() + 2
-        while not second_attempt.is_set() and time.monotonic() < deadline:
-            await asyncio.sleep(0.02)
-        assert second_attempt.is_set()
-        stop.set()
-        await asyncio.wait_for(task, timeout=1)
+    def is_alive(self):
+        return False
 
-    asyncio.run(run())
+    def terminate(self):
+        self.terminated = True
 
 
-def test_unexpected_maintenance_failure_surfaces_to_daemon(monkeypatch):
+class _FakeProcessStop:
+    def __init__(self):
+        self.value = False
+
+    def set(self):
+        self.value = True
+
+
+class _FakeContext:
+    def __init__(self):
+        self.stop = _FakeProcessStop()
+        self.process = None
+
+    def Event(self):
+        return self.stop
+
+    def Process(self, **kwargs):
+        self.process = _FakeProcess(**kwargs)
+        return self.process
+
+
+def test_worker_supervises_separate_process_without_blocking_loop(monkeypatch):
+    context = _FakeContext()
     monkeypatch.setattr(
-        resident,
-        "refresh",
-        lambda: (_ for _ in ()).throw(ValueError("unexpected")),
+        observer_resident_isolation.multiprocessing,
+        "get_context",
+        lambda method: context if method == "spawn" else pytest.fail("unexpected method"),
     )
-    monkeypatch.setattr(autopilot, "build_outbox", lambda: {})
-    monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 30})
 
     async def run():
-        with pytest.raises(ValueError, match="unexpected"):
+        stop = asyncio.Event()
+        task = asyncio.create_task(observer_resident_isolation.resident_worker({}, stop, {}))
+        await asyncio.sleep(0.05)
+        assert context.process is not None and context.process.started
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run())
+    assert context.stop.value is True
+    assert context.process is not None and context.process.joined
+    assert context.process.terminated is False
+
+
+def test_unexpected_process_exit_fails_closed(monkeypatch):
+    context = _FakeContext()
+
+    def create_process(**kwargs):
+        process = _FakeProcess(**kwargs)
+        process.exitcode = 7
+        context.process = process
+        return process
+
+    context.Process = create_process
+    monkeypatch.setattr(observer_resident_isolation.multiprocessing, "get_context", lambda _: context)
+
+    async def run():
+        with pytest.raises(RuntimeError, match="exited unexpectedly: 7"):
             await asyncio.wait_for(
                 observer_resident_isolation.resident_worker({}, asyncio.Event()),
                 timeout=1,
@@ -124,16 +136,11 @@ def test_unexpected_maintenance_failure_surfaces_to_daemon(monkeypatch):
     asyncio.run(run())
 
 
-def test_overlay_is_local_only_and_has_no_command_execution_surface():
+def test_overlay_has_no_untrusted_execution_or_network_surface():
     source = inspect.getsource(observer_resident_isolation)
-    tree = ast.parse(source)
-    imported_roots: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported_roots.add(node.module.split(".", 1)[0])
-
-    assert imported_roots.isdisjoint({"subprocess", "os", "httpx"})
+    assert "subprocess" not in source
+    assert "httpx" not in source
     assert "post_signed(" not in source
     assert "SIGN_SEED" not in source
+    assert "multiprocessing.get_context(\"spawn\")" in source
+    assert "threading.Thread" not in source
