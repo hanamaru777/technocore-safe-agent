@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import inspect
 import threading
@@ -125,8 +126,14 @@ def test_unexpected_maintenance_failure_surfaces_to_daemon(monkeypatch):
 
 def test_overlay_is_local_only_and_has_no_command_execution_surface():
     source = inspect.getsource(observer_resident_isolation)
-    assert "subprocess" not in source
-    assert "os.system" not in source
-    assert "httpx" not in source
-    assert "post_signed" not in source
+    tree = ast.parse(source)
+    imported_roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split(".", 1)[0])
+
+    assert imported_roots.isdisjoint({"subprocess", "os", "httpx"})
+    assert "post_signed(" not in source
     assert "SIGN_SEED" not in source
