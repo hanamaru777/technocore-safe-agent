@@ -5,6 +5,7 @@ from . import (
     knowledge_guard,
     observer,
     observer_request_deadline,
+    observer_resident_isolation,
     observer_resilience,
     observer_startup_resilience,
 )
@@ -22,12 +23,16 @@ def main() -> None:
     # A persisted core cursor must catch up from the retained ring before the
     # first post-restart live tail is allowed to advance it.
     observer_startup_resilience.install()
+    # Keep expensive local Resident scoring/outbox maintenance off the same
+    # asyncio event loop that owns hot-room reads. The maintenance thread reloads
+    # only the atomically persisted Observer snapshot and never receives live
+    # mutable Observer state.
+    observer_resident_isolation.install()
     # Source-backed onboarding topics fail closed when their pinned registry is
     # stale or invalid. This changes eligibility only; installation performs no
     # Technocore write and grants no signing authority to Resident.
     knowledge_guard.install()
     # observe_forever owns the OS lock, async workers, read budget and signal handling.
-    # Its resident worker refreshes quality/relationship/candidates independently of reads.
     observer.observe_forever()
 
 
