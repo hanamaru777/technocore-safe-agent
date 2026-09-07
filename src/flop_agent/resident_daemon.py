@@ -8,6 +8,7 @@ from . import (
     observer_resident_isolation,
     observer_resilience,
     observer_startup_resilience,
+    observer_state_writer_isolation,
 )
 
 
@@ -23,10 +24,12 @@ def main() -> None:
     # A persisted core cursor must catch up from the retained ring before the
     # first post-restart live tail is allowed to advance it.
     observer_startup_resilience.install()
-    # Keep expensive local Resident scoring/outbox maintenance off the same
-    # asyncio event loop that owns hot-room reads. The maintenance thread reloads
-    # only the atomically persisted Observer snapshot and never receives live
-    # mutable Observer state.
+    # Full multi-megabyte state serialization/fsync must not monopolize the same
+    # asyncio loop that owns lobby/events reads. Generation tracking keeps newer
+    # mutations dirty while disk I/O runs off-loop.
+    observer_state_writer_isolation.install()
+    # CPU-heavy Resident scoring/outbox maintenance runs in a separate low-priority
+    # Python process, not merely a thread competing for the Observer process GIL.
     observer_resident_isolation.install()
     # Source-backed onboarding topics fail closed when their pinned registry is
     # stale or invalid. This changes eligibility only; installation performs no
