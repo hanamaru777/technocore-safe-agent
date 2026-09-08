@@ -7,11 +7,11 @@ that no unseen interval is being skipped.
 Lobby keeps the conservative retained-ring export-first behavior. For the lower-
 volume ``events`` core room, Production showed that a full retained export can be
 pathologically slow even when the persisted cursor is already current. Events
-therefore gets one bounded GET-only live probe from its persisted cursor first:
-if there are no unseen messages, or every unseen sequence is contiguous from
-``cursor + 1``, the bounded slice proves there is no startup hole and can be
-processed safely. If the probe errors or contains any unseen sequence gap, the
-existing fail-closed retained-export catch-up remains authoritative.
+therefore retries a bounded GET-only live probe from its persisted cursor first.
+A successful contiguous/empty probe proves startup continuity. A transport error
+stays fail-closed and retries the live probe; it does not immediately escalate to
+the known-pathological full export. Only a successful probe that proves an actual
+sequence hole falls back to retained export.
 
 This module performs no Technocore writes, signing, command execution, URL
 following, or secret access.
@@ -77,19 +77,19 @@ async def _try_events_live_probe(
     own_did: str | None,
     mailbox: str | None,
     writer=None,
-) -> bool:
-    """Return True only when one bounded live probe proves startup continuity."""
+) -> tuple[str, float | None]:
+    """Return ``success``, ``retry`` or ``export`` for one events startup probe."""
     if room != EVENTS_LIVE_PROBE_ROOM:
-        return False
+        return "export", None
 
     cursor = int(state.get("cursors", {}).get(room, 0) or 0)
     if cursor <= 0:
-        return False
+        return "success", None
 
     metrics = _metrics(state)
     metrics["startup_live_probe_attempts"] += 1
     await budget.acquire()
-    payload, _retry, error = await observer_resilience.read_room_live(
+    payload, retry, error = await observer_resilience.read_room_live(
         client,
         room,
         cursor,
@@ -97,17 +97,32 @@ async def _try_events_live_probe(
     )
     if error:
         metrics["startup_live_probe_failures"] += 1
-        metrics["startup_live_probe_fallbacks"] += 1
-        if writer:
+        changed = observer_resilience.set_error(
+            state,
+            room,
+            f"startup_live_probe_{error}",
+            str(retry or ""),
+        )
+        if writer and changed:
             writer.mark_dirty()
-        return False
+        return "retry", retry
 
     live = observer_resilience._valid_messages(payload or {})
     if not _unseen_live_is_contiguous(live, cursor):
         metrics["startup_live_probe_fallbacks"] += 1
-        if writer:
+        first_unseen = next(
+            (item["seq"] for item in live if item["seq"] > cursor),
+            None,
+        )
+        changed = observer_resilience.set_error(
+            state,
+            room,
+            "startup_live_probe_gap",
+            f"cursor={cursor};first_unseen={first_unseen}",
+        )
+        if writer and changed:
             writer.mark_dirty()
-        return False
+        return "export", None
 
     changed, _drain = await observer_resilience.process_live_payload_with_recovery(
         client,
@@ -126,7 +141,7 @@ async def _try_events_live_probe(
     metrics["startup_live_probe_messages"] += max(0, new_cursor - cursor)
     if writer:
         writer.mark_dirty()
-    return True
+    return "success", None
 
 
 async def startup_catchup(
@@ -142,9 +157,10 @@ async def startup_catchup(
 ) -> None:
     """Prove continuity before the first normal live worker cycle.
 
-    ``events`` first gets one zero-wait bounded live probe. A contiguous/empty
-    unseen result is sufficient proof and avoids a full export. Any uncertainty
-    falls back to the original retained-export guard. Lobby remains export-first.
+    ``events`` retries zero-wait bounded live probes while transport itself is
+    failing. A contiguous/empty unseen result is sufficient proof and avoids a
+    full export. A successful probe that proves a real sequence hole falls back
+    to the retained-export guard. Lobby remains export-first.
 
     The export guard does not fall through to the normal live path until one
     export succeeds. On export failure the cursor is untouched and the guard
@@ -156,16 +172,28 @@ async def startup_catchup(
         return
 
     if room == EVENTS_LIVE_PROBE_ROOM:
-        if await _try_events_live_probe(
-            client,
-            budget,
-            state,
-            config,
-            room,
-            own_did,
-            mailbox,
-            writer,
-        ):
+        while not stop.is_set():
+            outcome, retry = await _try_events_live_probe(
+                client,
+                budget,
+                state,
+                config,
+                room,
+                own_did,
+                mailbox,
+                writer,
+            )
+            if outcome == "success":
+                return
+            if outcome == "export":
+                break
+            delay = (
+                max(1.0, float(retry))
+                if retry is not None
+                else STARTUP_RETRY_SECONDS
+            )
+            await _wait_or_stop(stop, delay)
+        if stop.is_set():
             return
 
     metrics = _metrics(state)

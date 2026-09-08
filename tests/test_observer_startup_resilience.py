@@ -143,6 +143,91 @@ def test_events_contiguous_live_probe_processes_bounded_slice_without_export(
     assert state["metrics"]["unrecoverable_core_gap_events"] == 0
 
 
+def test_events_live_probe_transport_error_retries_live_without_export(
+    monkeypatch, tmp_path
+):
+    config = setup(monkeypatch, tmp_path)
+    state = observer_resilience.default_state()
+    state["cursors"]["events"] = 50
+    stop = asyncio.Event()
+    budget = CountingBudget()
+    writer = Writer()
+    calls = 0
+
+    async def fake_live(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return None, None, "ConnectTimeout"
+        return {"messages": [message(51), message(52)]}, None, None
+
+    async def forbidden_export(*args, **kwargs):
+        raise AssertionError("transient events live error must not force full export")
+
+    async def no_wait(stop_event, delay):
+        return None
+
+    monkeypatch.setattr(observer_resilience, "read_room_live", fake_live)
+    monkeypatch.setattr(observer_resilience, "read_room_export", forbidden_export)
+    monkeypatch.setattr(observer_startup_resilience, "_wait_or_stop", no_wait)
+
+    asyncio.run(
+        observer_startup_resilience.startup_catchup(
+            object(), budget, state, config, "events", None, None, stop, writer
+        )
+    )
+
+    assert calls == 2
+    assert budget.calls == 2
+    assert state["cursors"]["events"] == 52
+    assert state["health"]["rooms"]["events"]["status"] == "ok"
+    assert state["metrics"]["startup_live_probe_attempts"] == 2
+    assert state["metrics"]["startup_live_probe_failures"] == 1
+    assert state["metrics"]["startup_live_probe_successes"] == 1
+    assert state["metrics"]["startup_live_probe_fallbacks"] == 0
+    assert state["metrics"]["startup_export_attempts"] == 0
+    assert writer.dirty >= 2
+
+
+def test_events_live_probe_error_stays_fail_closed_when_stopped(monkeypatch, tmp_path):
+    config = setup(monkeypatch, tmp_path)
+    state = observer_resilience.default_state()
+    state["cursors"]["events"] = 50
+    stop = asyncio.Event()
+    budget = CountingBudget()
+    writer = Writer()
+
+    async def fake_live(*args, **kwargs):
+        return None, None, "ConnectTimeout"
+
+    async def forbidden_export(*args, **kwargs):
+        raise AssertionError("transport uncertainty must not escalate to export")
+
+    async def stop_after_error(stop_event, delay):
+        stop_event.set()
+
+    monkeypatch.setattr(observer_resilience, "read_room_live", fake_live)
+    monkeypatch.setattr(observer_resilience, "read_room_export", forbidden_export)
+    monkeypatch.setattr(observer_startup_resilience, "_wait_or_stop", stop_after_error)
+
+    asyncio.run(
+        observer_startup_resilience.startup_catchup(
+            object(), budget, state, config, "events", None, None, stop, writer
+        )
+    )
+
+    assert budget.calls == 1
+    assert state["cursors"]["events"] == 50
+    assert state["health"]["rooms"]["events"]["status"] == "error"
+    assert state["health"]["rooms"]["events"]["kind"] == "startup_live_probe_ConnectTimeout"
+    assert state["metrics"]["startup_live_probe_attempts"] == 1
+    assert state["metrics"]["startup_live_probe_failures"] == 1
+    assert state["metrics"]["startup_live_probe_successes"] == 0
+    assert state["metrics"]["startup_live_probe_fallbacks"] == 0
+    assert state["metrics"]["startup_export_attempts"] == 0
+    assert writer.dirty >= 1
+
+
 def test_events_live_probe_gap_falls_back_to_export_without_skipping(monkeypatch, tmp_path):
     config = setup(monkeypatch, tmp_path)
     state = observer_resilience.default_state()
@@ -155,6 +240,9 @@ def test_events_live_probe_gap_falls_back_to_export_without_skipping(monkeypatch
         return {"messages": [message(60)]}, None, None
 
     async def fake_export(*args, **kwargs):
+        record = state["health"]["rooms"]["events"]
+        assert record["status"] == "error"
+        assert record["kind"] == "startup_live_probe_gap"
         return [message(seq) for seq in range(51, 61)], None, None
 
     monkeypatch.setattr(observer_resilience, "read_room_live", fake_live)
@@ -168,6 +256,7 @@ def test_events_live_probe_gap_falls_back_to_export_without_skipping(monkeypatch
 
     assert budget.calls == 2
     assert state["cursors"]["events"] == 60
+    assert state["health"]["rooms"]["events"]["status"] == "ok"
     assert state["metrics"]["startup_live_probe_attempts"] == 1
     assert state["metrics"]["startup_live_probe_successes"] == 0
     assert state["metrics"]["startup_live_probe_fallbacks"] == 1
@@ -179,43 +268,37 @@ def test_events_live_probe_gap_falls_back_to_export_without_skipping(monkeypatch
 def test_startup_export_failure_retries_without_cursor_advance(monkeypatch, tmp_path):
     config = setup(monkeypatch, tmp_path)
     state = observer_resilience.default_state()
-    state["cursors"]["events"] = 50
+    state["cursors"]["lobby"] = 50
     stop = asyncio.Event()
     budget = CountingBudget()
     writer = Writer()
     calls = 0
 
-    async def fake_live(*args, **kwargs):
-        return None, None, "ConnectTimeout"
-
     async def fake_export(*args, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:
-            assert state["cursors"]["events"] == 50
+            assert state["cursors"]["lobby"] == 50
             return None, None, "ConnectTimeout"
-        assert state["cursors"]["events"] == 50
+        assert state["cursors"]["lobby"] == 50
         return [message(51), message(52)], None, None
 
     async def no_wait(stop_event, delay):
         return None
 
-    monkeypatch.setattr(observer_resilience, "read_room_live", fake_live)
     monkeypatch.setattr(observer_resilience, "read_room_export", fake_export)
     monkeypatch.setattr(observer_startup_resilience, "_wait_or_stop", no_wait)
 
     asyncio.run(
         observer_startup_resilience.startup_catchup(
-            object(), budget, state, config, "events", None, None, stop, writer
+            object(), budget, state, config, "lobby", None, None, stop, writer
         )
     )
 
     assert calls == 2
-    assert budget.calls == 3
-    assert state["cursors"]["events"] == 52
-    assert state["metrics"]["startup_live_probe_attempts"] == 1
-    assert state["metrics"]["startup_live_probe_failures"] == 1
-    assert state["metrics"]["startup_live_probe_fallbacks"] == 1
+    assert budget.calls == 2
+    assert state["cursors"]["lobby"] == 52
+    assert state["metrics"]["startup_live_probe_attempts"] == 0
     assert state["metrics"]["startup_export_attempts"] == 2
     assert state["metrics"]["startup_export_successes"] == 1
     assert state["metrics"]["startup_export_failures"] == 1
