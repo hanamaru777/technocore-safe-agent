@@ -4,9 +4,11 @@ from __future__ import annotations
 from . import (
     knowledge_guard,
     observer,
+    observer_events_startup_transport_fallback,
     observer_events_stream_recovery,
     observer_events_targeted_recovery,
     observer_health_recovery,
+    observer_lobby_fallback_health,
     observer_lobby_spool_recovery,
     observer_lobby_startup_spool_recovery,
     observer_request_deadline,
@@ -41,9 +43,16 @@ def main() -> None:
     # errors and live-tail holes; lobby continues through its local spool overlay.
     observer_events_stream_recovery.install()
     # Never consume the whole events export when a live read has already proved an
-    # exact small gap. Stop at that endpoint; if transport itself fails, retry live
+    # exact small gap. Stop at that endpoint; steady live transport errors remain
     # fail-closed until a concrete missing interval exists.
     observer_events_targeted_recovery.install()
+    # A single transient startup probe failure still retries the cheap events live
+    # read. Repeated non-rate-limit transport failures escalate to the existing
+    # incremental streaming startup path instead of pinning startup forever.
+    observer_events_startup_transport_fallback.install()
+    # If a failed lobby live read is fully covered by the already-installed local
+    # spool/server fallback chain, clear only that stale live-error health record.
+    observer_lobby_fallback_health.install()
     # A failed gap-recovery health record must not stay red forever after a later
     # successful contiguous/empty live cycle. Install after recovery overlays so a
     # fresh failure from the current cycle remains fail-closed and visible.
