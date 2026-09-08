@@ -1,16 +1,16 @@
-"""Keep CPU-heavy local Resident maintenance outside the hot Observer process.
+"""Keep CPU-heavy Resident maintenance outside the hot Observer process.
 
 Issue #57 long-run Production evidence showed that a Python thread reduced but did
 not eliminate lobby continuity loss. CPython threads still contend on the GIL, so
-CPU-heavy Resident scoring can delay the asyncio loop even when it is moved off an
-async task.
+CPU-heavy Resident scoring runs in a separate spawned process.
 
-This overlay supervises two separate spawned Python processes:
-・low-priority Resident/Autopilot maintenance;
-・a GET-only lobby capture shock absorber that stores recent public rows locally.
+Lobby capture used to be another Resident child process. PR #88 production
+acceptance proved that this still creates a continuity hole whenever Resident is
+restarted, so capture now has its own systemd lifecycle and is intentionally absent
+from this supervisor.
 
-Neither child receives the Observer's live mutable in-memory state. There is no
-shell execution, signing, Technocore write, URL following, or secret access here.
+This overlay performs no shell execution, signing, Technocore write, URL following,
+or secret access.
 """
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from . import observer
 CHECK_INTERVAL_SECONDS = 0.25
 _JOIN_TIMEOUT_SECONDS = 2.0
 _PROCESS_NAME = "flop-resident-maintenance"
-_CAPTURE_PROCESS_NAME = "flop-lobby-capture"
 _INSTALLED = False
 
 
@@ -68,35 +67,21 @@ async def resident_worker(
     stop: asyncio.Event,
     state: dict | None = None,
 ) -> None:
-    """Supervise isolated maintenance and lobby-capture child processes."""
+    """Supervise only isolated Resident/Autopilot maintenance."""
     del config, state
-    from . import observer_lobby_capture
 
     context = multiprocessing.get_context("spawn")
     maintenance_stop = context.Event()
-    capture_stop = context.Event()
-
     maintenance = context.Process(
         target=_maintenance_process,
         args=(maintenance_stop,),
         name=_PROCESS_NAME,
         daemon=True,
     )
-    capture = context.Process(
-        target=observer_lobby_capture.capture_process,
-        args=(capture_stop,),
-        name=_CAPTURE_PROCESS_NAME,
-        daemon=True,
-    )
 
-    capture.start()
     maintenance.start()
     try:
         while not stop.is_set():
-            if capture.exitcode is not None:
-                raise RuntimeError(
-                    f"lobby capture process exited unexpectedly: {capture.exitcode}"
-                )
             if maintenance.exitcode is not None:
                 raise RuntimeError(
                     f"resident maintenance process exited unexpectedly: {maintenance.exitcode}"
@@ -106,7 +91,6 @@ async def resident_worker(
             except TimeoutError:
                 pass
     finally:
-        await _stop_process(capture, capture_stop)
         await _stop_process(maintenance, maintenance_stop)
 
 
