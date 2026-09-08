@@ -4,6 +4,7 @@ from __future__ import annotations
 from . import (
     knowledge_guard,
     observer,
+    observer_health_recovery,
     observer_lobby_spool_recovery,
     observer_request_deadline,
     observer_resident_isolation,
@@ -29,6 +30,10 @@ def main() -> None:
     # absorber. If a live tail later reveals a hole, use local captured rows before
     # the moving server retained ring.
     observer_lobby_spool_recovery.install()
+    # A failed gap-recovery health record must not stay red forever after a later
+    # successful contiguous/empty live cycle. Install after recovery overlays so a
+    # fresh failure from the current cycle remains fail-closed and visible.
+    observer_health_recovery.install()
     # Full multi-megabyte state serialization/fsync must not monopolize the same
     # asyncio loop that owns lobby/events reads. Generation tracking keeps newer
     # mutations dirty while disk I/O runs off-loop.
