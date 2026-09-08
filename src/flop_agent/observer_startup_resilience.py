@@ -8,10 +8,10 @@ Lobby keeps the conservative retained-ring export-first behavior. For the lower-
 volume ``events`` core room, Production showed that a full retained export can be
 pathologically slow even when the persisted cursor is already current. Events
 therefore gets one bounded GET-only live probe from its persisted cursor first:
-if the probe is empty or starts exactly at ``cursor + 1``, there is no startup
-hole and the bounded slice can be processed safely. If the probe errors or starts
-after ``cursor + 1``, the existing fail-closed retained-export catch-up remains
-authoritative.
+if there are no unseen messages, or every unseen sequence is contiguous from
+``cursor + 1``, the bounded slice proves there is no startup hole and can be
+processed safely. If the probe errors or contains any unseen sequence gap, the
+existing fail-closed retained-export catch-up remains authoritative.
 
 This module performs no Technocore writes, signing, command execution, URL
 following, or secret access.
@@ -56,6 +56,18 @@ async def _wait_or_stop(stop: asyncio.Event, delay: float) -> None:
         pass
 
 
+def _unseen_live_is_contiguous(live: list[dict], cursor: int) -> bool:
+    unseen = [item["seq"] for item in live if item["seq"] > cursor]
+    if not unseen:
+        return True
+    expected = cursor + 1
+    for seq in unseen:
+        if seq != expected:
+            return False
+        expected += 1
+    return True
+
+
 async def _try_events_live_probe(
     client,
     budget,
@@ -91,7 +103,7 @@ async def _try_events_live_probe(
         return False
 
     live = observer_resilience._valid_messages(payload or {})
-    if live and live[0]["seq"] > cursor + 1:
+    if not _unseen_live_is_contiguous(live, cursor):
         metrics["startup_live_probe_fallbacks"] += 1
         if writer:
             writer.mark_dirty()
@@ -131,8 +143,8 @@ async def startup_catchup(
     """Prove continuity before the first normal live worker cycle.
 
     ``events`` first gets one zero-wait bounded live probe. A contiguous/empty
-    result is sufficient proof and avoids a full export. Any uncertainty falls
-    back to the original retained-export guard. Lobby remains export-first.
+    unseen result is sufficient proof and avoids a full export. Any uncertainty
+    falls back to the original retained-export guard. Lobby remains export-first.
 
     The export guard does not fall through to the normal live path until one
     export succeeds. On export failure the cursor is untouched and the guard
