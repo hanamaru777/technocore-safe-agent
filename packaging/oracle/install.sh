@@ -36,6 +36,7 @@ elif $signer; then uv sync --frozen --no-dev --extra oracle-signer
 else uv sync --frozen --no-dev; fi
 install -d -o root -g root -m 0755 /usr/local/libexec
 install -o root -g root -m 0755 packaging/oracle/technocore-safe-agent-rpc /usr/local/libexec/technocore-safe-agent-rpc
+install -o root -g root -m 0644 packaging/oracle/lobby-capture.service /etc/systemd/system/technocore-safe-agent-lobby-capture.service
 install -o root -g root -m 0644 packaging/oracle/resident.service /etc/systemd/system/technocore-safe-agent-resident.service
 if $discord; then install -o root -g root -m 0644 packaging/oracle/discord.service /etc/systemd/system/technocore-safe-agent-discord.service; fi
 if $signer; then
@@ -61,4 +62,4 @@ if $signer; then
   install -o root -g root -m 0644 packaging/oracle/technocore-safe-agent-signer.service /etc/systemd/system/technocore-safe-agent-signer.service
 fi
 systemctl daemon-reload
-echo "Prepared only. Review $envdir/env and packaging/oracle/technocore-safe-agent-rpc.sudoers.example, then explicitly run systemctl enable --now technocore-safe-agent-resident.service if desired. No DID seed is requested or copied."
+echo "Prepared only. Review $envdir/env and packaging/oracle/technocore-safe-agent-rpc.sudoers.example, then explicitly enable lobby capture and resident services (plus optional Discord/Signer) as desired. No DID seed is requested or copied."
