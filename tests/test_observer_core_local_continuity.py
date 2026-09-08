@@ -95,6 +95,7 @@ def test_exact_events_snapshot_recovers_prefix_and_accounts_only_absent_suffix(m
         "cursor=50;first_unseen=60",
     )
     budget = Budget()
+    monkeypatch.setattr(final, "_BASE_EVENTS_STARTUP_STREAM", object())
 
     recovered, retry, error = asyncio.run(
         final.stream_events_startup_export(
@@ -132,6 +133,7 @@ def test_exact_events_snapshot_present_never_counts_unrecoverable(monkeypatch):
         "startup_live_probe_gap",
         "cursor=50;first_unseen=60",
     )
+    monkeypatch.setattr(final, "_BASE_EVENTS_STARTUP_STREAM", object())
 
     recovered, retry, error = asyncio.run(
         final.stream_events_startup_export(
