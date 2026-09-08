@@ -5,6 +5,7 @@ from . import (
     knowledge_guard,
     observer,
     observer_events_stream_recovery,
+    observer_events_targeted_recovery,
     observer_health_recovery,
     observer_lobby_spool_recovery,
     observer_request_deadline,
@@ -35,6 +36,10 @@ def main() -> None:
     # startup. Keep using that same GET-only path after startup for events live
     # errors and live-tail holes; lobby continues through its local spool overlay.
     observer_events_stream_recovery.install()
+    # Never consume the whole events export when a live read has already proved an
+    # exact small gap. Stop at that endpoint; if transport itself fails, retry live
+    # fail-closed until a concrete missing interval exists.
+    observer_events_targeted_recovery.install()
     # A failed gap-recovery health record must not stay red forever after a later
     # successful contiguous/empty live cycle. Install after recovery overlays so a
     # fresh failure from the current cycle remains fail-closed and visible.
