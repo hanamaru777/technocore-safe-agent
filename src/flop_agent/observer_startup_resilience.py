@@ -140,11 +140,37 @@ async def _stream_events_startup_export(
     byte ceiling still bound a broken response. There is deliberately no separate
     all-body wall-clock deadline here: partial contiguous progress is itself safe,
     persisted state, while a stalled stream is still terminated by HTTPX inactivity.
+
+    Tiny injected test clients that do not implement ``stream`` retain the previous
+    full-export behavior; Production HTTPX clients always use the streaming path.
     """
     if room != EVENTS_LIVE_PROBE_ROOM:
         return 0, None, "invalid_stream_room"
 
     metrics = _metrics(state)
+
+    if not hasattr(client, "stream"):
+        metrics["startup_export_attempts"] += 1
+        await budget.acquire()
+        exported, retry, error = await observer_resilience.read_room_export(client, room)
+        if error:
+            metrics["startup_export_failures"] += 1
+            return 0, retry, error
+        metrics["startup_export_successes"] += 1
+        changed, recovered = await observer_resilience._drain_export_snapshot(
+            state,
+            config,
+            room,
+            exported or [],
+            own_did,
+            mailbox,
+        )
+        metrics["startup_export_messages"] += recovered
+        changed = observer_resilience.set_success(state, room) or changed
+        if writer and (changed or recovered):
+            writer.mark_dirty()
+        return recovered, None, None
+
     metrics["startup_stream_export_attempts"] += 1
     await budget.acquire()
 
