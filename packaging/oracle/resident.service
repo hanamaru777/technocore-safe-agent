@@ -1,8 +1,8 @@
 [Unit]
 Description=technocore-safe-agent resident observer
-After=network-online.target technocore-safe-agent-metadata-block.service
+After=network-online.target technocore-safe-agent-metadata-block.service technocore-safe-agent-lobby-capture.service
 Requires=technocore-safe-agent-metadata-block.service
-Wants=network-online.target
+Wants=network-online.target technocore-safe-agent-lobby-capture.service
 
 [Service]
 Type=simple
