@@ -8,6 +8,7 @@ from . import (
     observer_events_targeted_recovery,
     observer_health_recovery,
     observer_lobby_spool_recovery,
+    observer_lobby_startup_spool_recovery,
     observer_request_deadline,
     observer_resident_isolation,
     observer_resilience,
@@ -25,13 +26,16 @@ def main() -> None:
     # Bound the whole live/export request so one trickling response cannot pin a
     # hot-room worker until retained history has already moved past its cursor.
     observer_request_deadline.install()
-    # A persisted core cursor must catch up from the retained ring before the
+    # A persisted core cursor must catch up from retained evidence before the
     # first post-restart live tail is allowed to advance it.
     observer_startup_resilience.install()
     # A separate GET-only lobby capture process provides a bounded local shock
     # absorber. If a live tail later reveals a hole, use local captured rows before
     # the moving server retained ring.
     observer_lobby_spool_recovery.install()
+    # The lobby spool is durable across Resident restarts. Drain its contiguous
+    # persisted prefix before startup catch-up falls back to the moving server ring.
+    observer_lobby_startup_spool_recovery.install()
     # PR #82 proved incremental streaming is required for real events gaps at
     # startup. Keep using that same GET-only path after startup for events live
     # errors and live-tail holes; lobby continues through its local spool overlay.
