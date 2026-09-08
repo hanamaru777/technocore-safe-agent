@@ -43,6 +43,49 @@ def test_export_total_deadline_cancels_slow_request(monkeypatch):
     assert cancelled["value"] is True
 
 
+def test_events_export_gets_longer_total_deadline_without_relaxing_lobby(monkeypatch):
+    async def slow_but_finite_export(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return ([{"seq": 1, "text": "ok"}], None, None)
+
+    monkeypatch.setattr(
+        observer_request_deadline,
+        "_BASE_READ_ROOM_EXPORT",
+        slow_but_finite_export,
+    )
+    monkeypatch.setattr(observer_request_deadline, "EXPORT_TOTAL_DEADLINE_SECONDS", 0.01)
+    monkeypatch.setattr(
+        observer_request_deadline,
+        "EVENTS_EXPORT_TOTAL_DEADLINE_SECONDS",
+        0.20,
+    )
+
+    lobby = asyncio.run(
+        observer_request_deadline.read_room_export(object(), "lobby")
+    )
+    events = asyncio.run(
+        observer_request_deadline.read_room_export(object(), "events")
+    )
+
+    assert lobby == (None, None, "TotalTimeout")
+    assert events == ([{"seq": 1, "text": "ok"}], None, None)
+
+
+def test_export_deadline_selection_is_room_scoped():
+    assert (
+        observer_request_deadline._export_total_deadline("events")
+        == observer_request_deadline.EVENTS_EXPORT_TOTAL_DEADLINE_SECONDS
+    )
+    assert (
+        observer_request_deadline._export_total_deadline("lobby")
+        == observer_request_deadline.EXPORT_TOTAL_DEADLINE_SECONDS
+    )
+    assert (
+        observer_request_deadline._export_total_deadline("tclk-offers")
+        == observer_request_deadline.EXPORT_TOTAL_DEADLINE_SECONDS
+    )
+
+
 def test_live_wrapper_preserves_success_and_rate_limit(monkeypatch):
     results = [
         ({"messages": []}, None, None),
