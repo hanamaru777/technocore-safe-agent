@@ -4,6 +4,7 @@ from __future__ import annotations
 from . import (
     knowledge_guard,
     observer,
+    observer_events_stream_recovery,
     observer_health_recovery,
     observer_lobby_spool_recovery,
     observer_request_deadline,
@@ -30,6 +31,10 @@ def main() -> None:
     # absorber. If a live tail later reveals a hole, use local captured rows before
     # the moving server retained ring.
     observer_lobby_spool_recovery.install()
+    # PR #82 proved incremental streaming is required for real events gaps at
+    # startup. Keep using that same GET-only path after startup for events live
+    # errors and live-tail holes; lobby continues through its local spool overlay.
+    observer_events_stream_recovery.install()
     # A failed gap-recovery health record must not stay red forever after a later
     # successful contiguous/empty live cycle. Install after recovery overlays so a
     # fresh failure from the current cycle remains fail-closed and visible.
