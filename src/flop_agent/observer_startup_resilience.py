@@ -5,13 +5,18 @@ first post-restart live tail is allowed to run, protected core rooms must prove
 that no unseen interval is being skipped.
 
 Lobby keeps the conservative retained-ring export-first behavior. For the lower-
-volume ``events`` core room, Production showed that a full retained export can be
-pathologically slow even when the persisted cursor is already current. Events
-therefore retries a bounded GET-only live probe from its persisted cursor first.
-A successful contiguous/empty probe proves startup continuity. A transport error
-stays fail-closed and retries the live probe; it does not immediately escalate to
-the known-pathological full export. Only a successful probe that proves an actual
-sequence hole falls back to retained export.
+volume ``events`` core room, Production showed two separate failure modes:
+
+* a transient startup live-probe transport error must not immediately force the
+  pathologically slow full retained export; retry the bounded live probe instead;
+* when a successful live probe proves a real sequence hole, buffering the whole
+  export before processing can time out repeatedly without making any progress.
+
+Events therefore retries zero-wait GET-only live probes while transport is
+uncertain. If a successful probe proves a real hole, startup consumes the official
+snapshot-at-open JSONL export incrementally and drains contiguous rows in bounded
+chunks as they arrive. The cursor advances only through rows actually received and
+validated. A stream failure stays fail-closed and retries from the resulting cursor.
 
 This module performs no Technocore writes, signing, command execution, URL
 following, or secret access.
@@ -19,8 +24,10 @@ following, or secret access.
 from __future__ import annotations
 
 import asyncio
+import json
+from urllib.parse import quote
 
-from . import observer, observer_resilience
+from . import core, observer, observer_resilience
 
 CORE_STARTUP_ROOMS = frozenset({"lobby", "events"})
 EVENTS_LIVE_PROBE_ROOM = "events"
@@ -41,6 +48,11 @@ def _metrics(state: dict) -> dict:
         "startup_live_probe_messages",
         "startup_live_probe_fallbacks",
         "startup_live_probe_failures",
+        "startup_stream_export_attempts",
+        "startup_stream_export_successes",
+        "startup_stream_export_messages",
+        "startup_stream_export_failures",
+        "startup_stream_export_bytes",
     ):
         metrics.setdefault(key, 0)
     return metrics
@@ -66,6 +78,180 @@ def _unseen_live_is_contiguous(live: list[dict], cursor: int) -> bool:
             return False
         expected += 1
     return True
+
+
+def _strict_export_item(raw: str) -> dict:
+    try:
+        item = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("invalid_export") from error
+    if (
+        not isinstance(item, dict)
+        or not isinstance(item.get("seq"), int)
+        or item["seq"] < 0
+        or not isinstance(item.get("text"), str)
+    ):
+        raise RuntimeError("invalid_export")
+    return item
+
+
+async def _drain_stream_rows(
+    state: dict,
+    config: dict,
+    room: str,
+    rows: list[dict],
+    own_did: str | None,
+    mailbox: str | None,
+    writer=None,
+) -> int:
+    """Drain one already-validated ordered stream chunk into the existing recovery path."""
+    if not rows:
+        return 0
+    changed, recovered = await observer_resilience._drain_export_snapshot(
+        state,
+        config,
+        room,
+        rows,
+        own_did,
+        mailbox,
+        gap_end=rows[-1]["seq"],
+        event_message=rows[0],
+    )
+    if writer and (changed or recovered):
+        writer.mark_dirty()
+    return recovered
+
+
+async def _stream_events_startup_export(
+    client,
+    budget,
+    state: dict,
+    config: dict,
+    room: str,
+    own_did: str | None,
+    mailbox: str | None,
+    writer=None,
+) -> tuple[int, float | None, str | None]:
+    """Incrementally consume one official retained-ring snapshot for ``events``.
+
+    Technocore's export is a bounded snapshot-at-open forward JSONL stream. Unlike
+    ``client.get()``, this path does not wait for the complete body before using a
+    contiguous retained prefix. The existing inactivity/connect timeouts and export
+    byte ceiling still bound a broken response. There is deliberately no separate
+    all-body wall-clock deadline here: partial contiguous progress is itself safe,
+    persisted state, while a stalled stream is still terminated by HTTPX inactivity.
+
+    Tiny injected test clients that do not implement ``stream`` retain the previous
+    full-export behavior; Production HTTPX clients always use the streaming path.
+    """
+    if room != EVENTS_LIVE_PROBE_ROOM:
+        return 0, None, "invalid_stream_room"
+
+    metrics = _metrics(state)
+
+    if not hasattr(client, "stream"):
+        metrics["startup_export_attempts"] += 1
+        await budget.acquire()
+        exported, retry, error = await observer_resilience.read_room_export(client, room)
+        if error:
+            metrics["startup_export_failures"] += 1
+            return 0, retry, error
+        metrics["startup_export_successes"] += 1
+        changed, recovered = await observer_resilience._drain_export_snapshot(
+            state,
+            config,
+            room,
+            exported or [],
+            own_did,
+            mailbox,
+        )
+        metrics["startup_export_messages"] += recovered
+        changed = observer_resilience.set_success(state, room) or changed
+        if writer and (changed or recovered):
+            writer.mark_dirty()
+        return recovered, None, None
+
+    metrics["startup_stream_export_attempts"] += 1
+    await budget.acquire()
+
+    total_bytes = 0
+    recovered_total = 0
+    pending: list[dict] = []
+    last_seq: int | None = None
+
+    try:
+        async with client.stream(
+            "GET",
+            f"{core.BASE_URL}/r/{quote(room, safe='')}/export",
+            timeout=observer_resilience._http_timeout(
+                observer_resilience.EXPORT_READ_TIMEOUT_SECONDS
+            ),
+        ) as response:
+            if response.status_code == 429:
+                metrics["startup_stream_export_failures"] += 1
+                return 0, observer_resilience._retry_after(response), "rate_limited"
+            response.raise_for_status()
+
+            async for raw in response.aiter_lines():
+                if not raw.strip():
+                    continue
+                total_bytes += len(raw.encode("utf-8")) + 1
+                if total_bytes > observer_resilience.EXPORT_MAX_BYTES:
+                    raise RuntimeError("export_too_large")
+
+                item = _strict_export_item(raw)
+                seq = item["seq"]
+                if last_seq is not None and seq <= last_seq:
+                    raise RuntimeError("invalid_export_order")
+                last_seq = seq
+
+                cursor = int(state.get("cursors", {}).get(room, 0) or 0)
+                if seq <= cursor:
+                    continue
+
+                pending.append(item)
+                if len(pending) >= observer_resilience.RECOVERY_CHUNK_MESSAGES:
+                    recovered = await _drain_stream_rows(
+                        state,
+                        config,
+                        room,
+                        pending,
+                        own_did,
+                        mailbox,
+                        writer,
+                    )
+                    recovered_total += recovered
+                    pending = []
+
+            if pending:
+                recovered_total += await _drain_stream_rows(
+                    state,
+                    config,
+                    room,
+                    pending,
+                    own_did,
+                    mailbox,
+                    writer,
+                )
+
+    except observer.httpx.HTTPError as error:
+        metrics["startup_stream_export_failures"] += 1
+        metrics["startup_stream_export_messages"] += recovered_total
+        metrics["startup_stream_export_bytes"] += total_bytes
+        return recovered_total, None, type(error).__name__
+    except RuntimeError as error:
+        metrics["startup_stream_export_failures"] += 1
+        metrics["startup_stream_export_messages"] += recovered_total
+        metrics["startup_stream_export_bytes"] += total_bytes
+        return recovered_total, None, str(error)
+
+    metrics["startup_stream_export_successes"] += 1
+    metrics["startup_stream_export_messages"] += recovered_total
+    metrics["startup_stream_export_bytes"] += total_bytes
+    changed = observer_resilience.set_success(state, room)
+    if writer and (changed or recovered_total):
+        writer.mark_dirty()
+    return recovered_total, None, None
 
 
 async def _try_events_live_probe(
@@ -158,14 +344,10 @@ async def startup_catchup(
     """Prove continuity before the first normal live worker cycle.
 
     ``events`` retries zero-wait bounded live probes while transport itself is
-    failing. A contiguous/empty unseen result is sufficient proof and avoids a
-    full export. A successful probe that proves a real sequence hole falls back
-    to the retained-export guard. Lobby remains export-first.
-
-    The export guard does not fall through to the normal live path until one
-    export succeeds. On export failure the cursor is untouched and the guard
-    retries with a bounded delay, respecting an explicit Retry-After value when
-    present.
+    failing. A contiguous/empty unseen result is sufficient proof. A successful
+    probe that proves a real sequence hole switches to incremental streaming of
+    the official retained export until one complete snapshot succeeds. Lobby keeps
+    the original full-export startup guard.
     """
     cursor = int(state.get("cursors", {}).get(room, 0) or 0)
     if room not in CORE_STARTUP_ROOMS or cursor <= 0:
@@ -195,6 +377,35 @@ async def startup_catchup(
             await _wait_or_stop(stop, delay)
         if stop.is_set():
             return
+
+        while not stop.is_set():
+            _recovered, retry, error = await _stream_events_startup_export(
+                client,
+                budget,
+                state,
+                config,
+                room,
+                own_did,
+                mailbox,
+                writer,
+            )
+            if not error:
+                return
+            changed = observer_resilience.set_error(
+                state,
+                room,
+                f"startup_stream_export_{error}",
+                str(retry or ""),
+            )
+            if writer and changed:
+                writer.mark_dirty()
+            delay = (
+                max(1.0, float(retry))
+                if retry is not None
+                else STARTUP_RETRY_SECONDS
+            )
+            await _wait_or_stop(stop, delay)
+        return
 
     metrics = _metrics(state)
     while not stop.is_set():
