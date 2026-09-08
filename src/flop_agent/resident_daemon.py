@@ -10,6 +10,7 @@ from . import (
     observer_events_targeted_recovery,
     observer_health_recovery,
     observer_lobby_capture_health_proof,
+    observer_lobby_capture_service,
     observer_lobby_fallback_health,
     observer_lobby_spool_recovery,
     observer_lobby_startup_spool_recovery,
@@ -22,6 +23,11 @@ from . import (
 
 
 def main() -> None:
+    # Lobby capture has its own systemd lifecycle. Point every read-side recovery
+    # helper in this Resident process at that standalone spool before workers or
+    # overlays inspect capture state. The capture service itself remains running
+    # across Resident restarts.
+    observer_lobby_capture_service.install_reader()
     # Production installs the read-only hot-room resilience overlay before the
     # Observer creates workers. The isolated Signer service is not imported,
     # restarted, or invoked by this startup path.
@@ -33,7 +39,7 @@ def main() -> None:
     # A persisted core cursor must catch up from retained evidence before the
     # first post-restart live tail is allowed to advance it.
     observer_startup_resilience.install()
-    # A separate GET-only lobby capture process provides a bounded local shock
+    # A separate GET-only lobby capture service provides a bounded local shock
     # absorber. If a live tail later reveals a hole, use local captured rows before
     # the moving server retained ring.
     observer_lobby_spool_recovery.install()
@@ -75,8 +81,8 @@ def main() -> None:
     # asyncio loop that owns lobby/events reads. Generation tracking keeps newer
     # mutations dirty while disk I/O runs off-loop.
     observer_state_writer_isolation.install()
-    # CPU-heavy Resident scoring/outbox maintenance and the lobby capture lane run
-    # in supervised child processes, separate from the Observer process GIL.
+    # CPU-heavy Resident scoring/outbox maintenance remains in its own supervised
+    # child process. Lobby capture is deliberately not a Resident child anymore.
     observer_resident_isolation.install()
     # Source-backed onboarding topics fail closed when their pinned registry is
     # stale or invalid. This changes eligibility only; installation performs no

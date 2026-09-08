@@ -95,7 +95,7 @@ class _FakeContext:
         return process
 
 
-def test_worker_supervises_maintenance_and_capture_processes(monkeypatch):
+def test_worker_supervises_only_maintenance_process(monkeypatch):
     context = _FakeContext()
     monkeypatch.setattr(
         observer_resident_isolation.multiprocessing,
@@ -107,34 +107,34 @@ def test_worker_supervises_maintenance_and_capture_processes(monkeypatch):
         stop = asyncio.Event()
         task = asyncio.create_task(observer_resident_isolation.resident_worker({}, stop, {}))
         await asyncio.sleep(0.05)
-        assert len(context.processes) == 2
-        assert all(process.started for process in context.processes)
-        names = {process.name for process in context.processes}
-        assert names == {"flop-resident-maintenance", "flop-lobby-capture"}
+        assert len(context.processes) == 1
+        process = context.processes[0]
+        assert process.started
+        assert process.name == "flop-resident-maintenance"
         stop.set()
         await asyncio.wait_for(task, timeout=1)
 
     asyncio.run(run())
-    assert all(stop.value for stop in context.stops)
-    assert all(process.joined for process in context.processes)
-    assert not any(process.terminated for process in context.processes)
+    assert len(context.stops) == 1
+    assert context.stops[0].value
+    assert context.processes[0].joined
+    assert not context.processes[0].terminated
 
 
-def test_unexpected_capture_exit_fails_closed(monkeypatch):
+def test_unexpected_maintenance_exit_fails_closed(monkeypatch):
     context = _FakeContext()
     original_process = context.Process
 
     def create_process(**kwargs):
         process = original_process(**kwargs)
-        if kwargs.get("name") == "flop-lobby-capture":
-            process.exitcode = 7
+        process.exitcode = 7
         return process
 
     context.Process = create_process
     monkeypatch.setattr(observer_resident_isolation.multiprocessing, "get_context", lambda _: context)
 
     async def run():
-        with pytest.raises(RuntimeError, match="lobby capture process exited unexpectedly: 7"):
+        with pytest.raises(RuntimeError, match="resident maintenance process exited unexpectedly: 7"):
             await asyncio.wait_for(
                 observer_resident_isolation.resident_worker({}, asyncio.Event()),
                 timeout=1,
@@ -143,7 +143,7 @@ def test_unexpected_capture_exit_fails_closed(monkeypatch):
     asyncio.run(run())
 
 
-def test_overlay_has_no_untrusted_execution_or_network_surface():
+def test_overlay_has_no_capture_child_or_untrusted_execution_surface():
     source = inspect.getsource(observer_resident_isolation)
     assert "subprocess" not in source
     assert "httpx" not in source
@@ -151,4 +151,4 @@ def test_overlay_has_no_untrusted_execution_or_network_surface():
     assert "SIGN_SEED" not in source
     assert "multiprocessing.get_context(\"spawn\")" in source
     assert "threading.Thread" not in source
-    assert "flop-lobby-capture" in source
+    assert "flop-lobby-capture" not in source

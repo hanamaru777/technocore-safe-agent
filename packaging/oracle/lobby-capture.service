@@ -1,8 +1,9 @@
 [Unit]
-Description=technocore-safe-agent resident observer
-After=network-online.target technocore-safe-agent-metadata-block.service technocore-safe-agent-lobby-capture.service
+Description=technocore-safe-agent standalone lobby capture
+After=network-online.target technocore-safe-agent-metadata-block.service
 Requires=technocore-safe-agent-metadata-block.service
-Wants=network-online.target technocore-safe-agent-lobby-capture.service
+Wants=network-online.target
+Before=technocore-safe-agent-resident.service
 
 [Service]
 Type=simple
@@ -10,9 +11,9 @@ User=technocore
 WorkingDirectory=/opt/technocore-safe-agent
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
-ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.resident_daemon
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.observer_lobby_capture_service
 Restart=on-failure
-RestartSec=15
+RestartSec=1
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -24,7 +25,7 @@ ProtectKernelTunables=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=169.254.169.254
-ReadWritePaths=/var/lib/technocore-safe-agent
+ReadWritePaths=/var/lib/technocore-safe-agent/observer
 
 [Install]
 WantedBy=multi-user.target
