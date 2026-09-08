@@ -4,10 +4,12 @@ from __future__ import annotations
 from . import (
     knowledge_guard,
     observer,
+    observer_core_local_continuity,
     observer_events_startup_transport_fallback,
     observer_events_stream_recovery,
     observer_events_targeted_recovery,
     observer_health_recovery,
+    observer_lobby_capture_health_proof,
     observer_lobby_fallback_health,
     observer_lobby_spool_recovery,
     observer_lobby_startup_spool_recovery,
@@ -57,6 +59,18 @@ def main() -> None:
     # successful contiguous/empty live cycle. Install after recovery overlays so a
     # fresh failure from the current cycle remains fail-closed and visible.
     observer_health_recovery.install()
+    # Final core continuity semantics: while the independent lobby capture is still
+    # behind a proven gap, keep the rich cursor fixed instead of prematurely
+    # classifying server-ring loss; on restart, a fresh persisted local capture can
+    # satisfy lobby continuity without a redundant server export. For an exact
+    # events startup gap, consume only that retained interval and account a proven
+    # absent suffix exactly once rather than retrying an impossible target forever.
+    observer_core_local_continuity.install()
+    # If the rich lobby GET fails but the independent capture lane has just
+    # completed a successful poll at exactly the same cursor, that alternate lane
+    # is sufficient read-side health evidence; do not leave core health red merely
+    # because the redundant rich transport path timed out.
+    observer_lobby_capture_health_proof.install()
     # Full multi-megabyte state serialization/fsync must not monopolize the same
     # asyncio loop that owns lobby/events reads. Generation tracking keeps newer
     # mutations dirty while disk I/O runs off-loop.
