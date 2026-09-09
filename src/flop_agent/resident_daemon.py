@@ -13,6 +13,7 @@ from . import (
     observer_lobby_capture_service,
     observer_lobby_fallback_health,
     observer_lobby_spool_recovery,
+    observer_lobby_startup_hole_bridge,
     observer_lobby_startup_spool_recovery,
     observer_request_deadline,
     observer_resident_isolation,
@@ -72,6 +73,11 @@ def main() -> None:
     # events startup gap, consume only that retained interval and account a proven
     # absent suffix exactly once rather than retrying an impossible target forever.
     observer_core_local_continuity.install()
+    # If fresh capture has crossed the Rich lobby cursor but contains an isolated
+    # local hole, stream only enough official retained lobby data to bridge back to
+    # the exact SQLite suffix. Never fall into the full-body lobby export timeout
+    # loop merely because one local row is missing.
+    observer_lobby_startup_hole_bridge.install()
     # If the rich lobby GET fails but the independent capture lane has just
     # completed a successful poll at exactly the same cursor, that alternate lane
     # is sufficient read-side health evidence; do not leave core health red merely
