@@ -162,30 +162,36 @@ def test_startup_bridges_only_the_actual_local_hole(monkeypatch):
     assert state["metrics"]["lobby_startup_local_liveness_messages"] == 4
 
 
-def test_startup_delegates_when_capture_has_no_exact_rows_and_is_stale(monkeypatch):
+def test_startup_streams_when_capture_is_stale_instead_of_full_export(monkeypatch):
     now = datetime.now(UTC)
     monkeypatch.setattr(local, "_BOOT_AT", now - timedelta(seconds=180))
-    monkeypatch.setattr(
-        capture,
-        "status",
-        lambda: {
-            "capture_cursor": 150,
-            "last_success_at": (now - timedelta(seconds=120)).isoformat(),
-            "last_error": "",
-        },
-    )
+    status = {
+        "capture_cursor": 150,
+        "last_success_at": (now - timedelta(seconds=120)).isoformat(),
+        "last_error": "ReadTimeout",
+    }
+    monkeypatch.setattr(capture, "status", lambda: dict(status))
     monkeypatch.setattr(capture, "read_range", lambda start, end: [])
+    monkeypatch.setattr(resilience, "set_success", lambda state, room: True)
 
-    called = []
+    bridge_calls = []
 
-    async def base(*args, **kwargs):
-        called.append(True)
+    async def fake_bridge(client, budget, state, config, own_did, mailbox, stop, writer=None):
+        del client, budget, config, own_did, mailbox, stop
+        bridge_calls.append(int(state["cursors"]["lobby"]))
+        assert state["cursors"]["lobby"] == 100
+        state["cursors"]["lobby"] = 150
+        status["last_success_at"] = datetime.now(UTC).isoformat()
+        status["last_error"] = ""
+        if writer:
+            writer.mark_dirty()
+        return 50, None, None, True
 
-    async def fail_bridge(*args, **kwargs):
-        raise AssertionError("stale capture must delegate instead of bridging")
+    async def fail_base(*args, **kwargs):
+        raise AssertionError("stale capture must not re-enter legacy full export")
 
-    monkeypatch.setattr(liveness, "_BASE_STARTUP_CATCHUP", base)
-    monkeypatch.setattr(bridge, "_stream_until_local_resume", fail_bridge)
+    monkeypatch.setattr(liveness, "_BASE_STARTUP_CATCHUP", fail_base)
+    monkeypatch.setattr(bridge, "_stream_until_local_resume", fake_bridge)
 
     state = _state(100)
     asyncio.run(
@@ -194,5 +200,8 @@ def test_startup_delegates_when_capture_has_no_exact_rows_and_is_stale(monkeypat
         )
     )
 
-    assert called == [True]
-    assert state["metrics"]["lobby_startup_local_liveness_delegations"] == 1
+    assert bridge_calls == [100]
+    assert state["cursors"]["lobby"] == 150
+    assert state["metrics"]["lobby_startup_local_liveness_bridge_attempts"] == 1
+    assert state["metrics"]["lobby_startup_local_liveness_stale_bridge_attempts"] == 1
+    assert state["metrics"]["lobby_startup_local_liveness_delegations"] == 0
