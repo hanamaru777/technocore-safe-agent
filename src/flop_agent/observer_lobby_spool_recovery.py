@@ -133,19 +133,25 @@ async def _drain_complete_spool_range(
     if end < start or not capture.range_complete(start, end):
         return False, 0
 
-    changed, recovered = await _drain_spool_prefix(
-        state,
-        config,
-        start,
-        end,
-        own_did,
-        mailbox,
-        event_message=event_message,
-    )
-    if recovered == end - start + 1:
-        _record_local_recovery(state, recovered, partial=False)
-        changed = True
-    return changed, recovered
+    changed = False
+    recovered = 0
+    current = start
+    # Startup owns catch-up before the live worker starts.  Preserve its original
+    # complete-range contract while each inner slice remains bounded and gives the
+    # loop a turn between slices.
+    while current <= end:
+        batch_changed, batch_recovered = await _drain_spool_prefix(
+            state, config, current, end, own_did, mailbox, event_message=event_message
+        )
+        changed = changed or batch_changed
+        recovered += batch_recovered
+        current = int(state.get("cursors", {}).get(capture.ROOM, current - 1) or current - 1) + 1
+        if batch_recovered == 0:
+            return changed, recovered
+        if current <= end:
+            await asyncio.sleep(0)
+    _record_local_recovery(state, recovered, partial=False)
+    return True, recovered
 
 
 async def _recover_exact_spool_range_with_grace(
@@ -308,7 +314,7 @@ async def recover_after_live_error(
         since = int(state.get("cursors", {}).get(room, 0) or 0)
         end = capture.contiguous_end(since + 1)
         if end >= since + 1:
-            changed, recovered = await _drain_complete_spool_range(
+            changed, recovered = await _drain_spool_prefix(
                 state,
                 config,
                 since + 1,
