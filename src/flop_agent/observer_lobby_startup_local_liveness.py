@@ -1,17 +1,21 @@
 """Keep lobby startup on bounded exact local chunks before any server fallback.
 
-Production showed that the standalone capture can be healthy and continue advancing
-while its last-success age is routinely greater than the 3-second steady-state
-freshness window.  The previous startup wrapper checked that freshness before using
-already-persisted exact SQLite rows, so after one large local drain it could delegate
-back to the old full-body lobby export even though the exact next local row existed.
+Production showed two separate startup hazards:
 
-This final startup guard is local-first:
+* exact persisted SQLite rows were skipped when capture freshness exceeded a strict
+  steady-state threshold, causing a return to the old full-body lobby export;
+* the standalone capture can itself enter a transient ReadTimeout while a large,
+  exact local backlog is still available. Once that local backlog is exhausted,
+  delegating to the old full-body export recreates the same startup stall.
+
+This startup guard is therefore local-first and streaming-only for unresolved lobby
+continuity:
 - exact persisted rows are always authoritative, regardless of capture freshness;
 - startup drains at most 100 exact local rows per slice and yields;
-- a 60-second startup-only liveness window is used only to decide whether a missing
-  local next row may be bridged from the official streaming export;
-- the existing streaming bridge handles true local holes without full-body export.
+- if capture is fresh and the Rich cursor has caught up to it, startup may succeed;
+- otherwise any unresolved next-row condition uses the existing bounded streaming
+  bridge, even while capture is stale or reporting a transient read error;
+- the legacy full-body lobby export is not used for a stale/missing local next row.
 
 No Technocore write, signing, shell execution, URL following, or secret access is
 introduced here.
@@ -43,6 +47,7 @@ def _metrics(state: dict) -> dict:
         "lobby_startup_local_liveness_messages",
         "lobby_startup_local_liveness_bridge_attempts",
         "lobby_startup_local_liveness_delegations",
+        "lobby_startup_local_liveness_stale_bridge_attempts",
     ):
         metrics.setdefault(key, 0)
     return metrics
@@ -103,7 +108,7 @@ async def startup_catchup(
         capture_cursor = int(status.get("capture_cursor", 0) or 0)
 
         # Persisted exact rows are safe evidence even when the capture's latest
-        # successful network poll is older than the steady-state freshness window.
+        # successful network poll is old or its current transport is timing out.
         rows = _read_bounded_local_prefix(start, capture_cursor)
         if rows:
             changed, recovered = await resilience._drain_export_snapshot(
@@ -121,6 +126,8 @@ async def startup_catchup(
             if writer and (changed or recovered):
                 writer.mark_dirty()
             if recovered <= 0:
+                # This is an internal local-drain invariant failure, not a capture
+                # freshness decision. Preserve the prior fail-closed chain here.
                 metrics["lobby_startup_local_liveness_delegations"] += 1
                 return await _BASE_STARTUP_CATCHUP(
                     client, budget, state, config, room, own_did, mailbox, stop, writer
@@ -128,26 +135,25 @@ async def startup_catchup(
             await asyncio.sleep(0)
             continue
 
-        # Only the decision to trust a missing-local-row condition needs a live
-        # capture proof.  Production preflights have shown healthy capture ages well
-        # above 3 seconds, so startup uses a bounded 60-second window.
-        if not _startup_capture_fresh(status):
-            metrics["lobby_startup_local_liveness_delegations"] += 1
-            return await _BASE_STARTUP_CATCHUP(
-                client, budget, state, config, room, own_did, mailbox, stop, writer
-            )
-
         current = int(state.get("cursors", {}).get(room, 0) or 0)
         capture_cursor = int(status.get("capture_cursor", 0) or 0)
-        if current >= capture_cursor:
+        capture_fresh = _startup_capture_fresh(status)
+
+        # A fresh capture at or behind the Rich cursor proves there is no persisted
+        # unseen local interval. Normal live processing can safely take over.
+        if capture_fresh and current >= capture_cursor:
             changed = resilience.set_success(state, room)
             if writer and changed:
                 writer.mark_dirty()
             return
 
-        # Fresh capture is ahead but the exact next local row is absent. Reuse the
-        # bounded streaming bridge directly, bypassing the old full-body export path.
+        # Any unresolved next-row condition is handled through the bounded official
+        # streaming export. This includes a genuine local hole and a temporarily
+        # stale/timed-out capture that has stopped advancing. Do not fall back to the
+        # old full-body export merely because capture liveness is uncertain.
         metrics["lobby_startup_local_liveness_bridge_attempts"] += 1
+        if not capture_fresh:
+            metrics["lobby_startup_local_liveness_stale_bridge_attempts"] += 1
         recovered, retry, error, local_resume = await bridge._stream_until_local_resume(
             client,
             budget,
