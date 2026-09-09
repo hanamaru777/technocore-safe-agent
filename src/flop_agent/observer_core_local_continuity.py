@@ -384,6 +384,13 @@ async def process_live_payload_with_recovery(
                     )
                     return changed or base_changed, drain
 
+                # A contiguous local suffix remains.  Yield this worker so the
+                # events worker and StateWriter run; never delegate protected
+                # local rows to server fallback or process newer live data early.
+                current = int(state.get("cursors", {}).get(room, since) or since)
+                if capture.contiguous_end(current + 1) >= current + 1:
+                    return changed, False
+
                 status = capture.status()
                 capture_cursor = int(status.get("capture_cursor", 0) or 0)
                 if _capture_fresh(status) and capture_cursor < gap_end:

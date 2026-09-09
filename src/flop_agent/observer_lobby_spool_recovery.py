@@ -27,7 +27,9 @@ import asyncio
 from . import observer_lobby_capture as capture
 from . import observer_resilience as resilience
 
-SPOOL_CHUNK_MESSAGES = 2000
+# Rich Observer processing can be CPU-heavy.  One recovery invocation must give
+# the event loop back promptly so events reads and StateWriter can run.
+SPOOL_CHUNK_MESSAGES = 100
 # Capture runs at 250 reads/minute (~240 ms cadence). Five seconds gives the
 # independent process multiple chances to finish a just-observed exact gap without
 # turning the rich Observer into an unbounded waiter.
@@ -79,6 +81,8 @@ async def _drain_spool_prefix(
     changed = False
     recovered = 0
     current = start
+    # A single bounded slice is intentional.  The persisted cursor records exact
+    # progress; the next room cycle resumes at ``cursor + 1``.
     while current <= available_end:
         chunk_end = min(available_end, current + SPOOL_CHUNK_MESSAGES - 1)
         rows = capture.read_range(current, chunk_end)
@@ -100,8 +104,7 @@ async def _drain_spool_prefix(
         changed = batch_changed or changed
         recovered += batch_recovered
         current = chunk_end + 1
-        if current <= available_end:
-            await asyncio.sleep(0)
+        break
 
     return changed, recovered
 
@@ -130,19 +133,25 @@ async def _drain_complete_spool_range(
     if end < start or not capture.range_complete(start, end):
         return False, 0
 
-    changed, recovered = await _drain_spool_prefix(
-        state,
-        config,
-        start,
-        end,
-        own_did,
-        mailbox,
-        event_message=event_message,
-    )
-    if recovered == end - start + 1:
-        _record_local_recovery(state, recovered, partial=False)
-        changed = True
-    return changed, recovered
+    changed = False
+    recovered = 0
+    current = start
+    # Startup owns catch-up before the live worker starts.  Preserve its original
+    # complete-range contract while each inner slice remains bounded and gives the
+    # loop a turn between slices.
+    while current <= end:
+        batch_changed, batch_recovered = await _drain_spool_prefix(
+            state, config, current, end, own_did, mailbox, event_message=event_message
+        )
+        changed = changed or batch_changed
+        recovered += batch_recovered
+        current = int(state.get("cursors", {}).get(capture.ROOM, current - 1) or current - 1) + 1
+        if batch_recovered == 0:
+            return changed, recovered
+        if current <= end:
+            await asyncio.sleep(0)
+    _record_local_recovery(state, recovered, partial=False)
+    return True, recovered
 
 
 async def _recover_exact_spool_range_with_grace(
@@ -195,6 +204,15 @@ async def _recover_exact_spool_range_with_grace(
         )
         changed = batch_changed or changed
         recovered_total += batch_recovered
+
+        # Do not loop through a large captured suffix in this event-loop turn.
+        # Partial exact cursor progress is durable; callers must defer newer live
+        # rows and server fallback while another local contiguous row remains.
+        if batch_recovered:
+            current = int(state.get("cursors", {}).get(capture.ROOM, current - 1) or current - 1) + 1
+            if current <= end:
+                _record_local_recovery(state, recovered_total, partial=True)
+                return True, recovered_total, False
 
         current = int(state.get("cursors", {}).get(capture.ROOM, current - 1) or current - 1) + 1
         if current > end:
@@ -260,6 +278,12 @@ async def process_live_payload_with_recovery(
                         bootstrap=False,
                     )
                     return changed or base_changed, drain
+                # The local capture still has the exact next row.  Return to the
+                # scheduler rather than letting server fallback or newer live data
+                # overtake this protected suffix.
+                current = int(state.get("cursors", {}).get(room, since) or since)
+                if capture.contiguous_end(current + 1) >= current + 1:
+                    return changed, False
                 # Partial local progress is intentionally preserved in state. The
                 # base recovery therefore sees a smaller suffix, never the original
                 # full gap.
@@ -290,7 +314,7 @@ async def recover_after_live_error(
         since = int(state.get("cursors", {}).get(room, 0) or 0)
         end = capture.contiguous_end(since + 1)
         if end >= since + 1:
-            changed, recovered = await _drain_complete_spool_range(
+            changed, recovered = await _drain_spool_prefix(
                 state,
                 config,
                 since + 1,
