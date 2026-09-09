@@ -85,6 +85,38 @@ def test_large_startup_spool_exhausts_exact_local_prefix_before_server_path(tmp_
     assert state["metrics"].get("unrecoverable_core_gap_events", 0) == 0
 
 
+def test_startup_keeps_draining_when_capture_advances_during_recovery(monkeypatch):
+    """A moving exact local suffix must be consumed before server startup fallback."""
+    state = resilience.default_state(); state["cursors"]["lobby"] = 10
+    ends = iter([15, 20, 20])
+    order = []
+
+    monkeypatch.setattr(startup_spool.capture, "contiguous_end", lambda start: next(ends))
+
+    async def fake_drain(state, config, start, end, own_did, mailbox):
+        order.append(("spool", start, end))
+        state["cursors"]["lobby"] = end
+        return True, end - start + 1
+
+    async def fake_base(client, budget, state, config, room, own_did, mailbox, stop, writer=None):
+        order.append(("base", state["cursors"]["lobby"]))
+
+    monkeypatch.setattr(startup_spool.spool, "_drain_complete_spool_range", fake_drain)
+    monkeypatch.setattr(startup_spool, "_BASE_STARTUP_CATCHUP", fake_base)
+
+    asyncio.run(
+        startup_spool.startup_catchup(
+            object(), object(), state, observer.DEFAULT_CONFIG, "lobby", None, None, Stop()
+        )
+    )
+
+    assert order == [("spool", 11, 15), ("spool", 16, 20), ("base", 20)]
+    assert state["cursors"]["lobby"] == 20
+    assert state["metrics"]["lobby_startup_spool_recoveries"] == 2
+    assert state["metrics"]["lobby_startup_spool_messages"] == 10
+    assert state["metrics"].get("unrecoverable_core_gap_events", 0) == 0
+
+
 def test_non_lobby_startup_delegates_without_spool(monkeypatch):
     state = resilience.default_state()
     state["cursors"]["events"] = 10
