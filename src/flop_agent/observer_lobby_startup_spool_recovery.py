@@ -6,12 +6,15 @@ before the normal lobby spool overlay could run. That left a restart-only path w
 rows already captured locally could be ignored and classified unrecoverable if the
 server ring had compacted.
 
-This overlay drains the currently contiguous persisted lobby spool prefix first,
-then delegates the remaining startup catch-up to the existing conservative server
-path. It performs no Technocore write, signing, shell execution, URL following, or
-secret access.
+This overlay drains exact persisted lobby rows before startup catch-up falls back to
+the moving server ring. If the independent capture service advances while Rich
+Observer is draining a large backlog, the wrapper keeps consuming the newly available
+local suffix until there is no exact next local row at that instant. It performs no
+Technocore write, signing, shell execution, URL following, or secret access.
 """
 from __future__ import annotations
+
+import asyncio
 
 from . import observer_lobby_capture as capture
 from . import observer_lobby_spool_recovery as spool
@@ -51,9 +54,14 @@ async def startup_catchup(
         if cursor > 0:
             metrics = _metrics(state)
             metrics["lobby_startup_spool_attempts"] += 1
-            start = cursor + 1
-            end = capture.contiguous_end(start)
-            if end >= start:
+
+            while not stop.is_set():
+                current = int(state.get("cursors", {}).get(room, 0) or 0)
+                start = current + 1
+                end = capture.contiguous_end(start)
+                if end < start:
+                    break
+
                 changed, recovered = await spool._drain_complete_spool_range(
                     state,
                     config,
@@ -67,6 +75,16 @@ async def startup_catchup(
                     metrics["lobby_startup_spool_messages"] += recovered
                 if writer and changed:
                     writer.mark_dirty()
+
+                new_current = int(state.get("cursors", {}).get(room, current) or current)
+                if recovered <= 0 or new_current < end:
+                    break
+
+                # Capture has its own process and may advance while this startup
+                # worker drains a large exact range. Give sibling tasks a turn, then
+                # re-check the next exact local prefix before considering server
+                # fallback. This prevents a moving local suffix from being ignored.
+                await asyncio.sleep(0)
 
     await _BASE_STARTUP_CATCHUP(
         client,
