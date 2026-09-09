@@ -188,10 +188,52 @@ def test_partial_spool_prefix_is_preserved_before_fallback(monkeypatch):
     assert changed is True
     assert base_seen == [2]
     metrics = state["metrics"]
-    assert metrics["lobby_spool_catchup_timeouts"] == 1
+    assert metrics["lobby_spool_catchup_timeouts"] == 0
     assert metrics["lobby_spool_recovery_events"] == 1
     assert metrics["lobby_spool_recovered_messages"] == 1
     assert metrics["lobby_spool_partial_recovery_messages"] == 1
+
+
+def test_large_local_backlog_recovers_cooperatively_without_live_fallback(tmp_path, monkeypatch):
+    """Each room cycle advances one exact slice and lets other tasks run."""
+    path = tmp_path / "capture.sqlite3"
+    monkeypatch.setattr(capture, "capture_path", lambda: path)
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(connection, [{"seq": seq, "text": f"row {seq}", "from": f"did:key:test{seq}"} for seq in range(2, 252)])
+    finally:
+        connection.close()
+
+    state = resilience.default_state(); state["cursors"]["lobby"] = 1
+    payload = {"messages": [{"seq": 252, "text": "newer live", "from": "did:key:live"}]}
+    fallback_calls, events_ran = [], []
+
+    async def no_fallback(*args, **kwargs):
+        fallback_calls.append(True)
+        raise AssertionError("fresh local suffix must not use network fallback")
+
+    async def event_worker():
+        await asyncio.sleep(0)
+        events_ran.append(True)
+
+    monkeypatch.setattr(spool, "_BASE_PROCESS_LIVE", no_fallback)
+
+    async def run():
+        event_task = asyncio.create_task(event_worker())
+        changed, drain = await spool.process_live_payload_with_recovery(object(), object(), state, _config(), "lobby", payload, None, None, bootstrap=False)
+        await event_task
+        return changed, drain
+
+    changed, drain = asyncio.run(run())
+    assert changed is True and drain is False
+    assert state["cursors"]["lobby"] == spool.SPOOL_CHUNK_MESSAGES + 1
+    assert events_ran == [True] and fallback_calls == []
+    assert state["metrics"].get("unrecoverable_core_gap_events", 0) == 0
+
+    # Exact cursor progress persists; a later cycle resumes rather than replaying.
+    asyncio.run(spool.process_live_payload_with_recovery(object(), object(), state, _config(), "lobby", payload, None, None, bootstrap=False))
+    assert state["cursors"]["lobby"] == 1 + 2 * spool.SPOOL_CHUNK_MESSAGES
+    assert fallback_calls == []
 
 
 def test_install_patches_only_resilience_recovery_surface(monkeypatch):
