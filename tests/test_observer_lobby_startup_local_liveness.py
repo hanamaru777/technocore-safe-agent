@@ -186,6 +186,87 @@ def test_caught_up_lobby_stays_local_and_consumes_new_capture_rows(monkeypatch):
     assert stop.waits == 2
 
 
+def test_caught_up_capture_timeout_waits_locally_then_recovers(monkeypatch):
+    now = datetime.now(UTC)
+    monkeypatch.setattr(local, "_BOOT_AT", now - timedelta(seconds=10))
+    status = {
+        "capture_cursor": 100,
+        "last_success_at": (now - timedelta(seconds=120)).isoformat(),
+        "last_error": "ReadTimeout",
+    }
+    present: set[int] = set()
+
+    monkeypatch.setattr(capture, "status", lambda: dict(status))
+
+    def read_range(start: int, end: int):
+        if all(seq in present for seq in range(start, end + 1)):
+            return [msg(seq) for seq in range(start, end + 1)]
+        return []
+
+    monkeypatch.setattr(capture, "read_range", read_range)
+    monkeypatch.setattr(resilience, "_drain_export_snapshot", _fake_drain)
+
+    def set_error(state, room, kind, detail=""):
+        state["health"]["current"] = "degraded"
+        state["health"]["rooms"][room] = {
+            "status": "error",
+            "kind": kind,
+            "detail": detail,
+        }
+        return True
+
+    def set_success(state, room):
+        state["health"]["rooms"][room] = {"status": "ok"}
+        state["health"]["current"] = "ok"
+        return True
+
+    monkeypatch.setattr(resilience, "set_error", set_error)
+    monkeypatch.setattr(resilience, "set_success", set_success)
+
+    async def fail_bridge(*args, **kwargs):
+        raise AssertionError("caught-up capture timeout is not a proven local hole")
+
+    async def fail_base(*args, **kwargs):
+        raise AssertionError("capture timeout must stay in the local follower")
+
+    monkeypatch.setattr(bridge, "_stream_until_local_resume", fail_bridge)
+    monkeypatch.setattr(liveness, "_BASE_STARTUP_CATCHUP", fail_base)
+
+    class RecoverThenStop:
+        def __init__(self) -> None:
+            self.waits = 0
+            self.set = False
+
+        def is_set(self) -> bool:
+            return self.set
+
+        async def wait(self) -> None:
+            self.waits += 1
+            if self.waits == 1:
+                present.add(101)
+                status["capture_cursor"] = 101
+                status["last_success_at"] = datetime.now(UTC).isoformat()
+                status["last_error"] = ""
+                return
+            self.set = True
+
+    stop = RecoverThenStop()
+    state = _state(100)
+    asyncio.run(
+        liveness.startup_catchup(
+            object(), object(), state, {}, "lobby", None, None, stop, Writer()
+        )
+    )
+
+    assert state["cursors"]["lobby"] == 101
+    assert state["metrics"]["lobby_startup_local_liveness_messages"] == 1
+    assert state["metrics"]["lobby_startup_local_liveness_bridge_attempts"] == 0
+    assert state["metrics"]["lobby_startup_local_liveness_capture_stall_waits"] == 1
+    assert state["metrics"]["lobby_startup_local_liveness_caught_up_waits"] == 2
+    assert state["health"]["rooms"]["lobby"]["status"] == "ok"
+    assert stop.waits == 2
+
+
 def test_startup_bridges_only_the_actual_local_hole(monkeypatch):
     now = datetime.now(UTC)
     monkeypatch.setattr(local, "_BOOT_AT", now - timedelta(seconds=10))

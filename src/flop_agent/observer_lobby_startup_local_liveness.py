@@ -1,6 +1,6 @@
 """Keep lobby startup on bounded exact local chunks before any server fallback.
 
-Production showed three separate lobby continuity hazards:
+Production showed four separate lobby continuity hazards:
 
 * exact persisted SQLite rows were skipped when capture freshness exceeded a strict
   steady-state threshold, causing a return to the old full-body lobby export;
@@ -9,15 +9,17 @@ Production showed three separate lobby continuity hazards:
   delegating to the old full-body export recreates the same startup stall;
 * after a large local catch-up reaches capture cursor, returning to the normal Rich
   live worker can recreate the same TotalTimeout stall while capture starts moving
-  ahead again.
+  ahead again;
+* a transient capture transport stall exactly while Rich is caught up must not send
+  the follower into the streaming bridge when there is no proven local hole.
 
 This guard is therefore a persistent local-first lobby follower:
 - exact persisted rows are always authoritative, regardless of capture freshness;
 - local evidence drains at most 100 exact rows per slice and yields;
+- when Rich is at or ahead of the capture cursor, stay in the local follower even
+  if capture is temporarily stale; only a proven local hole may enter the bridge;
 - when Rich catches a fresh capture cursor, mark lobby healthy but stay in this
   bounded local-first loop instead of handing control back to the old live worker;
-- otherwise any unresolved next-row condition uses the existing bounded streaming
-  bridge, even while capture is stale or reporting a transient read error;
 - the legacy full-body lobby export is not used for a stale/missing local next row.
 
 No Technocore write, signing, shell execution, URL following, or secret access is
@@ -53,6 +55,7 @@ def _metrics(state: dict) -> dict:
         "lobby_startup_local_liveness_delegations",
         "lobby_startup_local_liveness_stale_bridge_attempts",
         "lobby_startup_local_liveness_caught_up_waits",
+        "lobby_startup_local_liveness_capture_stall_waits",
     ):
         metrics.setdefault(key, 0)
     return metrics
@@ -84,6 +87,20 @@ def _read_bounded_local_prefix(start: int, capture_cursor: int) -> list[dict]:
         if rows:
             return rows
     return []
+
+
+def _mark_capture_stall_once(state: dict, room: str, status: dict) -> bool:
+    """Expose capture uncertainty without appending the same error every second."""
+    source = str(status.get("last_error") or "stale")
+    kind = f"startup_lobby_capture_{source}"
+    record = state.get("health", {}).get("rooms", {}).get(room, {})
+    if (
+        isinstance(record, dict)
+        and record.get("status") == "error"
+        and record.get("kind") == kind
+    ):
+        return False
+    return resilience.set_error(state, room, kind, "")
 
 
 async def startup_catchup(
@@ -144,22 +161,27 @@ async def startup_catchup(
         capture_cursor = int(status.get("capture_cursor", 0) or 0)
         capture_fresh = _startup_capture_fresh(status)
 
-        # A fresh capture at or behind the Rich cursor proves local continuity. Mark
-        # lobby healthy, but do NOT return to the normal Rich live worker: Production
-        # showed that handoff can immediately recreate TotalTimeout while capture
-        # advances. Stay resident in this bounded local-first follower instead.
-        if capture_fresh and current >= capture_cursor:
-            changed = resilience.set_success(state, room)
+        # No local hole is proven when Rich is already at or ahead of the capture
+        # cursor. A transient capture timeout here is capture uncertainty, not a
+        # reason to enter the potentially long streaming bridge. Stay local and let
+        # the independent capture service recover; newly persisted rows are drained
+        # on the next loop. Only capture_cursor > current with a missing exact row is
+        # a concrete local hole that may use the bridge below.
+        if current >= capture_cursor:
             metrics["lobby_startup_local_liveness_caught_up_waits"] += 1
+            if capture_fresh:
+                changed = resilience.set_success(state, room)
+            else:
+                metrics["lobby_startup_local_liveness_capture_stall_waits"] += 1
+                changed = _mark_capture_stall_once(state, room, status)
             if writer and changed:
                 writer.mark_dirty()
             await startup._wait_or_stop(stop, CAUGHT_UP_POLL_SECONDS)
             continue
 
-        # Any unresolved next-row condition is handled through the bounded official
-        # streaming export. This includes a genuine local hole and a temporarily
-        # stale/timed-out capture that has stopped advancing. Do not fall back to the
-        # old full-body export merely because capture liveness is uncertain.
+        # capture_cursor is ahead of Rich but there is no exact local next row: this
+        # is a proven local continuity hole. Use the bounded official streaming
+        # bridge to reconnect to the SQLite suffix. Do not use the old full export.
         metrics["lobby_startup_local_liveness_bridge_attempts"] += 1
         if not capture_fresh:
             metrics["lobby_startup_local_liveness_stale_bridge_attempts"] += 1
