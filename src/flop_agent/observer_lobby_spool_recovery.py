@@ -104,6 +104,10 @@ async def _drain_spool_prefix(
         changed = batch_changed or changed
         recovered += batch_recovered
         current = chunk_end + 1
+        # Rich Agent-memory processing is synchronous.  Yield after this exact
+        # bounded slice before returning so sibling room workers and the single
+        # StateWriter can run before the next recovery cycle resumes.
+        await asyncio.sleep(0)
         break
 
     return changed, recovered

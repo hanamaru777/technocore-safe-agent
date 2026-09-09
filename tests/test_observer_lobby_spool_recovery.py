@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from flop_agent import (
+    core,
     observer,
     observer_lobby_capture as capture,
     observer_lobby_spool_recovery as spool,
@@ -234,6 +235,83 @@ def test_large_local_backlog_recovers_cooperatively_without_live_fallback(tmp_pa
     asyncio.run(spool.process_live_payload_with_recovery(object(), object(), state, _config(), "lobby", payload, None, None, bootstrap=False))
     assert state["cursors"]["lobby"] == 1 + 2 * spool.SPOOL_CHUNK_MESSAGES
     assert fallback_calls == []
+
+
+def test_agent_cap_backlog_uses_one_eviction_index_and_yields_scheduler(tmp_path, monkeypatch):
+    """A production-shaped hot lobby backlog must not scan 5k Agents per row."""
+    path = tmp_path / "capture.sqlite3"
+    monkeypatch.setattr(capture, "capture_path", lambda: path)
+    monkeypatch.setattr(core, "did_note_location", lambda did: ("", "", did.rsplit(":", 1)[-1]))
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [
+                {"seq": seq, "text": "ordinary lobby message", "from": f"did:key:new-{seq}"}
+                for seq in range(2, 302)
+            ],
+        )
+    finally:
+        connection.close()
+
+    state = resilience.default_state()
+    state["cursors"]["lobby"] = 1
+    for number in range(5000):
+        fingerprint = f"retained-{number:04d}"
+        state["agents"][fingerprint] = {
+            "did": f"did:key:{fingerprint}",
+            "fingerprint": fingerprint,
+            "facts": {
+                "first_seen": "2026-01-01T00:00:00+00:00",
+                "last_seen": "2026-01-01T00:00:00+00:00",
+                "last_encounter_at": "2026-01-01T00:00:00+00:00",
+                "seen_count": 1,
+                "rooms": [], "message_refs": [], "recent_messages": [],
+                "signed_count": 1, "unsigned_count": 0,
+                "interaction_with_us": number == 4999,
+            },
+            "inferences": {"contribution_url_candidates": [], "role_candidates": [], "repeat_seen": False},
+        }
+
+    rebuilds = 0
+    original_rebuild = observer._rebuild_agent_eviction_index
+
+    def counted_rebuild(indexed_state):
+        nonlocal rebuilds
+        rebuilds += 1
+        return original_rebuild(indexed_state)
+
+    base_calls, scheduler_turns = [], []
+
+    async def scheduler_turn(label):
+        scheduler_turns.append(label)
+
+    async def consume_newer_live(*args, **kwargs):
+        base_calls.append(state["cursors"]["lobby"])
+        assert state["cursors"]["lobby"] == 301
+        return False, False
+
+    monkeypatch.setattr(observer, "_rebuild_agent_eviction_index", counted_rebuild)
+    monkeypatch.setattr(spool, "_BASE_PROCESS_LIVE", consume_newer_live)
+    payload = {"messages": [{"seq": 302, "text": "newer live", "from": "did:key:live"}]}
+
+    async def run():
+        for label in ("events", "writer", "events"):
+            task = asyncio.create_task(scheduler_turn(label))
+            await spool.process_live_payload_with_recovery(
+                object(), object(), state, _config(), "lobby", payload, None, None, bootstrap=False
+            )
+            assert task.done(), "each bounded recovery slice must release the scheduler"
+
+    asyncio.run(run())
+
+    assert rebuilds == 1
+    assert len(state["agents"]) == 5000
+    assert "retained-4999" in state["agents"]  # tier-3 interaction survives weak eviction
+    assert state["cursors"]["lobby"] == 301
+    assert base_calls == [301]  # only after every exact protected local row
+    assert scheduler_turns == ["events", "writer", "events"]
+    assert state["metrics"].get("unrecoverable_core_gap_events", 0) == 0
 
 
 def test_install_patches_only_resilience_recovery_surface(monkeypatch):
