@@ -14,6 +14,7 @@ from . import (
     observer_lobby_fallback_health,
     observer_lobby_spool_recovery,
     observer_lobby_startup_hole_bridge,
+    observer_lobby_startup_local_liveness,
     observer_lobby_startup_spool_recovery,
     observer_request_deadline,
     observer_resident_isolation,
@@ -78,6 +79,11 @@ def main() -> None:
     # the exact SQLite suffix. Never fall into the full-body lobby export timeout
     # loop merely because one local row is missing.
     observer_lobby_startup_hole_bridge.install()
+    # Persisted local rows remain valid even when the capture service's latest
+    # success is older than the 3-second steady-state freshness window. Drain exact
+    # bounded local chunks first and use a startup-only liveness window before any
+    # server fallback decision.
+    observer_lobby_startup_local_liveness.install()
     # If the rich lobby GET fails but the independent capture lane has just
     # completed a successful poll at exactly the same cursor, that alternate lane
     # is sufficient read-side health evidence; do not leave core health red merely
