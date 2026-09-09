@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -34,6 +35,14 @@ HELP_RE = re.compile(r"\b(help|assist|stuck)\b", re.I)
 COLLAB_RE = re.compile(r"\b(collab|collaboration|together|looking for|partner)\b", re.I)
 CONTRIBUTION_RE = re.compile(r"\b(contribution|contribute|build|project|feedback|share)\b", re.I)
 CREATED_ROOM_RE = re.compile(r"^created ([a-z0-9][a-z0-9_-]{0,47})$")
+
+# This index is intentionally process-local.  It accelerates the hot Resident
+# path without changing the persisted state schema or treating the index as
+# evidence.  The daemon owns one shared state object; a different state object
+# replaces the cache safely (for tests and one-shot commands).
+_AGENT_EVICTION_INDEX_STATE: dict | None = None
+_AGENT_EVICTION_HEAP: list[tuple[tuple[int, datetime, int], int, str]] = []
+_AGENT_EVICTION_VERSIONS: dict[str, int] = {}
 
 
 def now() -> str: return datetime.now(UTC).isoformat()
@@ -100,6 +109,69 @@ def _agent_priority(agent: dict) -> tuple[int, datetime, int]:
     return (tier, parse_time(facts.get("last_seen")) or datetime.min.replace(tzinfo=UTC), int(facts.get("seen_count", 0)))
 
 
+def _rebuild_agent_eviction_index(state: dict) -> None:
+    """Build the bounded in-memory weakest-agent index once per state epoch."""
+    global _AGENT_EVICTION_INDEX_STATE, _AGENT_EVICTION_HEAP, _AGENT_EVICTION_VERSIONS
+    agents = state.get("agents", {})
+    _AGENT_EVICTION_INDEX_STATE = state
+    _AGENT_EVICTION_VERSIONS = {
+        fingerprint: 1 for fingerprint, agent in agents.items() if isinstance(agent, dict)
+    }
+    _AGENT_EVICTION_HEAP = [
+        (_agent_priority(agent), 1, fingerprint)
+        for fingerprint, agent in agents.items()
+        if isinstance(agent, dict)
+    ]
+    heapq.heapify(_AGENT_EVICTION_HEAP)
+
+
+def _note_agent_eviction_priority(state: dict, fingerprint: str, agent: dict) -> None:
+    """Record a changed Agent priority without scanning other retained Agents."""
+    global _AGENT_EVICTION_INDEX_STATE
+    if _AGENT_EVICTION_INDEX_STATE is not state:
+        # Delay the one O(max_agents) build until eviction is actually needed.
+        return
+    version = _AGENT_EVICTION_VERSIONS.get(fingerprint, 0) + 1
+    _AGENT_EVICTION_VERSIONS[fingerprint] = version
+    heapq.heappush(_AGENT_EVICTION_HEAP, (_agent_priority(agent), version, fingerprint))
+
+
+def _evict_weakest_indexed_agent(state: dict) -> bool:
+    """Evict one weakest Agent with exact tier semantics and no per-DID scan."""
+    agents = state.get("agents", {})
+    if not agents:
+        return False
+    if _AGENT_EVICTION_INDEX_STATE is not state or not _AGENT_EVICTION_HEAP:
+        _rebuild_agent_eviction_index(state)
+    # Frequent messages add stale heap entries.  Rebuild only after a bounded
+    # number of priority updates, never once per newly seen DID at the cap.
+    if len(_AGENT_EVICTION_HEAP) > max(64, len(agents) * 3):
+        _rebuild_agent_eviction_index(state)
+    while _AGENT_EVICTION_HEAP:
+        priority, version, fingerprint = heapq.heappop(_AGENT_EVICTION_HEAP)
+        agent = agents.get(fingerprint)
+        if (
+            agent is not None
+            and _AGENT_EVICTION_VERSIONS.get(fingerprint) == version
+            and _agent_priority(agent) == priority
+        ):
+            del agents[fingerprint]
+            _AGENT_EVICTION_VERSIONS.pop(fingerprint, None)
+            return True
+    # A concurrent compaction can invalidate every entry.  Rebuild once and
+    # retry; this preserves the existing fail-closed bounded-agent behavior.
+    _rebuild_agent_eviction_index(state)
+    if not _AGENT_EVICTION_HEAP:
+        return False
+    priority, version, fingerprint = heapq.heappop(_AGENT_EVICTION_HEAP)
+    agent = agents.get(fingerprint)
+    if agent is None or _AGENT_EVICTION_VERSIONS.get(fingerprint) != version or _agent_priority(agent) != priority:
+        return False
+    del agents[fingerprint]
+    _AGENT_EVICTION_VERSIONS.pop(fingerprint, None)
+    return True
+
+
 def _retention_stats(agents: dict) -> dict:
     tiers = [_agent_priority(agent)[0] for agent in agents.values() if isinstance(agent, dict)]
     return {"strong_important_total": sum(tier >= 2 for tier in tiers), "strong_important_retained": sum(tier >= 2 for tier in tiers), "strong_important_dropped": 0, "repeat_retained": sum(tier == 1 for tier in tiers)}
@@ -146,10 +218,8 @@ def compact_state(state: dict, memory_retention: int, *, max_agents: int | None 
 
 
 def _evict_weakest_agent(state: dict) -> bool:
-    """At the hard cap evict exactly one weakest Agent without a full-state compaction/sort."""
-    agents = state.get("agents", {})
-    if not agents: return False
-    fingerprint, _ = min(agents.items(), key=lambda pair: _agent_priority(pair[1])); del agents[fingerprint]; return True
+    """At the hard cap evict exactly one weakest Agent without a full-state scan."""
+    return _evict_weakest_indexed_agent(state)
 
 
 def load_state(memory_retention: int | None = None) -> dict:
@@ -362,6 +432,7 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
         if re.search(rf"\b{role}\b", text, re.I) and role not in inference["role_candidates"]: inference["role_candidates"].append(role)
     for field in ("message_refs", "recent_messages"): del facts[field][:-config["memory_retention"]]
     del inference["contribution_url_candidates"][:-config["memory_retention"]]
+    _note_agent_eviction_priority(state, fingerprint, agent)
 
 
 def process_payload(state: dict, config: dict, room: str, payload: dict | list, own_did: str | None, mailbox: str | None, *, bootstrap: bool) -> bool:
