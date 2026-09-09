@@ -1,18 +1,21 @@
 """Keep lobby startup on bounded exact local chunks before any server fallback.
 
-Production showed two separate startup hazards:
+Production showed three separate lobby continuity hazards:
 
 * exact persisted SQLite rows were skipped when capture freshness exceeded a strict
   steady-state threshold, causing a return to the old full-body lobby export;
 * the standalone capture can itself enter a transient ReadTimeout while a large,
   exact local backlog is still available. Once that local backlog is exhausted,
-  delegating to the old full-body export recreates the same startup stall.
+  delegating to the old full-body export recreates the same startup stall;
+* after a large local catch-up reaches capture cursor, returning to the normal Rich
+  live worker can recreate the same TotalTimeout stall while capture starts moving
+  ahead again.
 
-This startup guard is therefore local-first and streaming-only for unresolved lobby
-continuity:
+This guard is therefore a persistent local-first lobby follower:
 - exact persisted rows are always authoritative, regardless of capture freshness;
-- startup drains at most 100 exact local rows per slice and yields;
-- if capture is fresh and the Rich cursor has caught up to it, startup may succeed;
+- local evidence drains at most 100 exact rows per slice and yields;
+- when Rich catches a fresh capture cursor, mark lobby healthy but stay in this
+  bounded local-first loop instead of handing control back to the old live worker;
 - otherwise any unresolved next-row condition uses the existing bounded streaming
   bridge, even while capture is stale or reporting a transient read error;
 - the legacy full-body lobby export is not used for a stale/missing local next row.
@@ -36,6 +39,7 @@ from . import (
 LOBBY_ROOM = "lobby"
 LOCAL_CHUNK_MESSAGES = 100
 STARTUP_CAPTURE_FRESH_SECONDS = 60.0
+CAUGHT_UP_POLL_SECONDS = 1.0
 _INSTALLED = False
 _BASE_STARTUP_CATCHUP = None
 
@@ -48,13 +52,14 @@ def _metrics(state: dict) -> dict:
         "lobby_startup_local_liveness_bridge_attempts",
         "lobby_startup_local_liveness_delegations",
         "lobby_startup_local_liveness_stale_bridge_attempts",
+        "lobby_startup_local_liveness_caught_up_waits",
     ):
         metrics.setdefault(key, 0)
     return metrics
 
 
 def _startup_capture_fresh(status: dict) -> bool:
-    """Startup-only liveness proof; steady-state keeps its stricter 3s policy."""
+    """Local-follower liveness proof; steady-state keeps its stricter policy."""
     if status.get("last_error"):
         return False
     stamp = local._parse_time(status.get("last_success_at"))
@@ -139,13 +144,17 @@ async def startup_catchup(
         capture_cursor = int(status.get("capture_cursor", 0) or 0)
         capture_fresh = _startup_capture_fresh(status)
 
-        # A fresh capture at or behind the Rich cursor proves there is no persisted
-        # unseen local interval. Normal live processing can safely take over.
+        # A fresh capture at or behind the Rich cursor proves local continuity. Mark
+        # lobby healthy, but do NOT return to the normal Rich live worker: Production
+        # showed that handoff can immediately recreate TotalTimeout while capture
+        # advances. Stay resident in this bounded local-first follower instead.
         if capture_fresh and current >= capture_cursor:
             changed = resilience.set_success(state, room)
+            metrics["lobby_startup_local_liveness_caught_up_waits"] += 1
             if writer and changed:
                 writer.mark_dirty()
-            return
+            await startup._wait_or_stop(stop, CAUGHT_UP_POLL_SECONDS)
+            continue
 
         # Any unresolved next-row condition is handled through the bounded official
         # streaming export. This includes a genuine local hole and a temporarily

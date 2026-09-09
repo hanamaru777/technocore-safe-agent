@@ -29,6 +29,19 @@ class Stop:
         await asyncio.sleep(3600)
 
 
+class StopAfterWait:
+    def __init__(self) -> None:
+        self.set = False
+        self.waits = 0
+
+    def is_set(self) -> bool:
+        return self.set
+
+    async def wait(self) -> None:
+        self.waits += 1
+        self.set = True
+
+
 class Writer:
     def __init__(self) -> None:
         self.marks = 0
@@ -97,16 +110,80 @@ def test_startup_uses_exact_local_rows_when_steady_freshness_would_reject(monkey
 
     state = _state(100)
     writer = Writer()
+    stop = StopAfterWait()
     asyncio.run(
         liveness.startup_catchup(
-            object(), object(), state, {}, "lobby", None, None, Stop(), writer
+            object(), object(), state, {}, "lobby", None, None, stop, writer
         )
     )
 
     assert state["cursors"]["lobby"] == 110
     assert state["metrics"]["lobby_startup_local_liveness_messages"] == 10
     assert state["metrics"]["lobby_startup_local_liveness_bridge_attempts"] == 0
+    assert state["metrics"]["lobby_startup_local_liveness_caught_up_waits"] == 1
+    assert stop.waits == 1
     assert writer.marks >= 1
+
+
+def test_caught_up_lobby_stays_local_and_consumes_new_capture_rows(monkeypatch):
+    now = datetime.now(UTC)
+    monkeypatch.setattr(local, "_BOOT_AT", now - timedelta(seconds=10))
+    status = {
+        "capture_cursor": 102,
+        "last_success_at": now.isoformat(),
+        "last_error": "",
+    }
+    present = {101, 102}
+
+    monkeypatch.setattr(capture, "status", lambda: dict(status))
+
+    def read_range(start: int, end: int):
+        if all(seq in present for seq in range(start, end + 1)):
+            return [msg(seq) for seq in range(start, end + 1)]
+        return []
+
+    monkeypatch.setattr(capture, "read_range", read_range)
+    monkeypatch.setattr(resilience, "_drain_export_snapshot", _fake_drain)
+    monkeypatch.setattr(resilience, "set_success", lambda state, room: True)
+
+    async def fail_bridge(*args, **kwargs):
+        raise AssertionError("bridge must not run while exact local rows exist")
+
+    async def fail_base(*args, **kwargs):
+        raise AssertionError("caught-up lobby must not hand back to legacy live worker")
+
+    monkeypatch.setattr(bridge, "_stream_until_local_resume", fail_bridge)
+    monkeypatch.setattr(liveness, "_BASE_STARTUP_CATCHUP", fail_base)
+
+    class AdvanceThenStop:
+        def __init__(self) -> None:
+            self.waits = 0
+            self.set = False
+
+        def is_set(self) -> bool:
+            return self.set
+
+        async def wait(self) -> None:
+            self.waits += 1
+            if self.waits == 1:
+                present.add(103)
+                status["capture_cursor"] = 103
+                status["last_success_at"] = datetime.now(UTC).isoformat()
+                return
+            self.set = True
+
+    stop = AdvanceThenStop()
+    state = _state(100)
+    asyncio.run(
+        liveness.startup_catchup(
+            object(), object(), state, {}, "lobby", None, None, stop, Writer()
+        )
+    )
+
+    assert state["cursors"]["lobby"] == 103
+    assert state["metrics"]["lobby_startup_local_liveness_messages"] == 3
+    assert state["metrics"]["lobby_startup_local_liveness_caught_up_waits"] == 2
+    assert stop.waits == 2
 
 
 def test_startup_bridges_only_the_actual_local_hole(monkeypatch):
@@ -150,9 +227,10 @@ def test_startup_bridges_only_the_actual_local_hole(monkeypatch):
     monkeypatch.setattr(liveness, "_BASE_STARTUP_CATCHUP", fail_base)
 
     state = _state(100)
+    stop = StopAfterWait()
     asyncio.run(
         liveness.startup_catchup(
-            object(), object(), state, {}, "lobby", None, None, Stop(), Writer()
+            object(), object(), state, {}, "lobby", None, None, stop, Writer()
         )
     )
 
@@ -160,6 +238,7 @@ def test_startup_bridges_only_the_actual_local_hole(monkeypatch):
     assert bridge_calls == [102]
     assert state["metrics"]["lobby_startup_local_liveness_bridge_attempts"] == 1
     assert state["metrics"]["lobby_startup_local_liveness_messages"] == 4
+    assert state["metrics"]["lobby_startup_local_liveness_caught_up_waits"] == 1
 
 
 def test_startup_streams_when_capture_is_stale_instead_of_full_export(monkeypatch):
@@ -194,9 +273,10 @@ def test_startup_streams_when_capture_is_stale_instead_of_full_export(monkeypatc
     monkeypatch.setattr(bridge, "_stream_until_local_resume", fake_bridge)
 
     state = _state(100)
+    stop = StopAfterWait()
     asyncio.run(
         liveness.startup_catchup(
-            object(), object(), state, {}, "lobby", None, None, Stop(), Writer()
+            object(), object(), state, {}, "lobby", None, None, stop, Writer()
         )
     )
 
@@ -205,3 +285,4 @@ def test_startup_streams_when_capture_is_stale_instead_of_full_export(monkeypatc
     assert state["metrics"]["lobby_startup_local_liveness_bridge_attempts"] == 1
     assert state["metrics"]["lobby_startup_local_liveness_stale_bridge_attempts"] == 1
     assert state["metrics"]["lobby_startup_local_liveness_delegations"] == 0
+    assert state["metrics"]["lobby_startup_local_liveness_caught_up_waits"] == 1
