@@ -133,27 +133,49 @@ async def _drain_complete_spool_range(
     *,
     event_message: dict | None = None,
 ) -> tuple[bool, int]:
-    """Compatibility helper: recover only when the full local range is present."""
+    """Recover one proven-complete local range in bounded O(chunk) slices.
+
+    Startup callers already need the full local interval to remain exact before
+    delegating to the server path.  Verify that contract once, then read each fixed
+    slice directly.  Do not call ``_drain_spool_prefix`` here: that helper scans the
+    remaining contiguous suffix to discover availability, which turns a large
+    startup backlog into repeated O(remaining) scans and therefore O(n^2) work.
+    """
     if end < start or not capture.range_complete(start, end):
         return False, 0
 
     changed = False
     recovered = 0
     current = start
-    # Startup owns catch-up before the live worker starts.  Preserve its original
-    # complete-range contract while each inner slice remains bounded and gives the
-    # loop a turn between slices.
     while current <= end:
-        batch_changed, batch_recovered = await _drain_spool_prefix(
-            state, config, current, end, own_did, mailbox, event_message=event_message
+        chunk_end = min(end, current + SPOOL_CHUNK_MESSAGES - 1)
+        rows = capture.read_range(current, chunk_end)
+        expected = chunk_end - current + 1
+        if len(rows) != expected:
+            # A concurrent bounded prune can invalidate a range after the one-time
+            # completeness proof. Preserve exact cursor progress and stop locally.
+            return changed, recovered
+
+        batch_changed, batch_recovered = await resilience._drain_export_snapshot(
+            state,
+            config,
+            capture.ROOM,
+            rows,
+            own_did,
+            mailbox,
+            gap_end=chunk_end,
+            event_message=event_message or rows[0],
         )
         changed = changed or batch_changed
         recovered += batch_recovered
-        current = int(state.get("cursors", {}).get(capture.ROOM, current - 1) or current - 1) + 1
-        if batch_recovered == 0:
+        current = int(
+            state.get("cursors", {}).get(capture.ROOM, current - 1) or current - 1
+        ) + 1
+        if batch_recovered == 0 or current <= chunk_end:
             return changed, recovered
         if current <= end:
             await asyncio.sleep(0)
+
     _record_local_recovery(state, recovered, partial=False)
     return True, recovered
 
