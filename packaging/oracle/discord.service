@@ -10,6 +10,8 @@ WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+# Final tclk review overlay delegates to the accepted knowledge/collaboration stack
+# (python -m flop_agent.discord_knowledge); only stored-review presentation is added here.
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.discord_tclk_review
 Restart=on-failure
 RestartSec=30
