@@ -1,0 +1,30 @@
+[Unit]
+Description=technocore-safe-agent typed tclk first-pilot accept for stage %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=technocore-signer
+Group=technocore-signer
+SupplementaryGroups=technocore-autopilot
+WorkingDirectory=/opt/technocore-safe-agent
+# This one-shot needs the existing Vault route only to sign the exact reconstructed accept.
+# It has no timer and cannot accept arbitrary text, room, URL or task input.
+EnvironmentFile=/etc/technocore-safe-agent/signer.env
+Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
+Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+Environment=UV_CACHE_DIR=/var/lib/technocore-safe-agent/signer/uv-cache
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_pilot_accept %i
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/technocore-safe-agent/autopilot /var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json /var/lib/technocore-safe-agent/activities.jsonl
