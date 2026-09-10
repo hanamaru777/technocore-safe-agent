@@ -23,7 +23,7 @@ _KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _OFFER_ID = re.compile(r"^0x[0-9a-f]{64}$")
 _MATERIAL_REF = re.compile(
-    r"/kv/tclk-mat-en/([a-z0-9][a-z0-9_-]{0,47})(?![A-Za-z0-9._-])"
+    r"(?<![A-Za-z0-9:/])/kv/tclk-mat-en/([a-z0-9][a-z0-9_-]{0,47})(?=$|[\s|,;:)\]}.])"
 )
 _EXTERNAL_URL = re.compile(r"https?://", re.IGNORECASE)
 
@@ -34,10 +34,6 @@ class ResolutionError(RuntimeError):
 
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _validate_offer(item: dict, *, now_ms: int) -> str:
@@ -102,7 +98,8 @@ def _material_key(full_spec: str) -> str | None:
     matches = _MATERIAL_REF.findall(full_spec)
     if prefix_count == 0:
         return None
-    # Any malformed occurrence is outside the bounded first-pilot resolver contract.
+    # Any malformed, URL-embedded, query-suffixed, or otherwise partial occurrence is
+    # outside the bounded first-pilot resolver contract. Do not guess or partially match.
     if prefix_count != len(matches):
         raise ResolutionError("material_reference_not_exact")
     unique = set(matches)
