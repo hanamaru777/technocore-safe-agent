@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 from . import discord_collaboration as base
-from . import knowledge, knowledge_guard, resident
+from . import knowledge, knowledge_guard, observer, resident, tclk_watch
 
 knowledge_guard.install()
 
@@ -90,6 +90,35 @@ def _candidate_suffix(candidate_id: str) -> str:
     return f"\nKnowledge: {info['topic']} | {state} | {mode}\nSources: {sources}"
 
 
+def _tclk_detail_message(offer_id: str) -> str:
+    """Render locally retained full tclk review evidence without changing offer state."""
+    status = tclk_watch.runtime_status()
+    if status.get("ready") is not True:
+        return f"🔴 tclk runtime unavailable/degraded ({status.get('reason', 'unknown')}). No offer state was changed."
+    try:
+        item = tclk_watch.offer(observer.load_state(), offer_id)
+    except RuntimeError:
+        item = None
+    if item is None:
+        return "No validated read-only tclk/1 offer found for that ID."
+
+    summary = base.base._tclk_offer_message(item)
+    has_full = isinstance(item.get("terms_full"), str)
+    terms = item.get("terms_full") if has_full else item.get("terms", "")
+    rendered_terms = base.base.safe_excerpt(terms, tclk_watch.MAX_FRAME_CHARS) or "-"
+    frame_hash = base.base.safe_excerpt(item.get("frame_sha256") or "-", 64)
+    evidence = "stored full terms" if has_full else "legacy summary only"
+    return "\n".join([
+        summary,
+        "",
+        "=== FULL TERMS (untrusted / sanitized) ===",
+        rendered_terms,
+        "=== END FULL TERMS ===",
+        f"review evidence: {evidence} | frame sha256: {frame_hash}",
+        "review mode: read-only. This command did not accept, sign, post, lock, reveal, or pay.",
+    ])
+
+
 class Control(base.Control):
     def command(self, user_id: str, text: str, channel_id: str | None = None) -> dict:
         parts = text.strip().split()
@@ -103,6 +132,13 @@ class Control(base.Control):
             if len(parts) == 2:
                 return {"ok": True, "data": {}, "message": _detail_message(parts[1])}
             return {"ok": False, "error": "invalid_args", "message": "Usage: /knowledge [topic]"}
+
+        if parts and parts[0] == "/tclk" and len(parts) == 2:
+            if channel_id is not None and channel_id != self.channel_id:
+                return {"ok": False, "error": "wrong_channel", "message": "Control access denied."}
+            if user_id not in self.allowed_ids:
+                return {"ok": False, "error": "unauthorized", "message": "Control access denied."}
+            return {"ok": True, "data": {}, "message": _tclk_detail_message(parts[1])}
 
         result = super().command(user_id, text, channel_id)
         if result.get("ok") and parts and parts[0] == "/candidate" and len(parts) == 2:
