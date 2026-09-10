@@ -116,15 +116,24 @@ Rules:
 - do not claim GitHub contribution = confirmed airdrop points.
 - prefer issues discovered naturally through our Production Agent / tclk use.
 
-### F. Validator / miner paths — NOT CURRENTLY ACTIONABLE FOR THIS USER TRACK
+### F. Validator / miner paths — PRIOR STATE ALREADY DECIDED
 
-Do not buy hardware or lock capital speculatively just to chase airdrop before official onboarding economics / interfaces are concrete.
+Validator:
 
-Re-evaluate only if:
+- FLOP Validator Interest Form was already submitted before this 2026-09-10 strategy refresh.
+- do not submit a duplicate Validator application.
+- execution is only worth pursuing if FLOP offers free / support-funded / community-credit infrastructure and the final Testnet requirements make participation realistic.
+- do not buy dedicated validator hardware or paid server capacity before those requirements/support are known.
 
-- user explicitly wants a miner / validator capital track, and
-- official Testnet onboarding is live, and
-- expected return can be modeled against hardware / stake / operating cost.
+Miner:
+
+- current project decision is **do not pursue mining**.
+- the user's current Windows PC is the secure signer/operator machine, not suitable FLOP mining hardware; there is no recorded suitable discrete 16GB+ VRAM GPU.
+- do not submit a Miner Interest Form merely to create another application record.
+- do not buy or rent GPU hardware before official Testnet miner requirements and reward economics are known.
+- re-evaluate only if FLOP later offers a free/support-funded miner path or the economics clearly justify external hardware.
+
+Canonical follow-up remains Issue #5 for submitted KOL/Validator applications and Issue #7 for Validator free/support-funded feasibility.
 
 ## Current official tokenomic conflict to watch
 
@@ -152,6 +161,7 @@ Immediate action is required if any of the following appears:
 - scoring / cap / prize / claim rules.
 - KOL unique referral link / leaderboard / dashboard.
 - KOL attribution / lottery rules.
+- Validator free/support-funded onboarding or community credits.
 - Yellow Paper change to genesis / Agent / reserve / airdrop parameters.
 - genuine tclk opportunity suitable for our first PaperRail collaboration.
 - a real repeat counterpart reply or concrete task candidate in the Collaboration Pipeline.
