@@ -1,0 +1,12 @@
+[Unit]
+Description=Run bounded tclk PREPARE worker once per minute
+
+[Timer]
+OnBootSec=75s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Persistent=true
+Unit=technocore-safe-agent-tclk-prepare.service
+
+[Install]
+WantedBy=timers.target
