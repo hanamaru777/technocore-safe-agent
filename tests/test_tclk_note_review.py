@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 import hashlib
 
 import pytest
@@ -13,6 +12,7 @@ NOW = 2_000_000_000_000
 def _offer(*, job_id: str = "inf-safe-open", seconds_left: int = 900) -> dict:
     return {
         "id": "0x" + ("7" * 64),
+        "frame_type": "offer",
         "read_only": True,
         "accepted": False,
         "rail": "paper",
@@ -47,6 +47,20 @@ def test_resolver_derives_full_spec_key_and_reads_one_exact_material_note():
     assert result["material"]["sha256"] == hashlib.sha256(material.encode()).hexdigest()
 
 
+def test_repeated_same_material_reference_still_causes_only_one_material_read():
+    spec = "compare /kv/tclk-mat-en/mat-one with /kv/tclk-mat-en/mat-one"
+    calls = []
+
+    def reader(namespace: str, key: str) -> str:
+        calls.append((namespace, key))
+        return spec if namespace == "tclk-job-en" else "one material row"
+
+    result = tclk_note_review.resolve_offer(_offer(), reader=reader, now_ms=NOW)
+
+    assert result["read_count"] == 2
+    assert calls == [("tclk-job-en", "inf-safe-open"), ("tclk-mat-en", "mat-one")]
+
+
 def test_resolver_never_uses_truncated_reference_from_offer_context_for_full_spec_key():
     calls = []
 
@@ -76,9 +90,14 @@ def test_resolver_without_material_reference_is_one_bounded_read():
     assert result["material"] is None
 
 
-def test_malformed_job_id_and_expired_offer_fail_before_any_network_read():
+def test_malformed_identity_job_id_and_expiry_fail_before_any_network_read():
     def forbidden_reader(_namespace: str, _key: str) -> str:
         raise AssertionError("reader must not run")
+
+    bad_id = _offer()
+    bad_id["id"] = "0x1234"
+    with pytest.raises(tclk_note_review.ResolutionError, match="invalid_offer_id"):
+        tclk_note_review.resolve_offer(bad_id, reader=forbidden_reader, now_ms=NOW)
 
     with pytest.raises(tclk_note_review.ResolutionError, match="job_id_not_safe_note_key"):
         tclk_note_review.resolve_offer(
@@ -91,21 +110,22 @@ def test_malformed_job_id_and_expired_offer_fail_before_any_network_read():
         )
 
 
-def test_material_reference_must_be_single_exact_and_not_visibly_truncated():
+def test_material_reference_must_be_exact_single_dependency_and_not_truncated():
     cases = [
-        "use /kv/tclk-mat-en/mat-one and /kv/tclk-mat-en/mat-two",
-        "use /kv/tclk-mat-en/mat-ending-",
-        "use /kv/tclk-mat-en/bad.key",
+        ("use /kv/tclk-mat-en/mat-one and /kv/tclk-mat-en/mat-two", "multiple_material_dependencies"),
+        ("use /kv/tclk-mat-en/mat-ending-", "material_reference_incomplete"),
+        ("use /kv/tclk-mat-en/bad.key", "material_reference_not_exact"),
+        ("use /kv/other-ns/data-one", "unsupported_note_reference"),
     ]
 
-    for spec in cases:
+    for spec, reason in cases:
         calls = []
 
         def reader(namespace: str, key: str, value=spec) -> str:
             calls.append((namespace, key))
             return value
 
-        with pytest.raises(tclk_note_review.ResolutionError):
+        with pytest.raises(tclk_note_review.ResolutionError, match=reason):
             tclk_note_review.resolve_offer(_offer(), reader=reader, now_ms=NOW)
         assert calls == [("tclk-job-en", "inf-safe-open")]
 
@@ -177,11 +197,11 @@ def test_discord_resolution_failure_remains_read_only(monkeypatch):
     monkeypatch.setattr(discord_review.tclk_watch, "offer", lambda _state, _offer_id: item)
 
     def blocked(_item):
-        raise tclk_note_review.ResolutionError("material_reference_not_exactly_one")
+        raise tclk_note_review.ResolutionError("unsupported_note_reference")
 
     monkeypatch.setattr(discord_review.tclk_note_review, "resolve_offer", blocked)
     message = discord_review._resolved_note_message(item["id"])
 
     assert "blocked (fail-closed)" in message
-    assert "material_reference_not_exactly_one" in message
+    assert "unsupported_note_reference" in message
     assert "No accept, sign, post, lock, reveal, or payment" in message
