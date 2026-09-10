@@ -10,13 +10,14 @@ def _offer(
     seconds_left: int = 900,
     terms: str = "verification | count rows in the public tclk board excerpt",
     proto: str = "a2a",
+    job_id: str = "public-review",
 ) -> dict:
     return {
         "id": offer_id,
         "counterpart_fingerprint": "abcdef1234567890",
         "frame_type": "offer",
         "job_proto": proto,
-        "job_id": "public-review",
+        "job_id": job_id,
         "amount": "200",
         "asset": "FLOP",
         "rail": "paper",
@@ -86,7 +87,43 @@ def test_external_url_and_truncated_full_spec_are_not_review_ready():
         _offer(terms="verification | full spec: /kv/tclk-job-en/task-32941870-"),
         now_ms=NOW,
     )
-    assert truncated["reason"] == "incomplete_full_spec_reference"
+    assert truncated["reason"] == "incomplete_kv_reference"
+
+
+def test_live_shape_with_truncated_material_and_full_spec_is_not_review_ready():
+    terms = (
+        "inference | From the note /kv/tclk-mat-en/minf-ef43bcc8- "
+        "(rows: seq | payer | amount | asset | proto | time): output the seq of the row "
+        "with the earliest time and the seq of the row with the latest time | reward tier 3/5 | "
+        "done looks like: one lin | full spec: /kv/tclk-job-en/inf-ef43bcc8-o"
+    )
+    verdict = tclk_triage.classify(
+        _offer(terms=terms, job_id="inf-ef43bcc8-open"),
+        now_ms=NOW,
+    )
+    assert verdict["reviewable"] is False
+    assert verdict["reason"] == "incomplete_kv_reference"
+
+
+def test_full_spec_basename_must_exactly_match_job_id():
+    mismatch = tclk_triage.classify(
+        _offer(
+            terms="verification | full spec: /kv/tclk-job-en/inf-ef43bcc8-o",
+            job_id="inf-ef43bcc8-open",
+        ),
+        now_ms=NOW,
+    )
+    assert mismatch["reviewable"] is False
+    assert mismatch["reason"] == "incomplete_full_spec_reference"
+
+    exact = tclk_triage.classify(
+        _offer(
+            terms="verification | full spec: /kv/tclk-job-en/inf-ef43bcc8-open",
+            job_id="inf-ef43bcc8-open",
+        ),
+        now_ms=NOW,
+    )
+    assert exact["reviewable"] is True
 
 
 def test_review_candidates_are_earliest_expiry_first():
