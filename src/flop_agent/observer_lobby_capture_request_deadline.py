@@ -8,8 +8,8 @@ alive for minutes while its persisted cursor stops advancing. Production Issue
 
 This overlay keeps the existing GET-only capture protocol and byte limits, but
 streams response bytes and aborts once one request exceeds a bounded wall-clock
-budget. It introduces no Technocore writes, signing, subprocesses, URL following,
-or secret access.
+budget. It introduces no Technocore writes, signing, external process execution,
+URL following, or secret access.
 """
 from __future__ import annotations
 
