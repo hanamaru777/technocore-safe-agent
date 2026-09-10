@@ -104,6 +104,11 @@ def test_malformed_identity_job_id_and_expiry_fail_before_any_network_read():
             _offer(job_id="../../other-host"), reader=forbidden_reader, now_ms=NOW
         )
 
+    with pytest.raises(tclk_note_review.ResolutionError, match="job_id_not_safe_note_key"):
+        tclk_note_review.resolve_offer(
+            _offer(job_id="inf-truncated-"), reader=forbidden_reader, now_ms=NOW
+        )
+
     with pytest.raises(tclk_note_review.ResolutionError, match="offer_expired"):
         tclk_note_review.resolve_offer(
             _offer(seconds_left=-1), reader=forbidden_reader, now_ms=NOW

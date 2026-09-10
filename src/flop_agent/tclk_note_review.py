@@ -57,7 +57,7 @@ def _validate_offer(item: dict, *, now_ms: int) -> str:
     if not isinstance(frame_hash, str) or not _HEX64.fullmatch(frame_hash):
         raise ResolutionError("missing_frame_evidence")
     job_id = item.get("job_id")
-    if not isinstance(job_id, str) or not _KEY.fullmatch(job_id):
+    if not isinstance(job_id, str) or not _KEY.fullmatch(job_id) or job_id.endswith("-"):
         raise ResolutionError("job_id_not_safe_note_key")
     return job_id
 
