@@ -14,7 +14,8 @@ OFFER_ID = "0x" + "3" * 64
 FRAME_HASH = "4" * 64
 SPEC_HASH = "5" * 64
 MATERIAL_HASH = "6" * 64
-ACCEPT_HASH = "7" * 64
+ACCEPT_LINE = "tclk1 {\"type\":\"accept\"}"
+ACCEPT_HASH = __import__("hashlib").sha256(ACCEPT_LINE.encode()).hexdigest()
 CONTRACT_ID = "0x" + "8" * 64
 DEAL_ROOM = "mb-p-tclk-" + "9" * 16
 SIG = "A" * 86
@@ -45,7 +46,7 @@ def preview():
         "full_spec_sha256": SPEC_HASH,
         "material_sha256": MATERIAL_HASH,
         "expires_ms": NOW + 600_000,
-        "accept_line": "tclk1 {\"type\":\"accept\"}",
+        "accept_line": ACCEPT_LINE,
         "accept_sha256": ACCEPT_HASH,
         "contract_id": CONTRACT_ID,
         "deal_room": DEAL_ROOM,
@@ -81,6 +82,7 @@ def accept_state(state_name="prepared"):
         "stage_id": STAGE_ID,
         "approval_digest": approval_record()["approval_digest"],
         "offer_id": OFFER_ID,
+        "accept_line": ACCEPT_LINE,
         "accept_sha256": ACCEPT_HASH,
         "contract_id": CONTRACT_ID,
         "deal_room": DEAL_ROOM,
@@ -170,9 +172,8 @@ def test_signer_can_only_sign_exact_reconstructed_accept(monkeypatch):
         "invoke_signer",
         lambda *args: calls.append(args) or [DID, SIG],
     )
-    text = preview()["accept_line"]
-    assert tclk_pilot_accept._sign_exact(DID, "2000000000000", text) == SIG
-    assert calls == [("say", "tclk-offers", "2000000000000", text)]
+    assert tclk_pilot_accept._sign_exact(DID, "2000000000000", ACCEPT_LINE) == SIG
+    assert calls == [("say", "tclk-offers", "2000000000000", ACCEPT_LINE)]
 
 
 def test_ambiguous_post_terminalizes_and_next_run_never_reposts(monkeypatch):
@@ -181,6 +182,7 @@ def test_ambiguous_post_terminalizes_and_next_run_never_reposts(monkeypatch):
     monkeypatch.setattr(tclk_pilot_accept, "_exact_prepared", lambda *_a, **_k: (s, p, approval, {}))
     monkeypatch.setattr(tclk_pilot_accept, "_load_state", lambda _stage_id: value)
     monkeypatch.setattr(tclk_pilot_accept, "_save_state", lambda _value: None)
+    monkeypatch.setattr(tclk_pilot_accept, "_reconcile", lambda current, _text: {"action": "ambiguous", "state": current})
     post_calls = []
     monkeypatch.setattr(
         tclk_pilot_accept,
@@ -192,33 +194,41 @@ def test_ambiguous_post_terminalizes_and_next_run_never_reposts(monkeypatch):
     assert len(post_calls) == 1
     assert value["state"] == "ambiguous"
 
-    monkeypatch.setattr(tclk_pilot_accept, "_reconcile", lambda current, _text: {"action": "ambiguous", "state": current})
-    result = tclk_pilot_accept.accept_stage(STAGE_ID, now_ms=NOW)
+    result = tclk_pilot_accept.accept_stage(STAGE_ID, now_ms=NOW + 700_000)
     assert result["action"] == "ambiguous"
     assert len(post_calls) == 1
 
 
-def test_ambiguous_exact_message_reconciles_without_post(monkeypatch):
+def test_ambiguous_reconciliation_survives_expiry_and_never_revalidates_for_repost(monkeypatch):
     value = accept_state("ambiguous")
-    matched = {"from": DID, "nonce": value["nonce"], "sig": SIG, "text": preview()["accept_line"], "seq": 77, "ts": "2033-05-18T03:33:22Z"}
+    matched = {"from": DID, "nonce": value["nonce"], "sig": SIG, "text": ACCEPT_LINE, "seq": 77, "ts": "2033-05-18T03:33:22Z"}
+    monkeypatch.setattr(tclk_pilot_accept, "_load_state", lambda _stage_id: value)
+    monkeypatch.setattr(
+        tclk_pilot_accept,
+        "_exact_prepared",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not re-enter live write validation")),
+    )
     monkeypatch.setattr(tclk_pilot_accept, "_find_exact_message", lambda *_a, **_k: matched)
     monkeypatch.setattr(tclk_pilot_accept, "_ensure_activity", lambda *_a, **_k: None)
     monkeypatch.setattr(tclk_pilot_accept, "_save_state", lambda *_a, **_k: None)
-    result = tclk_pilot_accept._reconcile(value, preview()["accept_line"])
+    result = tclk_pilot_accept.accept_stage(STAGE_ID, now_ms=NOW + 700_000)
     assert result["action"] == "reconciled"
     assert value["state"] == "posted"
     assert value["seq"] == 77
 
 
-def test_already_posted_is_replay_safe(monkeypatch):
-    s, p, approval = stage(), preview(), approval_record()
+def test_already_posted_is_replay_safe_without_live_revalidation(monkeypatch):
     value = accept_state("posted")
     value["posted_at"] = "2033-05-18T03:33:22+00:00"
     value["seq"] = 77
     value["ts"] = "2033-05-18T03:33:22Z"
-    monkeypatch.setattr(tclk_pilot_accept, "_exact_prepared", lambda *_a, **_k: (s, p, approval, {}))
     monkeypatch.setattr(tclk_pilot_accept, "_load_state", lambda _stage_id: value)
-    result = tclk_pilot_accept.accept_stage(STAGE_ID, now_ms=NOW)
+    monkeypatch.setattr(
+        tclk_pilot_accept,
+        "_exact_prepared",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("posted state must be terminal")),
+    )
+    result = tclk_pilot_accept.accept_stage(STAGE_ID, now_ms=NOW + 700_000)
     assert result["action"] == "already_posted"
 
 
