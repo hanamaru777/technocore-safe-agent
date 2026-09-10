@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -95,15 +95,23 @@ def test_preview_is_read_only(monkeypatch, tmp_path):
 
 
 def test_time_sensitive_tclk_fails_closed_when_stale():
-    fresh = knowledge.topic_status("tclk_alpha", current=datetime(2026, 9, 10, tzinfo=UTC))
-    stale = knowledge.topic_status("tclk_alpha", current=datetime(2026, 9, 12, tzinfo=UTC))
+    registry = knowledge.load_registry()
+    checked = knowledge._parse_time(registry["checked_at"])
+    assert checked is not None
+    ttl_days = registry["topics"]["tclk_alpha"]["ttl_days"]
+    assert isinstance(ttl_days, int)
+    fresh_at = checked + timedelta(days=ttl_days - 1)
+    stale_at = checked + timedelta(days=ttl_days + 1)
+
+    fresh = knowledge.topic_status("tclk_alpha", current=fresh_at)
+    stale = knowledge.topic_status("tclk_alpha", current=stale_at)
 
     assert fresh["verified"] is True
     assert fresh["signable"] is False
     assert stale["verified"] is False
     assert stale["reason"] == "stale_source"
     with pytest.raises(RuntimeError, match="stale or unverified"):
-        knowledge.preview("tclk_alpha", current=datetime(2026, 9, 12, tzinfo=UTC))
+        knowledge.preview("tclk_alpha", current=stale_at)
 
 
 def test_tclk_status_is_read_only_even_when_fresh():
