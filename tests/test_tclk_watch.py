@@ -50,6 +50,21 @@ def test_valid_signed_paper_offer_is_read_only_opportunity(monkeypatch, tmp_path
     assert not state["agents"] and [event["kind"] for event in state["opportunities"]] == ["tclk_offer"]
 
 
+def test_valid_offer_retains_bounded_full_review_evidence(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    state = observer.default_state()
+    context = "review " + ("x" * 700)
+    message = signed_offer_message(monkeypatch, job={"context": context})
+    observer.process_message(state, observer.DEFAULT_CONFIG, tclk_watch.OFFER_ROOM, message, None, None)
+    item = tclk_watch.opportunities(state)[0]
+    assert item["terms"] == context[:280]
+    assert item["terms_full"] == context
+    assert item["frame_text"] == message["text"]
+    assert len(item["frame_text"]) <= tclk_watch.MAX_FRAME_CHARS
+    assert len(item["frame_sha256"]) == 64
+    assert item["frame_sha256"] == __import__("hashlib").sha256(message["text"].encode()).hexdigest()
+
+
 def test_tclk_protocol_frame_never_enters_generic_lane(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     state = observer.default_state()
