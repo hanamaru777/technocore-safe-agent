@@ -307,12 +307,13 @@ class Control(_BaseControl):
                 return {"ok": False, "error": "wrong_channel", "message": "Control access denied."}
             if user_id not in self.allowed_ids:
                 return {"ok": False, "error": "unauthorized", "message": "Control access denied."}
-            if parts[0] == "/tclk-resolve" and len(parts) == 2:
-                return {"ok": True, "data": {}, "message": _resolved_note_message(parts[1])}
-            if parts[0] == "/tclk-evidence" and len(parts) in {1, 2}:
+            if parts[0] == "/tclk-resolve":
+                if len(parts) == 2:
+                    return {"ok": True, "data": {}, "message": _resolved_note_message(parts[1])}
+                return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-resolve <offer-id>"}
+            if len(parts) in {1, 2}:
                 return {"ok": True, "data": {}, "message": _stored_evidence_message(parts[1] if len(parts) == 2 else None)}
-            usage = "Usage: /tclk-resolve <offer-id> | /tclk-evidence [offer-id]"
-            return {"ok": False, "error": "invalid_args", "message": usage}
+            return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-evidence [offer-id]"}
 
         result = super().command(user_id, text, channel_id)
         if result.get("ok") and parts and parts[0] == "/help" and len(parts) == 1:
@@ -321,17 +322,19 @@ class Control(_BaseControl):
 
 
 def install() -> None:
-    """Patch Discord review callbacks and automatic evidence handling only."""
+    """Patch review callbacks and the authenticated control subclass only."""
     app.base.base.tclk_opportunities_message = _stored_opportunities_message
     app.base.base.tclk_offer_message = _stored_offer_message
     app._tclk_detail_message = _stored_detail_message
     app._tclk_best_message = _stored_best_message
-    app._new_tclk_review_notices = _new_auto_review_notices
     app.Control = Control
 
 
 def main() -> None:
     install()
+    # Runtime-only replacement: keep direct discord_knowledge tests/usage on its accepted
+    # legacy notice function while this final overlay uses automatic evidence resolution.
+    app._new_tclk_review_notices = _new_auto_review_notices
     app.main()
 
 

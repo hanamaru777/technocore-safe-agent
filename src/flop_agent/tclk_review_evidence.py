@@ -55,10 +55,12 @@ def _validate_note(note: object, *, material: bool) -> dict | None:
     if not isinstance(value, str) or not isinstance(digest, str) or not _HEX64.fullmatch(digest):
         raise EvidenceError("evidence_note_invalid")
     encoded = value.encode("utf-8")
-    if not isinstance(size, int) or size != len(encoded) or not 0 < size <= tclk_note_review.MAX_NOTE_BYTES:
+    if not isinstance(size, int) or not 0 < size <= tclk_note_review.MAX_NOTE_BYTES or not 0 < len(encoded) <= tclk_note_review.MAX_NOTE_BYTES:
         raise EvidenceError("evidence_note_invalid")
     if hashlib.sha256(encoded).hexdigest() != digest:
         raise EvidenceError("evidence_hash_mismatch")
+    if size != len(encoded):
+        raise EvidenceError("evidence_note_invalid")
     return note
 
 
