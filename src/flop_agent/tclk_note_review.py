@@ -1,9 +1,9 @@
 """Human-triggered, read-only resolver for fixed-origin tclk Note evidence.
 
 This module never posts, signs, accepts, locks, reveals, pays, executes shell text,
-or follows arbitrary URLs.  It derives the full-spec Note key only from the already
+or follows arbitrary URLs. It derives the full-spec Note key only from the already
 validated stored tclk job id, then optionally resolves one exact material Note
-reference from that full spec.  Returned SHA-256 values pin the exact evidence a
+reference from that full spec. Returned SHA-256 values pin the exact evidence a
 human reviewed; they are not proof that a world-writable Note is immutable.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ MAX_NOTE_BYTES = 8192
 
 _KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_OFFER_ID = re.compile(r"^0x[0-9a-f]{64}$")
 _MATERIAL_REF = re.compile(
     r"/kv/tclk-mat-en/([a-z0-9][a-z0-9_-]{0,47})(?![A-Za-z0-9._-])"
 )
@@ -42,6 +43,11 @@ def _sha256(value: str) -> str:
 def _validate_offer(item: dict, *, now_ms: int) -> str:
     if not isinstance(item, dict):
         raise ResolutionError("invalid_offer")
+    offer_id = item.get("id")
+    if not isinstance(offer_id, str) or not _OFFER_ID.fullmatch(offer_id):
+        raise ResolutionError("invalid_offer_id")
+    if item.get("frame_type") not in {None, "offer"}:
+        raise ResolutionError("invalid_frame_type")
     if item.get("read_only") is not True or item.get("accepted") is not False:
         raise ResolutionError("offer_not_read_only_unaccepted")
     if item.get("rail") != "paper":
@@ -73,27 +79,36 @@ def _read_bounded(
         raise ResolutionError(failure_reason) from error
     if not isinstance(value, str) or not value:
         raise ResolutionError(failure_reason)
-    if len(value.encode("utf-8")) > MAX_NOTE_BYTES:
+    encoded = value.encode("utf-8")
+    if len(encoded) > MAX_NOTE_BYTES:
         raise ResolutionError("note_too_large")
     return {
         "namespace": namespace,
         "key": key,
         "value": value,
-        "sha256": _sha256(value),
-        "bytes": len(value.encode("utf-8")),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "bytes": len(encoded),
     }
 
 
 def _material_key(full_spec: str) -> str | None:
-    prefix_count = full_spec.count(f"/kv/{MATERIAL_NAMESPACE}/")
+    material_prefix = f"/kv/{MATERIAL_NAMESPACE}/"
+    prefix_count = full_spec.count(material_prefix)
+    # The resolved full spec may describe external URLs as text, but it must not
+    # redirect this resolver into another Note namespace. Any other /kv dependency
+    # means we cannot claim to have complete bounded evidence.
+    if full_spec.count("/kv/") != prefix_count:
+        raise ResolutionError("unsupported_note_reference")
     matches = _MATERIAL_REF.findall(full_spec)
     if prefix_count == 0:
         return None
-    # Any malformed occurrence, or more than one material dependency, is outside the
-    # bounded first-pilot resolver contract.  Do not guess or partially match it.
-    if prefix_count != len(matches) or len(matches) != 1:
-        raise ResolutionError("material_reference_not_exactly_one")
-    key = matches[0]
+    # Any malformed occurrence is outside the bounded first-pilot resolver contract.
+    if prefix_count != len(matches):
+        raise ResolutionError("material_reference_not_exact")
+    unique = set(matches)
+    if len(unique) != 1:
+        raise ResolutionError("multiple_material_dependencies")
+    key = next(iter(unique))
     if key.endswith("-") or not _KEY.fullmatch(key):
         raise ResolutionError("material_reference_incomplete")
     return key
@@ -107,9 +122,10 @@ def resolve_offer(
 ) -> dict:
     """Resolve at most two fixed-origin Notes for one retained live offer.
 
-    Read 1 is always ``tclk-job-en/<validated job_id>``.  Read 2 occurs only when
-    that exact full-spec Note itself contains one exact ``tclk-mat-en/<key>`` ref.
-    No other path, host, redirect target, command, or instruction is followed.
+    Read 1 is always ``tclk-job-en/<validated job_id>``. Read 2 occurs only when
+    that exact full-spec Note itself contains an exact ``tclk-mat-en/<key>`` ref.
+    Repeated references to the same material key still cause only one read. No other
+    path, host, redirect target, command, or instruction is followed.
     """
     current = _now_ms() if now_ms is None else now_ms
     job_id = _validate_offer(item, now_ms=current)
