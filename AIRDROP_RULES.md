@@ -71,7 +71,7 @@ However, the same Teaser still shows a **3.5bn genesis pool / up to 1.2bn Agent 
 
 Conclusion: use the Teaser to prepare behavior and infrastructure, but **do not present its pool size, scoring, or spend-to-unlock path as final**.
 
-## PRE-TESTNET TECHN0CORE SIGNAL
+## PRE-TESTNET TECHNOCORE SIGNAL
 
 FLOP Labs public signal retained in project records:
 https://x.com/flop_labs/status/2091830155270672521
