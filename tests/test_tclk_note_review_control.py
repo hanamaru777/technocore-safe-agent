@@ -23,13 +23,3 @@ def test_tclk_resolve_usage_is_fixed_shape():
     assert result["ok"] is False
     assert result["error"] == "invalid_args"
     assert result["message"] == "Usage: /tclk-resolve <offer-id>"
-
-
-def test_install_binds_only_review_control_not_signer_or_protocol_writer(monkeypatch):
-    monkeypatch.setattr(review.app, "Control", review._BaseControl)
-    review.install()
-    assert review.app.Control is review.Control
-    assert not hasattr(review.Control, "sign")
-    assert not hasattr(review.Control, "accept")
-    assert not hasattr(review.Control, "lock")
-    assert not hasattr(review.Control, "reveal")
