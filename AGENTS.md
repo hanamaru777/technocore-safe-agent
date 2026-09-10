@@ -25,6 +25,19 @@ Windows remains a supported secure local signer/development path. The production
 
 Discord is an optional control/alert plane. Use local files/SQLite/JSON, no paid APIs, and no Docker requirement. Favor one continuing DID, useful interaction, durable evidence, and safe 24/7 observation over spam.
 
+## Zero-spend infrastructure policy
+
+Zero incremental spend is a hard project requirement. Surprise billing is unacceptable.
+
+- Do not create, resize, enable, or migrate to any resource, API, runner, SaaS plan, RPC, storage tier, database, GPU, load balancer, private vault, paid key-management option, paid monitoring service, paid webhook service, or other component that can generate a charge.
+- Keep OCI usage strictly within resources positively verified as Always Free. Never upgrade the OCI account to Pay As You Go for this project.
+- Keep GitHub Actions on standard GitHub-hosted runners for this public repository. Never use larger runners, Codespaces, paid Actions storage, or paid Packages capacity for this project.
+- Do not add artifact uploads or persistent workflow caches unless their use is first proven to remain at $0 under the current account limits and is actually necessary.
+- Use only public/no-fee FLOP, Technocore, tclk, Discord, GitHub, and other external interfaces. Never introduce a paid RPC or paid API key as a fallback.
+- Validator or other infrastructure-heavy participation may proceed only when the infrastructure is explicitly free or externally funded and cannot bill the user. Miner remains out of scope unless the project policy is explicitly changed.
+- Any proposed change that could alter a cloud SKU, resource count/size, billing plan, paid quota, or external paid-service usage must stop before activation and require an explicit `ZERO_COST=PASS` verification. Do not assume historical $0 usage proves future $0 eligibility.
+- A feature that cannot be implemented safely at $0 must be skipped rather than deployed with a charge risk.
+
 ## Codex model and credit policy
 
 Minimizing Codex credit consumption is a project requirement alongside maximizing legitimate FLOP airdrop opportunity.
