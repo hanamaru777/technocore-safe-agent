@@ -21,6 +21,7 @@ from . import (
     observer_resilience,
     observer_startup_resilience,
     observer_state_writer_isolation,
+    observer_tclk_parser_guard,
 )
 
 
@@ -34,6 +35,10 @@ def main() -> None:
     # Observer creates workers. The isolated Signer service is not imported,
     # restarted, or invoked by this startup path.
     observer_resilience.install()
+    # Optional tclk frames use a synchronous official Node parser. Bound admission
+    # before any room worker starts so an optional burst cannot starve protected
+    # lobby/events continuity on the shared Observer asyncio loop.
+    observer_tclk_parser_guard.install()
     # HTTP client read timeouts are inactivity timers, not total request timers.
     # Bound the whole live/export request so one trickling response cannot pin a
     # hot-room worker until retained history has already moved past its cursor.
