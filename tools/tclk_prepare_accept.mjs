@@ -1,13 +1,18 @@
 // PREPARE-only bridge to the pinned official @flop-labs/tclk runtime.
-// It never signs or posts. The minted hash preimage is written once to the restricted
-// signer state directory before any public preview is emitted, and is never printed.
+// It never signs or posts. Hash-lock material is persisted once in the restricted
+// signer state directory before any public preview is emitted and is never printed.
+// If the public-preview write was interrupted, a later invocation reuses the existing
+// preimage and accept nonce to reconstruct the exact same accept instead of minting
+// replacement protocol material.
 import { createHash } from "node:crypto";
 import {
   chmodSync,
   closeSync,
+  existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -16,11 +21,14 @@ import {
   decodeFrame,
   encodeFrame,
   generateHashLock,
+  hashLockFromPreimage,
   makeAccept,
 } from "@flop-labs/tclk";
 
 const HEX32 = /^[0-9a-f]{32}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+const HEX0X64 = /^0x[0-9a-f]{64}$/;
+const NONCE = /^[0-9a-f]{8,64}$/;
 const OFFER_ID = /^0x[0-9a-f]{64}$/;
 const DID = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{20,128}$/;
 const KEY = /^[a-z0-9][a-z0-9_-]{0,47}$/;
@@ -36,6 +44,14 @@ const REQUIRED = new Set([
   "full_spec_sha256",
   "material_sha256",
 ]);
+const PRIVATE_REQUIRED = new Set([
+  "schema_version",
+  "stage_id",
+  "offer_id",
+  "contract_id",
+  "accept_nonce",
+  "preimage",
+]);
 
 function fail() {
   throw new Error("prepare failed");
@@ -45,10 +61,29 @@ function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function exactKeys(value) {
+function hashLockStatement(preimage) {
+  if (!HEX0X64.test(preimage)) fail();
+  const lock = hashLockFromPreimage(preimage);
+  if (!lock || lock.preimage !== preimage || !HEX0X64.test(lock.hash)) fail();
+  return lock.hash;
+}
+
+function exactKeys(value, required = REQUIRED) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const keys = Object.keys(value);
-  return keys.length === REQUIRED.size && keys.every((key) => REQUIRED.has(key));
+  return keys.length === required.size && keys.every((key) => required.has(key));
+}
+
+function acceptFromStatement(offer, from, statement, nonce = undefined) {
+  if (!HEX0X64.test(statement)) fail();
+  if (nonce !== undefined && !NONCE.test(nonce)) fail();
+  const accept = makeAccept(offer, { from, statement, nonce });
+  const acceptLine = encodeFrame(accept);
+  return {
+    accept,
+    acceptLine,
+    acceptSha256: sha256(acceptLine),
+  };
 }
 
 let raw = "";
@@ -76,32 +111,47 @@ try {
 
   const stateRoot = process.env.FLOP_STATE_DIR;
   if (typeof stateRoot !== "string" || !path.isAbsolute(stateRoot)) fail();
-  const secretDir = path.join(stateRoot, "signer", "tclk-pilot-secrets");
-  mkdirSync(secretDir, { recursive: true, mode: 0o700 });
-  chmodSync(secretDir, 0o700);
+  const privateDir = path.join(stateRoot, "signer", "tclk-pilot-secrets");
+  mkdirSync(privateDir, { recursive: true, mode: 0o700 });
+  chmodSync(privateDir, 0o700);
+  const privateFile = path.join(privateDir, `${input.stage_id}.json`);
 
-  const minted = generateHashLock();
-  if (!/^0x[0-9a-f]{64}$/.test(minted.preimage) || !/^0x[0-9a-f]{64}$/.test(minted.hash)) fail();
-  const accept = makeAccept(offer, { from: input.from, statement: minted.hash });
-  const acceptLine = encodeFrame(accept);
-  const acceptSha256 = sha256(acceptLine);
-
-  const secretFile = path.join(secretDir, `${input.stage_id}.json`);
-  const fd = openSync(secretFile, "wx", 0o600);
-  try {
-    const secretRecord = JSON.stringify({
-      schema_version: 1,
-      stage_id: input.stage_id,
-      offer_id: input.offer_id,
-      contract_id: accept.contract,
-      preimage: minted.preimage,
-    });
-    writeFileSync(fd, `${secretRecord}\n`, { encoding: "utf8" });
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+  let prepared;
+  if (existsSync(privateFile)) {
+    const stored = JSON.parse(readFileSync(privateFile, "utf8"));
+    if (!exactKeys(stored, PRIVATE_REQUIRED) || stored.schema_version !== 1) fail();
+    if (stored.stage_id !== input.stage_id || stored.offer_id !== input.offer_id) fail();
+    if (!OFFER_ID.test(stored.contract_id) || !NONCE.test(stored.accept_nonce) || !HEX0X64.test(stored.preimage)) fail();
+    prepared = acceptFromStatement(
+      offer,
+      input.from,
+      hashLockStatement(stored.preimage),
+      stored.accept_nonce,
+    );
+    if (prepared.accept.contract !== stored.contract_id) fail();
+  } else {
+    const minted = generateHashLock();
+    if (!HEX0X64.test(minted.preimage) || !HEX0X64.test(minted.hash)) fail();
+    if (hashLockStatement(minted.preimage) !== minted.hash) fail();
+    prepared = acceptFromStatement(offer, input.from, minted.hash);
+    if (!NONCE.test(prepared.accept.nonce)) fail();
+    const fd = openSync(privateFile, "wx", 0o600);
+    try {
+      const privateRecord = JSON.stringify({
+        schema_version: 1,
+        stage_id: input.stage_id,
+        offer_id: input.offer_id,
+        contract_id: prepared.accept.contract,
+        accept_nonce: prepared.accept.nonce,
+        preimage: minted.preimage,
+      });
+      writeFileSync(fd, `${privateRecord}\n`, { encoding: "utf8" });
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    chmodSync(privateFile, 0o600);
   }
-  chmodSync(secretFile, 0o600);
 
   process.stdout.write(JSON.stringify({
     stage_id: input.stage_id,
@@ -111,10 +161,10 @@ try {
     full_spec_sha256: input.full_spec_sha256,
     material_sha256: input.material_sha256,
     expires_ms: input.expires_ms,
-    accept_line: acceptLine,
-    accept_sha256: acceptSha256,
-    contract_id: accept.contract,
-    deal_room: dealRoom(accept.contract),
+    accept_line: prepared.acceptLine,
+    accept_sha256: prepared.acceptSha256,
+    contract_id: prepared.accept.contract,
+    deal_room: dealRoom(prepared.accept.contract),
   }));
 } catch {
   process.stderr.write("tclk pilot prepare failed\n");

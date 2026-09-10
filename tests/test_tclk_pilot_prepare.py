@@ -217,15 +217,40 @@ def test_stage_pending_consumes_durable_evidence_without_network_write(monkeypat
     assert tclk_pilot.stage_path(result["staged"][0]).is_file()
 
 
-def test_orphan_protocol_material_is_reported_not_silently_skipped(monkeypatch, tmp_path):
+def test_interrupted_preview_write_recovers_without_replacing_preimage(monkeypatch, tmp_path):
     our_did, _, _, stage = _stage(monkeypatch, tmp_path)
     monkeypatch.setenv("TECHNOCORE_SIGNER_EXPECTED_DID", our_did)
+
+    first_bridge = tclk_pilot_signer._run_bridge(stage)
     protocol_path = tclk_pilot.secret_path(stage["stage_id"])
-    protocol_path.parent.mkdir(parents=True, exist_ok=True)
-    protocol_path.write_text("{}\n", encoding="utf-8")
+    before = json.loads(protocol_path.read_text("utf-8"))
+    assert not tclk_pilot.preview_path(stage["stage_id"]).exists()
+
+    recovered = tclk_pilot_signer.prepare_next(reader=lambda _ns, _key: NOTE_TASK, now_ms=NOW)
+    after = json.loads(protocol_path.read_text("utf-8"))
+    assert recovered["action"] == "recovered"
+    assert before["preimage"] == after["preimage"]
+    assert before == after
+    assert recovered["preview"]["accept_sha256"] == first_bridge["accept_sha256"]
+    assert tclk_pilot.preview_path(stage["stage_id"]).is_file()
+
+
+def test_tampered_private_prepare_material_fails_closed_without_replacement(monkeypatch, tmp_path):
+    our_did, _, _, stage = _stage(monkeypatch, tmp_path)
+    monkeypatch.setenv("TECHNOCORE_SIGNER_EXPECTED_DID", our_did)
+    tclk_pilot_signer._run_bridge(stage)
+    protocol_path = tclk_pilot.secret_path(stage["stage_id"])
+    value = json.loads(protocol_path.read_text("utf-8"))
+    original_preimage = value["preimage"]
+    value["contract_id"] = "0x" + "0" * 64
+    protocol_path.write_text(json.dumps(value) + "\n", encoding="utf-8")
     protocol_path.chmod(0o600)
-    with pytest.raises(tclk_pilot_signer.PrepareError, match="orphan_protocol_material_present"):
-        tclk_pilot_signer.prepare_next(reader=lambda _ns, _key: NOTE_TASK, now_ms=NOW)
+
+    with pytest.raises(tclk_pilot_signer.PrepareError, match="prepare_bridge_failed"):
+        tclk_pilot_signer.prepare_stage(stage["stage_id"], reader=lambda _ns, _key: NOTE_TASK, now_ms=NOW)
+    after = json.loads(protocol_path.read_text("utf-8"))
+    assert after["preimage"] == original_preimage
+    assert not tclk_pilot.preview_path(stage["stage_id"]).exists()
 
 
 def test_existing_preview_must_remain_bound_to_stage(monkeypatch, tmp_path):
@@ -238,3 +263,12 @@ def test_existing_preview_must_remain_bound_to_stage(monkeypatch, tmp_path):
     path.write_text(json.dumps(preview), encoding="utf-8")
     with pytest.raises(tclk_pilot_signer.PrepareError, match="preview_binding_mismatch"):
         tclk_pilot_signer.prepare_stage(stage["stage_id"], reader=lambda _ns, _key: NOTE_TASK, now_ms=NOW)
+
+
+def test_preparer_service_uses_public_only_env_and_blocks_oci_metadata():
+    unit = (core.ROOT / "packaging" / "oracle" / "technocore-safe-agent-tclk-preparer.service").read_text("utf-8")
+    assert "User=technocore-signer" in unit
+    assert "EnvironmentFile=/etc/technocore-safe-agent/tclk-prepare.env" in unit
+    assert "/etc/technocore-safe-agent/signer.env" not in unit
+    assert "Requires=technocore-safe-agent-metadata-block.service" in unit
+    assert "IPAddressDeny=169.254.169.254" in unit
