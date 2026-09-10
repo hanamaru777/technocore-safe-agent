@@ -13,6 +13,7 @@ MIN_REVIEW_SECONDS = 300
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _URL = re.compile(r"https?://", re.IGNORECASE)
+_KV_REF = re.compile(r"(/kv/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+)", re.IGNORECASE)
 _FULL_SPEC = re.compile(r"full\s+spec\s*:\s*(/kv/[A-Za-z0-9_-]+/[A-Za-z0-9._-]+)", re.IGNORECASE)
 
 # These patterns represent tasks that are categorically outside the first-pilot
@@ -83,15 +84,23 @@ def classify(item: dict, *, now_ms: int | None = None) -> dict:
         if pattern.search(terms):
             return _result("blocked", reason, seconds_left)
 
-    # Several live issuers append a `full spec:` note reference. If the issuer itself
-    # truncated that reference, the retained context is still incomplete even though
-    # our local `terms_full` retention is working correctly. Do not rush such offers.
+    # A live issuer can hit its own context bound before our local retention bound.
+    # A visibly unfinished same-origin note key is therefore incomplete evidence, not
+    # a safe invitation to guess the missing suffix or rush the first pilot.
+    for path in _KV_REF.findall(terms):
+        if path.rsplit("/", 1)[-1].endswith("-"):
+            return _result("skip", "incomplete_kv_reference", seconds_left)
+
+    # Several live issuers append a `full spec:` note reference. For the first pilot,
+    # its basename must exactly match the validated job id. This catches partial keys
+    # such as `inf-ef43bcc8-o` for job `inf-ef43bcc8-open` without any network access.
     if re.search(r"full\s+spec\s*:", terms, re.IGNORECASE):
         match = _FULL_SPEC.search(terms)
         if match is None:
             return _result("skip", "incomplete_full_spec_reference", seconds_left)
-        path = match.group(1)
-        if path.endswith("-") and terms.rstrip().endswith(path):
+        job_id = item.get("job_id")
+        basename = match.group(1).rsplit("/", 1)[-1]
+        if not isinstance(job_id, str) or not job_id or basename != job_id:
             return _result("skip", "incomplete_full_spec_reference", seconds_left)
 
     return _result("review", "human_review_required", seconds_left)
