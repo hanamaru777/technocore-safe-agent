@@ -23,7 +23,11 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from . import observer, observer_lobby_capture as capture
+from . import (
+    observer,
+    observer_lobby_capture as capture,
+    observer_lobby_capture_request_deadline,
+)
 
 LEGACY_DB_NAME = "lobby-capture.sqlite3"
 SERVICE_DB_NAME = "lobby-capture-service.sqlite3"
@@ -88,6 +92,7 @@ def bootstrap_from_legacy(
 def main() -> None:
     bootstrap_from_legacy()
     install_reader()
+    observer_lobby_capture_request_deadline.install()
     stop = threading.Event()
 
     def request_stop(_signum, _frame) -> None:
