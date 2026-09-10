@@ -81,7 +81,8 @@ def observe_offer(state: dict, message: dict, transport_from: str | None) -> dic
         verify_signed_record(OFFER_ROOM, message)
     except ValueError:
         return None
-    frame = official_offer(message.get("text"))
+    raw_text = message.get("text")
+    frame = official_offer(raw_text)
     if frame is None or frame.get("from") != transport_from or frame.get("type") != "offer":
         return None
     if frame.get("lock") != "hash" or frame.get("rails") != [PAPER_RAIL]:
@@ -93,6 +94,8 @@ def observe_offer(state: dict, message: dict, transport_from: str | None) -> dic
         return None
     if not isinstance(amount, str) or not amount.isdecimal() or not isinstance(asset, str) or not asset or role not in {"payer", "payee"}:
         return None
+    if not isinstance(raw_text, str):
+        return None
     data = _tclk_state(state)
     if data is None or offer_id in data["seen_offer_ids"]:
         return None
@@ -102,7 +105,8 @@ def observe_offer(state: dict, message: dict, transport_from: str | None) -> dic
         "id": offer_id, "counterpart_fingerprint": hashlib.sha256(transport_from.encode()).hexdigest()[:16],
         "from": transport_from, "frame_type": "offer", "job_proto": job.get("proto") if isinstance(job.get("proto"), str) else None,
         "job_id": job.get("id") if isinstance(job.get("id"), str) else None, "amount": amount, "asset": asset,
-        "rail": PAPER_RAIL, "expires_ms": expires, "terms": context[:280], "room": OFFER_ROOM,
+        "rail": PAPER_RAIL, "expires_ms": expires, "terms": context[:280], "terms_full": context[:MAX_FRAME_CHARS],
+        "frame_text": raw_text, "frame_sha256": hashlib.sha256(raw_text.encode()).hexdigest(), "room": OFFER_ROOM,
         "seq": message.get("seq"), "ts": message.get("ts"), "untrusted": True, "read_only": True, "accepted": False,
     }
     data["seen_offer_ids"].append(offer_id)
