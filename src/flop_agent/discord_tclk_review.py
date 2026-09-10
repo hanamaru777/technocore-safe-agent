@@ -1,19 +1,18 @@
-"""Discord entrypoint for retained tclk review plus fixed-origin Note evidence.
+"""Discord entrypoint for retained tclk review, evidence, and no-write pilot staging.
 
-Offer ingestion remains fail-closed in :mod:`tclk_watch`: a record only reaches local
-state after signed-record verification and successful decoding by the pinned official
-``@flop-labs/tclk`` parser. Human review of that already-retained evidence must not be
-hidden later just because an unrelated synchronous Node health probe is briefly slow.
-
-New review-worthy offers are automatically resolved through the same bounded fixed-origin
-Note resolver and written to a bounded public evidence store. This removes the need for a
-human to copy a short-lived candidate into ChatGPT. Nothing here signs, posts, accepts,
-locks, reveals, pays, executes task text, or follows arbitrary URLs.
+Offer ingestion stays fail-closed in :mod:`tclk_watch`. New review-worthy offers are
+resolved through the bounded fixed-origin Note resolver, persisted as public evidence,
+and then may be staged for the first PaperRail pilot. A separate signer-user PREPARE
+worker can mint private hash-lock material and publish only a public preview. Nothing
+in this Discord process signs, posts, accepts, locks, reveals, pays, executes task text,
+or follows arbitrary URLs.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from . import discord_knowledge as app
-from . import observer, tclk_note_review, tclk_review_evidence, tclk_triage, tclk_watch
+from . import observer, tclk_note_review, tclk_pilot, tclk_review_evidence, tclk_triage, tclk_watch
 
 VALIDATION_NOTE = (
     "parser validation: retained at ingestion; this review command does not re-probe "
@@ -22,11 +21,16 @@ VALIDATION_NOTE = (
 AUTO_RESOLVE_BATCH = 4
 AUTO_NOTICE_LIMIT = 2
 _AUTO_FAILURE_NOTIFIED: set[str] = set()
+_AUTO_PREVIEW_SEEN: set[str] = set()
+_AUTO_PREVIEW_BASELINED = False
 _TRANSIENT_EVIDENCE_ERRORS = {"full_spec_read_failed", "material_read_failed"}
 
 
+def _now_ms() -> int:
+    return int(datetime.now(UTC).timestamp() * 1000)
+
+
 def _live_offers() -> list[dict]:
-    """Return locally retained live offers; no network, parser subprocess, or write."""
     try:
         return tclk_watch.opportunities(observer.load_state())
     except RuntimeError:
@@ -42,11 +46,7 @@ def _stored_opportunities_message() -> str:
             "No validated signed PaperRail offers are currently live in local state. Nothing was accepted.",
             VALIDATION_NOTE,
         ])
-    lines = [
-        "🔒 tclk/1 opportunities (read-only)",
-        "",
-        f"validated offers: {len(rows)} (showing up to 5)",
-    ]
+    lines = ["🔒 tclk/1 opportunities (read-only)", "", f"validated offers: {len(rows)} (showing up to 5)"]
     for item in rows:
         lines.extend(["", app.base.base._tclk_offer_message(item)])
     lines.extend(["", VALIDATION_NOTE])
@@ -100,7 +100,6 @@ def _sanitize_note(value: object, limit: int | None = None) -> str:
 
 
 def _resolved_note_message(offer_id: str) -> str:
-    """Fetch bounded same-origin review evidence for one retained live offer."""
     try:
         item = tclk_watch.offer(observer.load_state(), offer_id)
     except RuntimeError:
@@ -116,7 +115,6 @@ def _resolved_note_message(offer_id: str) -> str:
             f"reason: {app.base.base.safe_excerpt(str(error), 80)}",
             "No task text was executed. No accept, sign, post, lock, reveal, or payment occurred.",
         ])
-
     spec = resolved["full_spec"]
     material = resolved["material"]
     lines = [
@@ -149,7 +147,6 @@ def _resolved_note_message(offer_id: str) -> str:
 
 
 def _stored_evidence_message(offer_id: str | None = None) -> str:
-    """Render durable public review evidence even after the offer expires."""
     try:
         if offer_id is None:
             records = tclk_review_evidence.load_store()["records"][-5:]
@@ -200,7 +197,14 @@ def _stored_evidence_message(offer_id: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def _auto_success_notice(item: dict, verdict: dict, record: dict) -> str:
+def _stage_offer(item: dict, record: dict) -> tuple[dict | None, str | None]:
+    try:
+        return tclk_pilot.stage_offer(item, evidence=record), None
+    except tclk_pilot.PilotError as error:
+        return None, str(error)
+
+
+def _auto_success_notice(item: dict, verdict: dict, record: dict, stage: dict | None, stage_error: str | None) -> str:
     offer_id = app.base.base.safe_excerpt(item.get("id") or "-", 70)
     job_id = app.base.base.safe_excerpt(item.get("job_id") or "-", 64)
     minutes = max(1, verdict["seconds_left"] // 60)
@@ -220,11 +224,18 @@ def _auto_success_notice(item: dict, verdict: dict, record: dict) -> str:
             f"material sha256: {material['sha256']}",
             f"material preview: {_sanitize_note(material['value'], 300)}",
         ])
+    if stage is not None:
+        lines.extend([
+            f"AUTO-STAGE: PASS / stage {stage['stage_id']}",
+            "PREPARE workerが自動でexact accept previewを作成します。",
+        ])
+    else:
+        lines.append(f"AUTO-STAGE: BLOCKED / {_sanitize_note(stage_error or 'unknown', 80)}")
     if record["external_url_present"]:
         lines.append("注意: Note内にURL文字列あり。BOTは開いていません。")
     lines.extend([
         f"保存証拠: /tclk-evidence {offer_id}（任意）",
-        "あなたがChatGPTへ貼る必要はありません。acceptはまだ自動実行しません。",
+        "ChatGPTへ即転送する必要はありません。accept・署名・投稿はまだ行いません。",
     ])
     return "\n".join(lines)
 
@@ -240,21 +251,17 @@ def _auto_failure_notice(item: dict, verdict: dict, reason: str, *, retrying: bo
         f"AUTO-RESOLVE: BLOCKED / {app.base.base.safe_excerpt(reason, 80)}",
         tail,
         f"ID: {offer_id}",
-        "あなたがChatGPTへ貼る必要はありません。accept・署名・投稿はしていません。",
+        "ChatGPTへ即転送する必要はありません。accept・署名・投稿はしていません。",
     ])
 
 
 def _new_auto_review_notices() -> list[str]:
-    """Resolve new review-worthy offers automatically; retry transient read failures."""
     global _AUTO_FAILURE_NOTIFIED
     try:
         items = tclk_watch.opportunities(observer.load_state())
     except RuntimeError:
         return []
-    active_ids = {
-        str(item.get("id")) for item in items
-        if isinstance(item.get("id"), str)
-    }
+    active_ids = {str(item.get("id")) for item in items if isinstance(item.get("id"), str)}
     if not app._TCLK_NOTICE_BASELINED:
         app._TCLK_NOTICE_SEEN = set(active_ids)
         app._TCLK_NOTICE_BASELINED = True
@@ -284,8 +291,9 @@ def _new_auto_review_notices() -> list[str]:
             continue
         app._TCLK_NOTICE_SEEN.add(offer_id)
         _AUTO_FAILURE_NOTIFIED.discard(offer_id)
+        stage, stage_error = _stage_offer(item, record)
         completed += 1
-        rendered.append(_auto_success_notice(item, verdict, record))
+        rendered.append(_auto_success_notice(item, verdict, record, stage, stage_error))
 
     visible = rendered[:AUTO_NOTICE_LIMIT]
     hidden = max(0, completed - sum("AUTO-RESOLVE: PASS" in item for item in visible))
@@ -294,15 +302,99 @@ def _new_auto_review_notices() -> list[str]:
     return visible
 
 
+def _preview_message(preview: dict) -> str:
+    minutes = max(0, (preview["expires_ms"] - _now_ms()) // 60000)
+    material = preview["material_sha256"] or "none"
+    return "\n".join([
+        "🟡 tclk/1 PREPARE完了 — 人間承認待ち",
+        f"stage: {preview['stage_id']}",
+        f"offer: {preview['offer_id']}",
+        f"残り時間: 約{minutes}分",
+        f"stage digest: {preview['stage_digest']}",
+        f"offer frame sha256: {preview['frame_sha256']}",
+        f"full spec sha256: {preview['full_spec_sha256']}",
+        f"material sha256: {material}",
+        f"accept sha256: {preview['accept_sha256']}",
+        f"contract: {preview['contract']}",
+        f"deal room: {preview['deal_room']}",
+        f"exact accept preview: {_sanitize_note(preview['accept_line'], 900)}",
+        "PREPARE ONLY — 署名・POST・accept publication・lock・reveal・paymentは0です。",
+        "次の実POSTは別のexact approval gateが必要です。",
+    ])
+
+
+def _new_prepare_notices() -> list[str]:
+    global _AUTO_PREVIEW_BASELINED, _AUTO_PREVIEW_SEEN
+    try:
+        previews = tclk_pilot.load_previews()["records"]
+    except tclk_pilot.PilotError:
+        return []
+    current = _now_ms()
+    active = [item for item in previews if item["posted"] is False and item["expires_ms"] > current]
+    ids = {item["stage_id"] for item in active}
+    if not _AUTO_PREVIEW_BASELINED:
+        _AUTO_PREVIEW_SEEN = set(ids)
+        _AUTO_PREVIEW_BASELINED = True
+        return []
+    _AUTO_PREVIEW_SEEN.intersection_update(ids)
+    fresh = [item for item in active if item["stage_id"] not in _AUTO_PREVIEW_SEEN]
+    for item in fresh:
+        _AUTO_PREVIEW_SEEN.add(item["stage_id"])
+    return [_preview_message(item) for item in fresh[:AUTO_NOTICE_LIMIT]]
+
+
+def _runtime_notices() -> list[str]:
+    return (_new_auto_review_notices() + _new_prepare_notices())[:3]
+
+
+def _stage_message(offer_id: str) -> str:
+    try:
+        item = tclk_watch.offer(observer.load_state(), offer_id)
+    except RuntimeError:
+        item = None
+    if item is None:
+        return "No validated live read-only tclk/1 offer found for that ID. Nothing was staged."
+    try:
+        evidence = tclk_review_evidence.get(offer_id)
+        stage = tclk_pilot.stage_offer(item, evidence=evidence)
+    except (tclk_review_evidence.EvidenceError, tclk_pilot.PilotError) as error:
+        return f"🔒 tclk stage blocked (fail-closed): {_sanitize_note(str(error), 80)}"
+    return "\n".join([
+        "🧩 tclk/1 typed stage ready",
+        f"stage: {stage['stage_id']}",
+        f"digest: {stage['stage_digest']}",
+        f"offer: {stage['offer_id']}",
+        "PREPARE worker will process it separately. No sign or POST occurred.",
+    ])
+
+
+def _prepare_message(stage_id: str | None = None) -> str:
+    try:
+        if stage_id is not None:
+            preview = tclk_pilot.get_preview(stage_id)
+            return "PREPARE is still pending or no matching stage exists." if preview is None else _preview_message(preview)
+        rows = tclk_pilot.load_previews()["records"][-5:]
+    except tclk_pilot.PilotError as error:
+        return f"🔒 tclk PREPARE evidence unavailable (fail-closed): {_sanitize_note(str(error), 80)}"
+    if not rows:
+        return "🧩 tclk PREPARE\nNo public PREPARE previews stored yet."
+    lines = ["🧩 tclk PREPARE recent"]
+    for item in reversed(rows):
+        lines.append(f"・{item['stage_id']} | accept {item['accept_sha256'][:12]}… | posted={item['posted']}")
+    lines.append("詳細: /tclk-prepare <stage-id>")
+    return "\n".join(lines)
+
+
 _BaseControl = app.Control
 
 
 class Control(_BaseControl):
-    """Add authenticated read-only evidence resolver/history commands."""
+    """Add authenticated review/evidence/stage/preview commands; no protocol write."""
 
     def command(self, user_id: str, text: str, channel_id: str | None = None) -> dict:
         parts = text.strip().split()
-        if parts and parts[0] in {"/tclk-resolve", "/tclk-evidence"}:
+        commands = {"/tclk-resolve", "/tclk-evidence", "/tclk-stage", "/tclk-prepare", "/tclk-prepared"}
+        if parts and parts[0] in commands:
             if channel_id is not None and channel_id != self.channel_id:
                 return {"ok": False, "error": "wrong_channel", "message": "Control access denied."}
             if user_id not in self.allowed_ids:
@@ -311,18 +403,29 @@ class Control(_BaseControl):
                 if len(parts) == 2:
                     return {"ok": True, "data": {}, "message": _resolved_note_message(parts[1])}
                 return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-resolve <offer-id>"}
-            if len(parts) in {1, 2}:
-                return {"ok": True, "data": {}, "message": _stored_evidence_message(parts[1] if len(parts) == 2 else None)}
-            return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-evidence [offer-id]"}
+            if parts[0] == "/tclk-evidence":
+                if len(parts) in {1, 2}:
+                    return {"ok": True, "data": {}, "message": _stored_evidence_message(parts[1] if len(parts) == 2 else None)}
+                return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-evidence [offer-id]"}
+            if parts[0] == "/tclk-stage":
+                if len(parts) == 2:
+                    return {"ok": True, "data": {}, "message": _stage_message(parts[1])}
+                return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-stage <offer-id>"}
+            if parts[0] == "/tclk-prepare":
+                if len(parts) == 2:
+                    return {"ok": True, "data": {}, "message": _prepare_message(parts[1])}
+                return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-prepare <stage-id>"}
+            if len(parts) == 1:
+                return {"ok": True, "data": {}, "message": _prepare_message()}
+            return {"ok": False, "error": "invalid_args", "message": "Usage: /tclk-prepared"}
 
         result = super().command(user_id, text, channel_id)
         if result.get("ok") and parts and parts[0] == "/help" and len(parts) == 1:
-            result["message"] += " | tclk evidence: /tclk-resolve <offer-id> /tclk-evidence [offer-id]"
+            result["message"] += " | tclk: /tclk-resolve <offer-id> /tclk-evidence [offer-id] /tclk-stage <offer-id> /tclk-prepared /tclk-prepare <stage-id>"
         return result
 
 
 def install() -> None:
-    """Patch review callbacks and the authenticated control subclass only."""
     app.base.base.tclk_opportunities_message = _stored_opportunities_message
     app.base.base.tclk_offer_message = _stored_offer_message
     app._tclk_detail_message = _stored_detail_message
@@ -332,9 +435,7 @@ def install() -> None:
 
 def main() -> None:
     install()
-    # Runtime-only replacement: keep direct discord_knowledge tests/usage on its accepted
-    # legacy notice function while this final overlay uses automatic evidence resolution.
-    app._new_tclk_review_notices = _new_auto_review_notices
+    app._new_tclk_review_notices = _runtime_notices
     app.main()
 
 
