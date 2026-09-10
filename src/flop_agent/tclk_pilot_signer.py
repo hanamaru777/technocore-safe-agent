@@ -250,9 +250,10 @@ def prepare_stage(
         _require_preview_binding(existing, stage)
         _require_protocol_file(stage_id)
         return {"action": "already_prepared", "preview": existing}
-    if protocol_path.exists():
-        raise PrepareError("orphan_protocol_material_present")
 
+    recovering = protocol_path.exists()
+    if recovering:
+        _require_protocol_file(stage_id)
     _resolve_and_bind(stage, reader=reader, now_ms=current)
     prepared = _run_bridge(stage)
     _require_protocol_file(stage_id)
@@ -271,7 +272,7 @@ def prepare_stage(
         observer.atomic_json_write(tclk_pilot.preview_path(stage_id), preview, compact=True, mode=0o640)
     except OSError as error:
         raise PrepareError("preview_persistence_failed") from error
-    return {"action": "prepared", "preview": preview}
+    return {"action": "recovered" if recovering else "prepared", "preview": preview}
 
 
 def prepare_next(
@@ -294,12 +295,12 @@ def prepare_next(
             continue
         preview_exists = tclk_pilot.preview_path(stage["stage_id"]).exists()
         protocol_exists = tclk_pilot.secret_path(stage["stage_id"]).exists()
-        if protocol_exists and not preview_exists:
-            raise PrepareError("orphan_protocol_material_present")
         if preview_exists and not protocol_exists:
             raise PrepareError("protocol_material_missing")
         if preview_exists:
             continue
+        if protocol_exists:
+            _require_protocol_file(stage["stage_id"])
         candidates.append(stage)
     if not candidates:
         return {"action": "idle", "preview": None}

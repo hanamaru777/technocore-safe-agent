@@ -1,7 +1,7 @@
 [Unit]
 Description=technocore-safe-agent tclk first-pilot PREPARE-only helper
-After=network-online.target
-Wants=network-online.target
+After=network-online.target technocore-safe-agent-metadata-block.service
+Requires=technocore-safe-agent-metadata-block.service
 
 [Service]
 Type=oneshot
@@ -9,7 +9,8 @@ User=technocore-signer
 Group=technocore-signer
 SupplementaryGroups=technocore-autopilot
 WorkingDirectory=/opt/technocore-safe-agent
-EnvironmentFile=/etc/technocore-safe-agent/signer.env
+# Public DID only. Never load signer.env or any Vault configuration into PREPARE.
+EnvironmentFile=/etc/technocore-safe-agent/tclk-prepare.env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_pilot_signer
@@ -24,4 +25,5 @@ ProtectKernelTunables=true
 ProtectKernelLogs=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=169.254.169.254
 ReadWritePaths=/var/lib/technocore-safe-agent/autopilot /var/lib/technocore-safe-agent/signer
