@@ -1,8 +1,8 @@
 """Typed one-shot publisher for the first genuine tclk/1 PaperRail accept.
 
-The only CLI input is a 32-hex stage id.  Human approval is loaded from a
+The only CLI input is a 32-hex stage id. Human approval is loaded from a
 root-owned exact-binding record; the accept line itself is reconstructed from the
-already-PREPAREd signer material and pinned tclk runtime.  No arbitrary text,
+already-PREPAREd signer material and pinned tclk runtime. No arbitrary text,
 room, URL or task command can enter the signing path.
 """
 from __future__ import annotations
@@ -76,9 +76,9 @@ def _load_approval(stage_id: str, stage: dict, preview: dict, *, now_ms: int) ->
 
 def _state_required() -> set[str]:
     return {
-        "schema_version", "state", "stage_id", "approval_digest", "offer_id", "accept_sha256",
-        "contract_id", "deal_room", "did", "nonce", "sig", "prepared_at", "attempted_at",
-        "posted_at", "seq", "ts", "last_error", "git_commit_sha", "executed_at",
+        "schema_version", "state", "stage_id", "approval_digest", "offer_id", "accept_line",
+        "accept_sha256", "contract_id", "deal_room", "did", "nonce", "sig", "prepared_at",
+        "attempted_at", "posted_at", "seq", "ts", "last_error", "git_commit_sha", "executed_at",
     }
 
 
@@ -92,6 +92,10 @@ def _validate_state(value: object) -> dict:
     for field in ("approval_digest", "accept_sha256", "git_commit_sha"):
         if not isinstance(value.get(field), str) or not _HEX64.fullmatch(value[field]):
             raise AcceptError("accept_state_invalid")
+    if not isinstance(value.get("accept_line"), str) or not value["accept_line"].startswith("tclk1 "):
+        raise AcceptError("accept_state_invalid")
+    if hashlib.sha256(value["accept_line"].encode("utf-8")).hexdigest() != value["accept_sha256"]:
+        raise AcceptError("accept_state_invalid")
     if not isinstance(value.get("offer_id"), str) or not re.fullmatch(r"0x[0-9a-f]{64}", value["offer_id"]):
         raise AcceptError("accept_state_invalid")
     if not isinstance(value.get("contract_id"), str) or not re.fullmatch(r"0x[0-9a-f]{64}", value["contract_id"]):
@@ -311,6 +315,7 @@ def _new_prepared_state(stage: dict, approval: dict, preview: dict, *, now_ms: i
         "stage_id": stage["stage_id"],
         "approval_digest": approval["approval_digest"],
         "offer_id": stage["offer_id"],
+        "accept_line": preview["accept_line"],
         "accept_sha256": preview["accept_sha256"],
         "contract_id": preview["contract_id"],
         "deal_room": preview["deal_room"],
@@ -364,15 +369,24 @@ def _post_once(value: dict, accept_line: str):
 
 def accept_stage(stage_id: str, *, now_ms: int | None = None) -> dict:
     current = _now_ms() if now_ms is None else now_ms
-    stage, preview, approval, _ = _exact_prepared(stage_id, now_ms=current)
     value = _load_state(stage_id)
+
+    # Once an irreversible POST may have been attempted, reconciliation must stay
+    # available even after the offer expires or its source Notes later change.
+    # The exact signed line is persisted in the private state before the attempt.
+    if value is not None and value["state"] == "posted":
+        return {"action": "already_posted", "state": value}
+    if value is not None and value["state"] in {"attempting", "ambiguous"}:
+        return _reconcile(value, value["accept_line"])
+
+    stage, preview, approval, _ = _exact_prepared(stage_id, now_ms=current)
     if value is not None:
-        if value["approval_digest"] != approval["approval_digest"] or value["accept_sha256"] != preview["accept_sha256"]:
+        if (
+            value["approval_digest"] != approval["approval_digest"]
+            or value["accept_sha256"] != preview["accept_sha256"]
+            or value["accept_line"] != preview["accept_line"]
+        ):
             raise AcceptError("accept_state_binding_mismatch")
-        if value["state"] == "posted":
-            return {"action": "already_posted", "state": value}
-        if value["state"] in {"attempting", "ambiguous"}:
-            return _reconcile(value, preview["accept_line"])
     else:
         value = _new_prepared_state(stage, approval, preview, now_ms=current)
 
@@ -387,14 +401,21 @@ def accept_stage(stage_id: str, *, now_ms: int | None = None) -> dict:
     _save_state(value)
 
     try:
-        response = _post_once(value, preview["accept_line"])
-        matched = _validate_transport_response(value, preview["accept_line"], response)
-        _mark_posted(value, preview["accept_line"], matched)
+        response = _post_once(value, value["accept_line"])
+        matched = _validate_transport_response(value, value["accept_line"], response)
+        _mark_posted(value, value["accept_line"], matched)
     except Exception as error:
         value["state"] = "ambiguous"
         value["last_error"] = "submission_unknown"
         try:
             _save_state(value)
+        except AcceptError:
+            pass
+        # One immediate read-only reconciliation is safe. Never retry the POST.
+        try:
+            reconciled = _reconcile(value, value["accept_line"])
+            if reconciled["action"] == "reconciled":
+                return reconciled
         except AcceptError:
             pass
         raise AcceptError("submission_unknown") from error
