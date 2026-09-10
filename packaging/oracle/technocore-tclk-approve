@@ -44,7 +44,10 @@ PYTHONPATH=$REPO/src FLOP_STATE_DIR=$STATE \
 [[ -s $TMP ]] || { echo 'approval validator returned no record' >&2; exit 1; }
 chown root:technocore-signer "$TMP"
 chmod 0640 "$TMP"
-mv "$TMP" "$DEST"
+# Hard-link publication is atomic and fails if another root approval already
+# won the exact destination. Never replace an approval record in a race.
+ln "$TMP" "$DEST" || { echo 'approval already exists; refusing replacement' >&2; exit 1; }
+rm -f "$TMP"
 trap - EXIT
 
 systemctl start "$UNIT"
