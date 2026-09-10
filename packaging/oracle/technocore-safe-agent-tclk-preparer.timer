@@ -1,0 +1,11 @@
+[Unit]
+Description=technocore-safe-agent periodic tclk first-pilot PREPARE-only helper
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=30
+AccuracySec=5
+Unit=technocore-safe-agent-tclk-preparer.service
+
+[Install]
+WantedBy=timers.target

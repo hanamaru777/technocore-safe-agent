@@ -1,0 +1,11 @@
+[Unit]
+Description=technocore-safe-agent periodic tclk first-pilot staging
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=30
+AccuracySec=5
+Unit=technocore-safe-agent-tclk-stager.service
+
+[Install]
+WantedBy=timers.target
