@@ -100,5 +100,5 @@ def test_install_patches_only_discord_presentation_callbacks(monkeypatch):
 
 def test_oracle_discord_service_uses_stored_review_entrypoint():
     unit = Path("packaging/oracle/discord.service").read_text("utf-8")
-    assert "-m flop_agent.discord_tclk_review" in unit
-    assert "-m flop_agent.discord_knowledge" not in unit
+    assert "ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.discord_tclk_review" in unit
+    assert "python -m flop_agent.discord_knowledge" in unit  # documented inner stack remains intact
