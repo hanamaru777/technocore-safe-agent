@@ -9,7 +9,7 @@ User=technocore-signer
 Group=technocore-signer
 SupplementaryGroups=technocore-autopilot
 WorkingDirectory=/opt/technocore-safe-agent
-# Public DID only. Never load Vault configuration into reveal PREPARE.
+# Public DID only. Never load signer.env or Vault configuration into reveal PREPARE.
 EnvironmentFile=/etc/technocore-safe-agent/tclk-prepare.env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
