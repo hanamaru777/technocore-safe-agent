@@ -52,8 +52,8 @@ def evidence_record():
         "receipt_seq": None,
         "receipt_ts": None,
         "receipt_from": None,
-        "reveal_publish_git_commit_sha": _hash("d"),
-        "git_commit_sha": _hash("e"),
+        "reveal_publish_git_commit_sha": "d" * 40,
+        "git_commit_sha": "e" * 40,
     }
     value["terminal_evidence_sha256"] = terminal._sha(value)
     return value
@@ -68,6 +68,16 @@ def test_terminal_evidence_schema_is_hash_bound_and_public_safe():
         terminal._validate_evidence(changed)
     text = json.dumps(value)
     assert "preimage" not in text and "reveal_line" not in text
+
+
+def test_terminal_evidence_rejects_wrong_length_git_commit_ids():
+    for field in ("reveal_publish_git_commit_sha", "git_commit_sha"):
+        for bad in ("a" * 39, "a" * 41, "a" * 64):
+            value = evidence_record()
+            value[field] = bad
+            value["terminal_evidence_sha256"] = terminal._sha({k: v for k, v in value.items() if k != "terminal_evidence_sha256"})
+            with pytest.raises(terminal.TerminalError, match="terminal_evidence_invalid"):
+                terminal._validate_evidence(value)
 
 
 def test_receipt_fields_are_all_or_none():
