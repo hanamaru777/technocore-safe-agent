@@ -1,6 +1,5 @@
 import hashlib
 import json
-from pathlib import Path
 
 import pytest
 
@@ -15,6 +14,7 @@ PAYER = "did:key:z6Mk" + "5" * 44
 PAYEE = "did:key:z6Mk" + "6" * 44
 CONTRACT = "0x" + "7" * 64
 DEAL_ROOM = "mb-p-tclk-" + "7" * 16
+ACCEPT_HASH = "a" * 64
 LOCK_HASH = "8" * 64
 PAPER_HASH = "9" * 64
 
@@ -40,7 +40,7 @@ def fixture_set(material='{"a":1,"b":[2,3]}', *, spec=None):
         "full_spec_sha256": full_note["sha256"],
         "material_sha256": material_note["sha256"],
     }
-    preview = {"contract_id": CONTRACT, "deal_room": DEAL_ROOM}
+    preview = {"contract_id": CONTRACT, "deal_room": DEAL_ROOM, "accept_sha256": ACCEPT_HASH}
     review = {
         "offer_id": OFFER_ID,
         "job_id": "job-1",
@@ -59,6 +59,7 @@ def fixture_set(material='{"a":1,"b":[2,3]}', *, spec=None):
         "job_id": "job-1",
         "contract_id": CONTRACT,
         "deal_room": DEAL_ROOM,
+        "accept_line_sha256": ACCEPT_HASH,
         "lock_from": PAYER,
         "lock_ref": CONTRACT,
         "lock_seq": 3,
@@ -93,6 +94,9 @@ def test_hash_and_json_work_persists_public_safe_evidence(monkeypatch, tmp_path)
     assert evidence["result"]["json_top_level"] == "object"
     assert evidence["result"]["json_items"] == 2
     assert evidence["contract_id"] == CONTRACT
+    assert evidence["deal_room"] == DEAL_ROOM
+    assert evidence["our_did"] == PAYEE
+    assert evidence["accept_sha256"] == ACCEPT_HASH
     assert evidence["lock_line_sha256"] == LOCK_HASH
     assert evidence["paper_note_sha256"] == PAPER_HASH
     assert tclk_pilot_work.evidence_path(STAGE_ID).is_file()
@@ -103,7 +107,7 @@ def test_hash_and_json_work_persists_public_safe_evidence(monkeypatch, tmp_path)
 
 def test_hash_mismatch_is_durable_failed_work_and_never_ready(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
-    stage, preview, review, lock = fixture_set(spec=f"Check artifact sha256:{'a' * 64} /kv/tclk-mat-en/k")
+    stage, preview, review, lock = fixture_set(spec=f"Check artifact sha256:{'b' * 64} /kv/tclk-mat-en/k")
     bind(monkeypatch, stage, preview, review, lock)
     result = tclk_pilot_work.run_stage(STAGE_ID)
     assert result["action"] == "work_failed"
@@ -121,13 +125,15 @@ def test_json_only_validation_is_supported(monkeypatch, tmp_path):
     assert result["evidence"]["result"]["json_valid"] is True
 
 
-def test_invalid_json_is_failed_not_claimed_complete(monkeypatch, tmp_path):
+def test_invalid_or_nonfinite_json_is_failed_not_claimed_complete(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
-    stage, preview, review, lock = fixture_set(material="not-json", spec="Verify JSON data /kv/tclk-mat-en/k")
-    bind(monkeypatch, stage, preview, review, lock)
-    result = tclk_pilot_work.run_stage(STAGE_ID)
-    assert result["action"] == "work_failed"
-    assert result["evidence"]["result"]["json_valid"] is False
+    for material in ("not-json", '{"value":NaN}'):
+        stage, preview, review, lock = fixture_set(material=material, spec="Verify JSON data /kv/tclk-mat-en/k")
+        bind(monkeypatch, stage, preview, review, lock)
+        result = tclk_pilot_work.run_stage(STAGE_ID)
+        assert result["action"] == "work_failed"
+        assert result["evidence"]["result"]["json_valid"] is False
+        tclk_pilot_work.evidence_path(STAGE_ID).unlink()
 
 
 @pytest.mark.parametrize(
@@ -151,7 +157,7 @@ def test_unsupported_or_executable_work_fails_closed(monkeypatch, tmp_path, spec
     assert not tclk_pilot_work.evidence_path(STAGE_ID).exists()
 
 
-def test_changed_review_or_lock_binding_fails_closed(monkeypatch, tmp_path):
+def test_changed_review_lock_or_public_accept_binding_fails_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     stage, preview, review, lock = fixture_set()
     review["frame_sha256"] = "f" * 64
@@ -165,8 +171,21 @@ def test_changed_review_or_lock_binding_fails_closed(monkeypatch, tmp_path):
     with pytest.raises(tclk_pilot_work.WorkError, match="lock_binding_changed"):
         tclk_pilot_work.run_stage(STAGE_ID)
 
+    stage, preview, review, lock = fixture_set()
+    preview["deal_room"] = "mb-p-tclk-" + "e" * 16
+    lock["deal_room"] = preview["deal_room"]
+    bind(monkeypatch, stage, preview, review, lock)
+    with pytest.raises(tclk_pilot_work.WorkError, match="public_accept_binding_invalid"):
+        tclk_pilot_work.run_stage(STAGE_ID)
 
-def test_existing_exact_work_is_idempotent_and_conflict_never_replaces(monkeypatch, tmp_path):
+    stage, preview, review, lock = fixture_set()
+    lock["accept_line_sha256"] = "e" * 64
+    bind(monkeypatch, stage, preview, review, lock)
+    with pytest.raises(tclk_pilot_work.WorkError, match="lock_binding_changed"):
+        tclk_pilot_work.run_stage(STAGE_ID)
+
+
+def test_existing_exact_work_is_idempotent_and_tamper_never_replaces(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     stage, preview, review, lock = fixture_set()
     bind(monkeypatch, stage, preview, review, lock)
@@ -179,7 +198,7 @@ def test_existing_exact_work_is_idempotent_and_conflict_never_replaces(monkeypat
     tampered = json.loads(path.read_text())
     tampered["result"]["material_bytes"] += 1
     path.write_text(json.dumps(tampered))
-    with pytest.raises(tclk_pilot_work.WorkError, match="work_evidence_hash_mismatch"):
+    with pytest.raises(tclk_pilot_work.WorkError, match="work_evidence_invalid"):
         tclk_pilot_work.run_stage(STAGE_ID)
 
 
