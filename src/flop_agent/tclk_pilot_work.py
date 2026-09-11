@@ -20,6 +20,7 @@ from . import observer, tclk_pilot, tclk_pilot_lock, tclk_pilot_signer, tclk_rev
 
 SCHEMA_VERSION = 1
 MAX_SCAN = 4
+MAX_EVIDENCE = 32
 MAX_RESULT_FIELDS = 16
 MAX_MATERIAL_BYTES = 8192
 
@@ -292,9 +293,11 @@ def _validate_evidence(value: object) -> dict:
     if status not in {"work_ready", "work_failed"} or not isinstance(value.get("created_at"), str):
         raise WorkError("work_evidence_invalid")
     try:
-        datetime.fromisoformat(value["created_at"].replace("Z", "+00:00"))
+        parsed_created = datetime.fromisoformat(value["created_at"].replace("Z", "+00:00"))
     except ValueError as error:
         raise WorkError("work_evidence_invalid") from error
+    if parsed_created.tzinfo is None:
+        raise WorkError("work_evidence_invalid")
     if not isinstance(value.get("stage_id"), str) or not _HEX32.fullmatch(value["stage_id"]):
         raise WorkError("work_evidence_invalid")
     if not isinstance(value.get("offer_id"), str) or not _OFFER_ID.fullmatch(value["offer_id"]):
@@ -322,7 +325,7 @@ def _validate_evidence(value: object) -> dict:
     if not isinstance(family, str):
         raise WorkError("work_evidence_invalid")
     _validate_result(family, value.get("result"), status, value["material_sha256"])
-    payload = {key: item for key, item in value.items() if key not in {"created_at", "work_evidence_sha256"}}
+    payload = {key: item for key, item in value.items() if key != "work_evidence_sha256"}
     if not hmac.compare_digest(_sha(payload), value["work_evidence_sha256"]):
         raise WorkError("work_evidence_hash_mismatch")
     return value
@@ -337,6 +340,15 @@ def load_evidence(stage_id: str) -> dict | None:
     except (OSError, json.JSONDecodeError, ValueError) as error:
         raise WorkError("work_evidence_invalid") from error
     return _validate_evidence(value)
+
+
+def _prune_evidence() -> None:
+    try:
+        files = sorted(evidence_dir().glob("*.json"), key=lambda path: path.stat().st_mtime)
+        for path in files[:-MAX_EVIDENCE]:
+            path.unlink()
+    except OSError as error:
+        raise WorkError("work_evidence_persistence_failed") from error
 
 
 def run_stage(stage_id: str) -> dict:
@@ -356,7 +368,7 @@ def run_stage(stage_id: str) -> dict:
     full_hash, material_hash, contract_id = _require_bindings(stage, preview, review, lock)
     family, result, ok = _task_result(review)
     status = "work_ready" if ok else "work_failed"
-    payload = {
+    base = {
         "schema_version": SCHEMA_VERSION,
         "status": status,
         "stage_id": stage["stage_id"],
@@ -378,21 +390,21 @@ def run_stage(stage_id: str) -> dict:
         "work_family": family,
         "result": result,
     }
-    record = {
-        **payload,
-        "created_at": _now(),
-        "work_evidence_sha256": _sha(payload),
-    }
-    _validate_evidence(record)
 
     existing = load_evidence(stage_id)
     if existing is not None:
-        if existing["work_evidence_sha256"] != record["work_evidence_sha256"]:
+        expected = {**base, "created_at": existing["created_at"]}
+        if not hmac.compare_digest(_sha(expected), existing["work_evidence_sha256"]):
             raise WorkError("work_evidence_conflict")
         return {"action": "already_recorded", "evidence": existing}
+
+    record_without_hash = {**base, "created_at": _now()}
+    record = {**record_without_hash, "work_evidence_sha256": _sha(record_without_hash)}
+    _validate_evidence(record)
     try:
         evidence_dir().mkdir(parents=True, exist_ok=True, mode=0o770)
         observer.atomic_json_write(evidence_path(stage_id), record, compact=True, mode=0o640)
+        _prune_evidence()
     except OSError as error:
         raise WorkError("work_evidence_persistence_failed") from error
     return {"action": status, "evidence": record}
