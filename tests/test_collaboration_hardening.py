@@ -190,8 +190,11 @@ def test_direct_reply_index_avoids_records_times_candidates_scan(monkeypatch):
 
 def test_discord_service_runs_collaboration_stack():
     text = Path("packaging/oracle/discord.service").read_text("utf-8")
-    assert "-m flop_agent.discord_knowledge" in text
+    assert "-m flop_agent.discord_tclk_approval" in text
     assert "-m flop_agent.discord_control" not in text
-    # The knowledge wrapper must continue layering the accepted collaboration UX.
-    wrapper = Path("src/flop_agent/discord_knowledge.py").read_text("utf-8")
-    assert "from . import discord_collaboration as base" in wrapper
+    approval = Path("src/flop_agent/discord_tclk_approval.py").read_text("utf-8")
+    review = Path("src/flop_agent/discord_tclk_review.py").read_text("utf-8")
+    knowledge_wrapper = Path("src/flop_agent/discord_knowledge.py").read_text("utf-8")
+    assert "from . import discord_tclk_review as app" in approval
+    assert "from . import discord_knowledge as app" in review
+    assert "from . import discord_collaboration as base" in knowledge_wrapper
