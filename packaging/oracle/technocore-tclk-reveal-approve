@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Separate root-operated reveal approval. Accept approval is deliberately unusable here.
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  echo 'tclk reveal approval requires root' >&2
+  exit 1
+fi
+if [[ $# -ne 3 ]]; then
+  echo 'usage: technocore-tclk-reveal-approve <stage-id> <approval-digest> APPROVE_REVEAL' >&2
+  exit 2
+fi
+
+STAGE=$1
+DIGEST=$2
+CONFIRM=$3
+[[ $STAGE =~ ^[0-9a-f]{32}$ ]] || { echo 'invalid stage id' >&2; exit 2; }
+[[ $DIGEST =~ ^[0-9a-f]{64}$ ]] || { echo 'invalid approval digest' >&2; exit 2; }
+[[ $CONFIRM == APPROVE_REVEAL ]] || { echo 'exact APPROVE_REVEAL confirmation required' >&2; exit 2; }
+
+REPO=/opt/technocore-safe-agent
+STATE=/var/lib/technocore-safe-agent
+DIR=$STATE/signer/tclk-pilot-reveal-approvals
+DEST=$DIR/$STAGE.json
+UNIT=technocore-safe-agent-tclk-reveal@${STAGE}.service
+
+install -d -o root -g technocore-signer -m 0750 "$DIR"
+if [[ -e $DEST || -L $DEST ]]; then
+  echo 'reveal approval already exists; refusing replacement' >&2
+  exit 1
+fi
+TMP=$(mktemp "$DIR/.approval.XXXXXX")
+cleanup(){ rm -f "$TMP"; }
+trap cleanup EXIT
+
+PYTHONPATH=$REPO/src FLOP_STATE_DIR=$STATE \
+  "$REPO/.venv/bin/python" -m flop_agent.tclk_pilot_reveal_approval \
+  "$STAGE" "$DIGEST" APPROVE_REVEAL > "$TMP"
+[[ -s $TMP ]] || { echo 'reveal approval validator returned no record' >&2; exit 1; }
+chown root:technocore-signer "$TMP"
+chmod 0640 "$TMP"
+ln "$TMP" "$DEST" || { echo 'reveal approval already exists; refusing replacement' >&2; exit 1; }
+rm -f "$TMP"
+trap - EXIT
+
+systemctl start "$UNIT"
+echo "TCLK_FIRST_PILOT_REVEAL=started stage=$STAGE"
