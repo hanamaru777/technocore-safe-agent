@@ -182,6 +182,7 @@ def test_ambiguous_post_terminalizes_and_next_run_never_reposts(monkeypatch):
     monkeypatch.setattr(tclk_pilot_accept, "_exact_prepared", lambda *_a, **_k: (s, p, approval, {}))
     monkeypatch.setattr(tclk_pilot_accept, "_load_state", lambda _stage_id: value)
     monkeypatch.setattr(tclk_pilot_accept, "_save_state", lambda _value: None)
+    monkeypatch.setattr(tclk_pilot_accept, "_require_write_interlock", lambda: None)
     monkeypatch.setattr(tclk_pilot_accept, "_reconcile", lambda current, _text: {"action": "ambiguous", "state": current})
     post_calls = []
     monkeypatch.setattr(
