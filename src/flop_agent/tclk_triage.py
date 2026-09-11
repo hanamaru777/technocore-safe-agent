@@ -67,6 +67,11 @@ def classify(item: dict, *, now_ms: int | None = None) -> dict:
         return _result("blocked", "non_paper_rail", seconds_left)
     if item.get("job_proto") != "a2a":
         return _result("skip", "first_pilot_proto_not_a2a", seconds_left)
+    # The first real pilot is intentionally payee-side only. The pinned tclk hash-lock
+    # choreography has the payee mint the preimage at accept and the payer lock later.
+    # Missing role is legacy/incomplete evidence and must not be guessed.
+    if item.get("role") != "payer":
+        return _result("skip", "first_pilot_role_not_payer", seconds_left)
 
     terms = item.get("terms_full")
     frame_hash = item.get("frame_sha256")
