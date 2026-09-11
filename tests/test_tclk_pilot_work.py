@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 
 import pytest
 
@@ -185,7 +186,7 @@ def test_changed_review_lock_or_public_accept_binding_fails_closed(monkeypatch, 
         tclk_pilot_work.run_stage(STAGE_ID)
 
 
-def test_existing_exact_work_is_idempotent_and_tamper_never_replaces(monkeypatch, tmp_path):
+def test_existing_exact_work_is_idempotent_and_any_tamper_never_replaces(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     stage, preview, review, lock = fixture_set()
     bind(monkeypatch, stage, preview, review, lock)
@@ -198,8 +199,32 @@ def test_existing_exact_work_is_idempotent_and_tamper_never_replaces(monkeypatch
     tampered = json.loads(path.read_text())
     tampered["result"]["material_bytes"] += 1
     path.write_text(json.dumps(tampered))
-    with pytest.raises(tclk_pilot_work.WorkError, match="work_evidence_invalid"):
+    with pytest.raises(tclk_pilot_work.WorkError, match="work_evidence_hash_mismatch"):
         tclk_pilot_work.run_stage(STAGE_ID)
+
+    path.write_text(json.dumps(first["evidence"]))
+    tampered = json.loads(path.read_text())
+    tampered["created_at"] = "2033-05-18T03:33:20+00:00"
+    path.write_text(json.dumps(tampered))
+    with pytest.raises(tclk_pilot_work.WorkError, match="work_evidence_hash_mismatch"):
+        tclk_pilot_work.run_stage(STAGE_ID)
+
+
+def test_work_evidence_retention_is_bounded(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    directory = tclk_pilot_work.evidence_dir()
+    directory.mkdir(parents=True)
+    total = tclk_pilot_work.MAX_EVIDENCE + 3
+    for index in range(total):
+        path = directory / f"{index:032x}.json"
+        path.write_text("{}")
+        os.utime(path, (index + 1, index + 1))
+    tclk_pilot_work._prune_evidence()
+    files = sorted(directory.glob("*.json"))
+    assert len(files) == tclk_pilot_work.MAX_EVIDENCE
+    assert not (directory / f"{0:032x}.json").exists()
+    assert not (directory / f"{1:032x}.json").exists()
+    assert not (directory / f"{2:032x}.json").exists()
 
 
 def test_work_slice_never_reads_signer_private_protocol_path(monkeypatch, tmp_path):
