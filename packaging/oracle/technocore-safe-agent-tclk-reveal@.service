@@ -1,0 +1,32 @@
+[Unit]
+Description=technocore-safe-agent typed tclk first-pilot reveal for stage %i
+After=network-online.target technocore-safe-agent-metadata-block.service
+Wants=network-online.target
+Requires=technocore-safe-agent-metadata-block.service
+
+[Service]
+Type=oneshot
+User=technocore-signer
+Group=technocore-signer
+SupplementaryGroups=technocore-autopilot
+WorkingDirectory=/opt/technocore-safe-agent
+# Separate one-shot reveal path; no timer. Vault is used only to sign the exact
+# already-PREPAREd reveal after a root-owned APPROVE_REVEAL record exists.
+EnvironmentFile=/etc/technocore-safe-agent/signer.env
+Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
+Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+Environment=UV_CACHE_DIR=/var/lib/technocore-safe-agent/signer/uv-cache
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_pilot_reveal_publish %i
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=169.254.169.254
+ReadWritePaths=/var/lib/technocore-safe-agent/autopilot /var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json /var/lib/technocore-safe-agent/activities.jsonl
