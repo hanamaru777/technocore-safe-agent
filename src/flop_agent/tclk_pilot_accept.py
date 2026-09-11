@@ -23,6 +23,8 @@ from . import core, observer, oracle_signer, tclk_pilot, tclk_pilot_approval, tc
 
 SCHEMA_VERSION = 1
 MIN_POST_SECONDS = 60
+PROTECTED_CORE_GAP_EVENTS = 117
+PROTECTED_CORE_GAP_MESSAGES = 5_083_155
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -146,6 +148,23 @@ def _save_state(value: dict) -> None:
         observer.atomic_json_write(state_path(value["stage_id"]), value, compact=True, mode=0o600)
     except OSError as error:
         raise AcceptError("accept_state_persistence_failed") from error
+
+
+def _require_write_interlock() -> None:
+    """Fail closed unless current Observer state is safe for a new irreversible write."""
+    try:
+        state = observer.load_state()
+    except Exception as error:
+        raise AcceptError("observer_state_unavailable") from error
+    health = state.get("health", {})
+    metrics = state.get("metrics", {})
+    if not isinstance(health, dict) or health.get("current") != "ok":
+        raise AcceptError("observer_health_not_ok")
+    if (
+        metrics.get("unrecoverable_core_gap_events") != PROTECTED_CORE_GAP_EVENTS
+        or metrics.get("unrecoverable_core_gap_messages") != PROTECTED_CORE_GAP_MESSAGES
+    ):
+        raise AcceptError("protected_core_baseline_changed")
 
 
 def _exact_prepared(stage_id: str, *, now_ms: int) -> tuple[dict, dict, dict, dict]:
@@ -372,12 +391,15 @@ def accept_stage(stage_id: str, *, now_ms: int | None = None) -> dict:
     value = _load_state(stage_id)
 
     # Once an irreversible POST may have been attempted, reconciliation must stay
-    # available even after the offer expires or its source Notes later change.
-    # The exact signed line is persisted in the private state before the attempt.
+    # available even after expiry, source-note changes, or a later health incident.
     if value is not None and value["state"] == "posted":
         return {"action": "already_posted", "state": value}
     if value is not None and value["state"] in {"attempting", "ambiguous"}:
         return _reconcile(value, value["accept_line"])
+
+    # First gate: no new transport signature/Vault use unless the current read-side
+    # safety state is exact. This is intentionally after reconciliation shortcuts.
+    _require_write_interlock()
 
     stage, preview, approval, _ = _exact_prepared(stage_id, now_ms=current)
     if value is not None:
@@ -394,6 +416,10 @@ def accept_stage(stage_id: str, *, now_ms: int | None = None) -> dict:
         raise AcceptError("accept_state_invalid")
     if stage["expires_ms"] - current < MIN_POST_SECONDS * 1000:
         raise AcceptError("accept_window_elapsed")
+
+    # Second gate closes the signing-to-POST TOCTOU window. A health/core change after
+    # signature preparation leaves only local prepared state and performs no POST.
+    _require_write_interlock()
 
     value["state"] = "attempting"
     value["attempted_at"] = datetime.now(UTC).isoformat()
