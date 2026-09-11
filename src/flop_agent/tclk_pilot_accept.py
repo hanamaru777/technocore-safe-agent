@@ -28,6 +28,7 @@ PROTECTED_CORE_GAP_MESSAGES = 5_083_155
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _DID = re.compile(r"^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{20,128}$")
 _SIG = re.compile(r"^[A-Za-z0-9_-]{85}[AQgw]$")
 
@@ -91,9 +92,11 @@ def _validate_state(value: object) -> dict:
         raise AcceptError("accept_state_invalid")
     if not isinstance(value.get("stage_id"), str) or not _HEX32.fullmatch(value["stage_id"]):
         raise AcceptError("accept_state_invalid")
-    for field in ("approval_digest", "accept_sha256", "git_commit_sha"):
+    for field in ("approval_digest", "accept_sha256"):
         if not isinstance(value.get(field), str) or not _HEX64.fullmatch(value[field]):
             raise AcceptError("accept_state_invalid")
+    if not isinstance(value.get("git_commit_sha"), str) or not _GIT_SHA.fullmatch(value["git_commit_sha"]):
+        raise AcceptError("accept_state_invalid")
     if not isinstance(value.get("accept_line"), str) or not value["accept_line"].startswith("tclk1 "):
         raise AcceptError("accept_state_invalid")
     if hashlib.sha256(value["accept_line"].encode("utf-8")).hexdigest() != value["accept_sha256"]:
