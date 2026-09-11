@@ -38,6 +38,7 @@ BRIDGE = Path(__file__).resolve().parents[2] / "tools" / "tclk_verify_terminal.m
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _CONTRACT = re.compile(r"^0x[0-9a-f]{64}$")
 _DID = re.compile(r"^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{20,128}$")
 _DEAL_ROOM = re.compile(r"^mb-p-tclk-[0-9a-f]{16}$")
@@ -127,10 +128,12 @@ def _validate_evidence(value: object) -> dict:
         raise TerminalError("terminal_evidence_invalid")
     for field in (
         "stage_digest", "offer_sha256", "accept_sha256", "lock_sha256", "work_evidence_sha256",
-        "reveal_sha256", "paper_note_sha256", "witness_sha256", "reveal_publish_git_commit_sha",
-        "git_commit_sha", "terminal_evidence_sha256",
+        "reveal_sha256", "paper_note_sha256", "witness_sha256", "terminal_evidence_sha256",
     ):
         if not isinstance(value.get(field), str) or not _HEX64.fullmatch(value[field]):
+            raise TerminalError("terminal_evidence_invalid")
+    for field in ("reveal_publish_git_commit_sha", "git_commit_sha"):
+        if not isinstance(value.get(field), str) or not _GIT_SHA.fullmatch(value[field]):
             raise TerminalError("terminal_evidence_invalid")
     if not isinstance(value.get("offer_id"), str) or not _CONTRACT.fullmatch(value["offer_id"]):
         raise TerminalError("terminal_evidence_invalid")
@@ -255,7 +258,7 @@ def _sources(stage_id: str) -> dict:
         or not isinstance(published.get("claimed_note_sha256"), str)
         or not _HEX64.fullmatch(published["claimed_note_sha256"])
         or not isinstance(published.get("git_commit_sha"), str)
-        or not _HEX64.fullmatch(published["git_commit_sha"])
+        or not _GIT_SHA.fullmatch(published["git_commit_sha"])
     ):
         raise TerminalError("reveal_publish_binding_invalid")
     _timestamp_ms(published["reveal_ts"])
