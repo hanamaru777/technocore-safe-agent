@@ -1,7 +1,7 @@
 """Exact root-operator approval record for the first genuine tclk/1 pilot.
 
-This module never signs or posts.  It accepts only a stage id, the full approval
-digest shown by the prepared preview, and the literal ``APPROVE``.  The caller
+This module never signs or posts. It accepts only a stage id, the full approval
+digest shown by the prepared preview, and the literal ``APPROVE``. The caller
 (root-owned wrapper in production) is responsible for persisting the returned
 record as a root-owned file readable by the isolated signer.
 """
@@ -13,7 +13,6 @@ import json
 import re
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
 
 from . import core, tclk_pilot, tclk_pilot_signer
 
@@ -34,11 +33,11 @@ def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
 
-def approval_dir() -> Path:
+def approval_dir():
     return core.STATE / "signer" / "tclk-pilot-approvals"
 
 
-def approval_path(stage_id: str) -> Path:
+def approval_path(stage_id: str):
     if not isinstance(stage_id, str) or not _HEX32.fullmatch(stage_id):
         raise ApprovalError("invalid_stage_id")
     return approval_dir() / f"{stage_id}.json"
@@ -93,10 +92,18 @@ def _bindings(stage: dict, preview: dict) -> dict:
 
 
 def approval_digest(stage: dict, preview: dict) -> str:
-    return hashlib.sha256(("technocore-safe-agent|tclk-first-pilot-approval|" + _canonical(_bindings(stage, preview))).encode("ascii")).hexdigest()
+    return hashlib.sha256(
+        ("technocore-safe-agent|tclk-first-pilot-approval|" + _canonical(_bindings(stage, preview))).encode("ascii")
+    ).hexdigest()
 
 
-def prepared_approval(stage_id: str, *, now_ms: int | None = None) -> dict:
+def public_prepared_approval(stage_id: str, *, now_ms: int | None = None) -> dict:
+    """Derive the public decision digest without reading signer-private material.
+
+    Discord may call this helper because it consumes only the public stage and
+    public PREPARE preview. The root approval path adds a separate private-file
+    existence/permission check before an approval record can be produced.
+    """
     current = _now_ms() if now_ms is None else now_ms
     try:
         stage = tclk_pilot.load_stage(stage_id, now_ms=current, require_live=False)
@@ -104,13 +111,31 @@ def prepared_approval(stage_id: str, *, now_ms: int | None = None) -> dict:
         raise ApprovalError(str(error)) from error
     if stage["expires_ms"] - current < MIN_APPROVAL_SECONDS * 1000:
         raise ApprovalError("approval_window_elapsed")
-    preview = tclk_pilot_signer._load_preview(stage_id)
-    if preview is None:
-        raise ApprovalError("preview_missing")
-    tclk_pilot_signer._require_preview_binding(preview, stage)
-    tclk_pilot_signer._require_protocol_file(stage_id)
+    try:
+        preview = tclk_pilot_signer._load_preview(stage_id)
+        if preview is None:
+            raise ApprovalError("preview_missing")
+        tclk_pilot_signer._require_preview_binding(preview, stage)
+    except tclk_pilot_signer.PrepareError as error:
+        raise ApprovalError(str(error)) from error
     bindings = _bindings(stage, preview)
-    return {"stage": stage, "preview": preview, "bindings": bindings, "approval_digest": approval_digest(stage, preview)}
+    return {
+        "stage": stage,
+        "preview": preview,
+        "bindings": bindings,
+        "approval_digest": approval_digest(stage, preview),
+    }
+
+
+def prepared_approval(stage_id: str, *, now_ms: int | None = None) -> dict:
+    """Strong approval preparation including signer-private PREPARE material."""
+    current = _now_ms() if now_ms is None else now_ms
+    prepared = public_prepared_approval(stage_id, now_ms=current)
+    try:
+        tclk_pilot_signer._require_protocol_file(stage_id)
+    except tclk_pilot_signer.PrepareError as error:
+        raise ApprovalError(str(error)) from error
+    return prepared
 
 
 def build_approval(stage_id: str, supplied_digest: str, *, now_ms: int | None = None) -> dict:

@@ -106,6 +106,10 @@ def test_production_discord_service_uses_knowledge_wrapper():
     from pathlib import Path
 
     service = Path("packaging/oracle/discord.service").read_text("utf-8")
+    approval_wrapper = Path("src/flop_agent/discord_tclk_approval.py").read_text("utf-8")
+    review_wrapper = Path("src/flop_agent/discord_tclk_review.py").read_text("utf-8")
 
-    assert "-m flop_agent.discord_knowledge" in service
+    assert "-m flop_agent.discord_tclk_approval" in service
+    assert "from . import discord_tclk_review as app" in approval_wrapper
+    assert "from . import discord_knowledge as app" in review_wrapper
     assert "oracle_signer" not in service
