@@ -11,6 +11,7 @@ def _offer(offer_id: str = "0x" + ("b" * 64), *, seconds_left: int = 900) -> dic
         "id": offer_id,
         "counterpart_fingerprint": "abcdef1234567890",
         "frame_type": "offer",
+        "role": "payer",
         "job_proto": "a2a",
         "job_id": "stored-review",
         "amount": "200",

@@ -24,17 +24,17 @@ def _our_did(monkeypatch, tmp_path):
     return did
 
 
-def _offer_line(*, expires_ms=NOW + 1_800_000, context=SAFE_TASK, job_id="job-1"):
+def _offer_line(*, expires_ms=NOW + 1_800_000, context=SAFE_TASK, job_id="job-1", role="payer"):
     source = """
 import { makeOffer, encodeFrame } from '@flop-labs/tclk';
 let raw = ''; for await (const chunk of process.stdin) raw += chunk;
 const i = JSON.parse(raw);
-const frame = makeOffer({from:i.from, role:'payer', amount:'1', asset:'PAPER', lock:'hash', rails:['paper'], claimByMs:i.now+600000, refundAfterMs:i.now+1200000, expiresMs:i.expires, job:{proto:'a2a', id:i.job, context:i.context}, nonce:'abcdef12'});
+const frame = makeOffer({from:i.from, role:i.role, amount:'1', asset:'PAPER', lock:'hash', rails:['paper'], claimByMs:i.now+600000, refundAfterMs:i.now+1200000, expiresMs:i.expires, job:{proto:'a2a', id:i.job, context:i.context}, nonce:'abcdef12'});
 process.stdout.write(encodeFrame(frame));
 """
     result = subprocess.run(
         ["node", "--input-type=module", "--eval", source],
-        input=json.dumps({"from": COUNTERPART, "now": NOW, "expires": expires_ms, "job": job_id, "context": context}),
+        input=json.dumps({"from": COUNTERPART, "now": NOW, "expires": expires_ms, "job": job_id, "context": context, "role": role}),
         text=True,
         capture_output=True,
         check=True,
@@ -42,8 +42,8 @@ process.stdout.write(encodeFrame(frame));
     return result.stdout
 
 
-def _item(*, expires_ms=NOW + 1_800_000, context=SAFE_TASK, job_id="job-1"):
-    line = _offer_line(expires_ms=expires_ms, context=context, job_id=job_id)
+def _item(*, expires_ms=NOW + 1_800_000, context=SAFE_TASK, job_id="job-1", role="payer"):
+    line = _offer_line(expires_ms=expires_ms, context=context, job_id=job_id, role=role)
     frame = tclk_watch.official_offer(line)
     assert frame is not None
     return {
@@ -51,6 +51,7 @@ def _item(*, expires_ms=NOW + 1_800_000, context=SAFE_TASK, job_id="job-1"):
         "counterpart_fingerprint": hashlib.sha256(COUNTERPART.encode()).hexdigest()[:16],
         "from": COUNTERPART,
         "frame_type": "offer",
+        "role": frame["role"],
         "job_proto": "a2a",
         "job_id": job_id,
         "amount": "1",
@@ -127,6 +128,14 @@ def test_stage_rejects_frame_and_evidence_binding_tamper(monkeypatch, tmp_path):
         tclk_pilot.stage_from_evidence(item, wrong, now_ms=NOW)
 
 
+def test_stage_rejects_payee_origin_before_persist(monkeypatch, tmp_path):
+    _our_did(monkeypatch, tmp_path)
+    item = _item(role="payee")
+    with pytest.raises(tclk_pilot.PilotError, match="offer_not_reviewable"):
+        tclk_pilot.stage_from_evidence(item, _evidence(item), now_ms=NOW)
+    assert not tclk_pilot.stage_dir().exists()
+
+
 def test_tampered_stage_file_fails_closed(monkeypatch, tmp_path):
     _, _, _, stage = _stage(monkeypatch, tmp_path)
     path = tclk_pilot.stage_path(stage["stage_id"])
@@ -155,6 +164,19 @@ def test_prepare_uses_official_tclk_and_never_exposes_preimage(monkeypatch, tmp_
     assert preview["contract_id"] in preview["accept_line"]
     again = tclk_pilot_signer.prepare_stage(stage["stage_id"], reader=lambda _ns, _key: NOTE_TASK, now_ms=NOW)
     assert again["action"] == "already_prepared" and again["preview"] == preview
+
+
+def test_prepare_bridge_rejects_payee_origin_before_protocol_material(monkeypatch, tmp_path):
+    our_did, _, _, stage = _stage(monkeypatch, tmp_path)
+    payee = _item(expires_ms=stage["expires_ms"], job_id=stage["job_id"], role="payee")
+    unsafe_stage = dict(stage)
+    unsafe_stage["offer_id"] = payee["id"]
+    unsafe_stage["offer_line"] = payee["frame_text"]
+    unsafe_stage["frame_sha256"] = payee["frame_sha256"]
+    monkeypatch.setenv("TECHNOCORE_SIGNER_EXPECTED_DID", our_did)
+    with pytest.raises(tclk_pilot_signer.PrepareError, match="prepare_bridge_failed"):
+        tclk_pilot_signer._run_bridge(unsafe_stage)
+    assert not tclk_pilot.secret_path(stage["stage_id"]).exists()
 
 
 def test_changed_note_hash_fails_before_protocol_material(monkeypatch, tmp_path):

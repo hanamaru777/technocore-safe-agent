@@ -45,6 +45,7 @@ def test_valid_signed_paper_offer_is_read_only_opportunity(monkeypatch, tmp_path
     assert len(rows) == 1
     item = rows[0]
     assert item["frame_type"] == "offer" and item["rail"] == "paper"
+    assert item["role"] == "payer"
     assert item["read_only"] is True and item["accepted"] is False
     assert not any(key in item for key in ("seed", "payment_key", "signature"))
     assert not state["agents"] and [event["kind"] for event in state["opportunities"]] == ["tclk_offer"]

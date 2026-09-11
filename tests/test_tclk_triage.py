@@ -11,11 +11,13 @@ def _offer(
     terms: str = "verification | count rows in the public tclk board excerpt",
     proto: str = "a2a",
     job_id: str = "public-review",
+    role: str = "payer",
 ) -> dict:
     return {
         "id": offer_id,
         "counterpart_fingerprint": "abcdef1234567890",
         "frame_type": "offer",
+        "role": role,
         "job_proto": proto,
         "job_id": job_id,
         "amount": "200",
@@ -38,6 +40,18 @@ def test_reviewable_plain_public_a2a_offer():
         "reviewable": True,
         "seconds_left": 900,
     }
+
+
+def test_first_pilot_only_reviews_payer_origin_offers():
+    payee = tclk_triage.classify(_offer(role="payee"), now_ms=NOW)
+    assert payee["reviewable"] is False
+    assert payee["reason"] == "first_pilot_role_not_payer"
+
+    missing = _offer()
+    missing.pop("role")
+    legacy = tclk_triage.classify(missing, now_ms=NOW)
+    assert legacy["reviewable"] is False
+    assert legacy["reason"] == "first_pilot_role_not_payer"
 
 
 def test_near_expiry_fails_closed_before_human_rush():

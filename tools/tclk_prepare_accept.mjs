@@ -105,6 +105,9 @@ try {
 
   const offer = decodeFrame(input.offer_line);
   if (offer.type !== "offer" || offer.id !== input.offer_id) fail();
+  // First real pilot is payee-side only. Under the pinned hash-lock choreography,
+  // the payee mints the preimage at accept and the payer later locks the rail.
+  if (offer.role !== "payer") fail();
   if (offer.lock !== "hash" || offer.rails.length !== 1 || offer.rails[0] !== "paper") fail();
   if (!offer.job || offer.job.proto !== "a2a" || offer.job.id !== input.job_id) fail();
   if (offer.expiresMs !== input.expires_ms || offer.from === input.from) fail();

@@ -103,7 +103,8 @@ def observe_offer(state: dict, message: dict, transport_from: str | None) -> dic
     context = job.get("context") if isinstance(job.get("context"), str) else ""
     record = {
         "id": offer_id, "counterpart_fingerprint": hashlib.sha256(transport_from.encode()).hexdigest()[:16],
-        "from": transport_from, "frame_type": "offer", "job_proto": job.get("proto") if isinstance(job.get("proto"), str) else None,
+        "from": transport_from, "frame_type": "offer", "role": role,
+        "job_proto": job.get("proto") if isinstance(job.get("proto"), str) else None,
         "job_id": job.get("id") if isinstance(job.get("id"), str) else None, "amount": amount, "asset": asset,
         "rail": PAPER_RAIL, "expires_ms": expires, "terms": context[:280], "terms_full": context[:MAX_FRAME_CHARS],
         "frame_text": raw_text, "frame_sha256": hashlib.sha256(raw_text.encode()).hexdigest(), "room": OFFER_ROOM,
