@@ -244,6 +244,14 @@ def stage_from_evidence(item: dict, evidence: dict, *, now_ms: int | None = None
         raise PilotError("offer_invalid")
     if not isinstance(offer_line, str) or hashlib.sha256(offer_line.encode("utf-8")).hexdigest() != frame_hash:
         raise PilotError("offer_frame_hash_mismatch")
+    # Defense in depth: do not trust the retained convenience role alone. Re-decode the
+    # exact hash-bound raw offer with the pinned parser and require a payer-origin offer,
+    # so our accepting identity is the payee that correctly mints the hash preimage.
+    decoded = tclk_watch.official_offer(offer_line)
+    if decoded is None or decoded.get("id") != offer_id or decoded.get("from") != counterpart:
+        raise PilotError("offer_revalidation_failed")
+    if decoded.get("role") != "payer" or item.get("role") != "payer":
+        raise PilotError("first_pilot_role_not_payer")
     if not isinstance(job_id, str) or not _KEY.fullmatch(job_id) or not isinstance(expires_ms, int):
         raise PilotError("offer_invalid")
     if item.get("rail") != "paper" or item.get("job_proto") != "a2a" or item.get("read_only") is not True or item.get("accepted") is not False:
