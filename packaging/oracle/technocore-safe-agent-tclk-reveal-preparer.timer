@@ -1,0 +1,11 @@
+[Unit]
+Description=technocore-safe-agent periodic first-pilot reveal PREPARE
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=30
+AccuracySec=5
+Unit=technocore-safe-agent-tclk-reveal-preparer.service
+
+[Install]
+WantedBy=timers.target
