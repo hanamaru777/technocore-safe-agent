@@ -1,0 +1,26 @@
+[Unit]
+Description=technocore-safe-agent first-pilot deterministic work evidence
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=technocore
+Group=technocore
+SupplementaryGroups=technocore-autopilot
+WorkingDirectory=/opt/technocore-safe-agent
+Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
+Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_pilot_work
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/technocore-safe-agent/autopilot
