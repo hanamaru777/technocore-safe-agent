@@ -1,0 +1,11 @@
+[Unit]
+Description=technocore-safe-agent periodic first-pilot deterministic work evidence
+
+[Timer]
+OnBootSec=75
+OnUnitActiveSec=30
+AccuracySec=5
+Unit=technocore-safe-agent-tclk-work-watcher.service
+
+[Install]
+WantedBy=timers.target
