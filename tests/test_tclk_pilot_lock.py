@@ -89,6 +89,28 @@ def setup_public_bindings(monkeypatch):
     monkeypatch.setattr(tclk_pilot_signer, "_require_preview_binding", lambda *_a, **_k: None)
 
 
+def setup_mock_handshake(monkeypatch):
+    offer_record = {
+        "seq": 11,
+        "ts": "2033-05-18T03:33:19Z",
+        "from": PAYER,
+        "nonce": "1999999999999",
+        "text": "tclk1 {\"type\":\"offer\"}",
+    }
+    accept_record = {
+        "seq": activity()["seq"],
+        "ts": activity()["ts"],
+        "from": PAYEE,
+        "nonce": activity()["nonce"],
+        "text": ACCEPT_LINE,
+    }
+    monkeypatch.setattr(
+        tclk_pilot_lock,
+        "_select_handshake",
+        lambda *_a, **_k: (offer_record, accept_record),
+    )
+
+
 def test_waiting_accept_never_reads_network(monkeypatch):
     setup_public_bindings(monkeypatch)
     monkeypatch.setattr(tclk_pilot_lock, "_load_activities", lambda: [])
@@ -103,6 +125,7 @@ def test_waiting_accept_never_reads_network(monkeypatch):
 def test_verified_lock_persists_public_hash_only_evidence(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     setup_public_bindings(monkeypatch)
+    setup_mock_handshake(monkeypatch)
     monkeypatch.setattr(tclk_pilot_lock, "_load_activities", lambda: [activity()])
     monkeypatch.setattr(tclk_pilot_lock, "_run_bridge", lambda _request: verified_bridge_result())
 
@@ -122,6 +145,7 @@ def test_verified_lock_persists_public_hash_only_evidence(monkeypatch, tmp_path)
 def test_unverified_paper_lock_never_persists(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     setup_public_bindings(monkeypatch)
+    setup_mock_handshake(monkeypatch)
     monkeypatch.setattr(tclk_pilot_lock, "_load_activities", lambda: [activity()])
     result_data = verified_bridge_result()
     result_data["lock_verified"] = False
@@ -139,6 +163,7 @@ def test_unverified_paper_lock_never_persists(monkeypatch, tmp_path):
 def test_accept_transport_binding_mismatch_fails_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "STATE", tmp_path)
     setup_public_bindings(monkeypatch)
+    setup_mock_handshake(monkeypatch)
     monkeypatch.setattr(tclk_pilot_lock, "_load_activities", lambda: [activity()])
     result_data = verified_bridge_result()
     result_data["accept_seq"] += 1
@@ -164,7 +189,7 @@ def _signed_record(monkeypatch, seed, did, room, nonce, text, seq, ts):
     return {"seq": seq, "from": did, "nonce": nonce, "sig": signature, "text": text, "ts": ts}
 
 
-def test_pinned_bridge_accepts_only_authenticated_payer_paper_lock(monkeypatch):
+def test_pinned_bridge_accepts_only_locally_authenticated_payer_paper_lock(monkeypatch):
     payer_seed = secrets.token_hex(32)
     payee_seed = secrets.token_hex(32)
     payer = _did(monkeypatch, payer_seed)
@@ -213,11 +238,24 @@ process.stdout.write(JSON.stringify({
     accept_record = _signed_record(monkeypatch, payee_seed, payee, "tclk-offers", "2", frames["accept"], 2, ts0)
     lock_record = _signed_record(monkeypatch, payer_seed, payer, frames["room"], "3", frames["lock"], 1, ts0)
 
+    offer_records = tclk_pilot_lock._verified_records(
+        "tclk-offers",
+        {"messages": [offer_record, accept_record]},
+    )
+    deal_records = tclk_pilot_lock._verified_records(
+        frames["room"],
+        {"messages": [lock_record]},
+    )
+    assert len(offer_records) == 2
+    assert len(deal_records) == 1
+    assert all("sig" not in row for row in [*offer_records, *deal_records])
+
     result = tclk_pilot_lock._run_bridge({
         "contract_id": frames["contract"],
         "deal_room": frames["room"],
-        "offer_records": [offer_record, accept_record],
-        "deal_records": [lock_record],
+        "offer_record": offer_records[0],
+        "accept_record": offer_records[1],
+        "deal_records": deal_records,
         "paper_note_value": frames["paper"],
     })
     assert result["lock_verified"] is True
@@ -229,14 +267,18 @@ process.stdout.write(JSON.stringify({
 
     forged = dict(lock_record)
     forged["sig"] = "A" * 86
-    forged_result = tclk_pilot_lock._run_bridge({
+    assert tclk_pilot_lock._verified_records(frames["room"], {"messages": [forged]}) == []
+
+    without_verified_lock = tclk_pilot_lock._run_bridge({
         "contract_id": frames["contract"],
         "deal_room": frames["room"],
-        "offer_records": [offer_record, accept_record],
-        "deal_records": [forged],
+        "offer_record": offer_records[0],
+        "accept_record": offer_records[1],
+        "deal_records": [],
         "paper_note_value": frames["paper"],
     })
-    assert forged_result["lock_verified"] is False
+    assert without_verified_lock["lock_present"] is False
+    assert without_verified_lock["lock_verified"] is False
 
 
 def test_lock_watcher_service_is_read_only_hardened():
