@@ -44,7 +44,7 @@ const ACCEPT_PRIVATE_REQUIRED = new Set([
 ]);
 const REVEAL_PRIVATE_REQUIRED = new Set([
   "schema_version", "stage_id", "stage_digest", "offer_id", "counterpart_did", "our_did", "job_id",
-  "contract_id", "accept_sha256", "lock_line_sha256", "work_evidence_sha256",
+  "contract_id", "lock_ref", "accept_sha256", "lock_line_sha256", "work_evidence_sha256",
   "claim_by_ms", "refund_after_ms", "reveal_line", "reveal_sha256",
 ]);
 
@@ -67,12 +67,19 @@ function require0600(file) {
   if (mode !== 0o600) fail();
 }
 
-function revealFrom(preimage, from, contract) {
-  if (!HEX0X64.test(preimage) || !DID.test(from) || !CONTRACT.test(contract)) fail();
-  const revealInput = { type: "reveal", from, contract };
+function revealFrom(preimage, from, contract, ref) {
+  if (!HEX0X64.test(preimage) || !DID.test(from) || !CONTRACT.test(contract) || !CONTRACT.test(ref)) fail();
+  if (ref !== contract) fail();
+  const revealInput = { type: "reveal", from, contract, ref };
   revealInput["secret"] = preimage;
   const reveal = validateFrame(revealInput);
-  if (reveal.type !== "reveal" || reveal.from !== from || reveal.contract !== contract || reveal.secret !== preimage) fail();
+  if (
+    reveal.type !== "reveal"
+    || reveal.from !== from
+    || reveal.contract !== contract
+    || reveal.ref !== ref
+    || reveal.secret !== preimage
+  ) fail();
   const line = encodeFrame(reveal);
   return { line, hash: sha256(line) };
 }
@@ -129,7 +136,7 @@ try {
   const lock = hashLockFromPreimage(acceptPrivate.preimage);
   if (!lock || lock.preimage !== acceptPrivate.preimage || lock.hash !== accept.statement) fail();
 
-  const reveal = revealFrom(acceptPrivate.preimage, input.our_did, input.contract_id);
+  const reveal = revealFrom(acceptPrivate.preimage, input.our_did, input.contract_id, input.lock_ref);
   const privateDir = path.join(stateRoot, "signer", "tclk-pilot-reveals");
   mkdirSync(privateDir, { recursive: true, mode: 0o700 });
   chmodSync(privateDir, 0o700);
@@ -144,6 +151,7 @@ try {
     our_did: input.our_did,
     job_id: input.job_id,
     contract_id: input.contract_id,
+    lock_ref: input.lock_ref,
     accept_sha256: input.accept_sha256,
     lock_line_sha256: input.lock_line_sha256,
     work_evidence_sha256: input.work_evidence_sha256,
