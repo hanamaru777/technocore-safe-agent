@@ -140,6 +140,8 @@ try {
     paper_note_status: paperRecord?.status ?? null,
     paper_note_sha256: typeof input.paper_note_value === "string" ? sha256(input.paper_note_value) : null,
   }));
-} catch {
+} catch (error) {
+  const reason = error instanceof Error ? error.message : "verification_failed";
+  process.stderr.write(`verify_error:${reason.slice(0, 160)}`);
   fail(4);
 }
