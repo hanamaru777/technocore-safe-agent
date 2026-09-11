@@ -1,9 +1,10 @@
 """Read-only post-accept verifier for the first genuine tclk/1 PaperRail pilot.
 
 Only public stage/PREPARE state plus the hash-chained successful accept activity is used to
-select a contract. The module re-reads the exact Technocore offer/deal transcripts and the
-fixed-origin PaperRail Note, then delegates protocol verification to the pinned local tclk
-runtime. It never reads signer-private preimages, signs, posts, writes a Note, or follows a URL.
+select a contract. The module re-reads exact Technocore offer/deal records, verifies each
+transport signature locally, and passes only verified bounded records to the published tclk
+runtime for contract/PaperRail checks. It never reads signer-private preimages, signs, posts,
+writes a Note, or follows a URL.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from typing import Callable
 import httpx
 
 from . import core, observer, tclk_pilot, tclk_pilot_signer, tclk_watch
+from .public_record import verify_signed_record
 
 SCHEMA_VERSION = 1
 MAX_SCAN = 4
@@ -62,10 +64,13 @@ def _timestamp_ms(value: str) -> int:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (AttributeError, ValueError) as error:
-        raise LockError("accept_activity_invalid") from error
+        raise LockError("record_timestamp_invalid") from error
     if parsed.tzinfo is None:
-        raise LockError("accept_activity_invalid")
-    return int(parsed.timestamp() * 1000)
+        raise LockError("record_timestamp_invalid")
+    millis = int(parsed.timestamp() * 1000)
+    if millis < 0:
+        raise LockError("record_timestamp_invalid")
+    return millis
 
 
 def _load_activities() -> list[dict]:
@@ -120,6 +125,59 @@ def _messages(payload: object) -> list[dict]:
     return rows
 
 
+def _verified_records(room: str, payload: object) -> list[dict]:
+    """Keep only locally signature-verified records, preserving append order."""
+    verified: list[dict] = []
+    previous_seq = -1
+    for row in _messages(payload):
+        seq = row.get("seq")
+        if not isinstance(seq, int) or seq < 0:
+            continue
+        try:
+            verify_signed_record(room, row)
+            _timestamp_ms(row.get("ts"))
+        except (ValueError, LockError):
+            continue
+        if seq <= previous_seq:
+            raise LockError("room_record_order_invalid")
+        previous_seq = seq
+        verified.append(
+            {
+                "seq": seq,
+                "ts": row["ts"],
+                "from": row["from"],
+                "nonce": str(row["nonce"]),
+                "text": row["text"],
+            }
+        )
+    return verified
+
+
+def _select_handshake(stage: dict, preview: dict, activity: dict, payload: object) -> tuple[dict, dict]:
+    records = _verified_records(tclk_watch.OFFER_ROOM, payload)
+    offer_matches = [
+        row for row in records
+        if row["from"] == stage["counterpart_did"] and row["text"] == stage["offer_line"]
+    ]
+    accept_matches = [
+        row for row in records
+        if (
+            row["from"] == stage["our_did"]
+            and row["text"] == preview["accept_line"]
+            and row["nonce"] == activity["nonce"]
+            and row["seq"] == activity["seq"]
+        )
+    ]
+    if len(offer_matches) != 1 or len(accept_matches) != 1:
+        raise LockError("handshake_transport_not_unique")
+    offer_record, accept_record = offer_matches[0], accept_matches[0]
+    if offer_record["seq"] >= accept_record["seq"]:
+        raise LockError("handshake_transport_order_invalid")
+    if _timestamp_ms(accept_record["ts"]) != _timestamp_ms(activity["ts"]):
+        raise LockError("accept_activity_binding_mismatch")
+    return offer_record, accept_record
+
+
 def _read_note_optional(namespace: str, key: str) -> str | None:
     try:
         return core.read_note(namespace, key)
@@ -155,6 +213,7 @@ def _run_bridge(request: dict) -> dict:
     except (OSError, subprocess.SubprocessError) as error:
         raise LockError("lock_bridge_failed") from error
     if result.returncode != 0:
+        # Keep the public error stable. The bounded cause exists only for local traceback/CI diagnosis.
         cause = RuntimeError((result.stderr or "bridge returned nonzero")[:200])
         raise LockError("lock_bridge_failed") from cause
     try:
@@ -262,18 +321,19 @@ def inspect_stage(
     if paper_value is not None and not isinstance(paper_value, str):
         raise LockError("paper_note_invalid")
 
+    offer_record, accept_record = _select_handshake(stage, preview, activity, offer_payload)
+    deal_records = _verified_records(deal_room, deal_payload)
     request = {
         "contract_id": contract_id,
         "deal_room": deal_room,
-        "offer_records": _messages(offer_payload),
-        "deal_records": _messages(deal_payload),
+        "offer_record": offer_record,
+        "accept_record": accept_record,
+        "deal_records": deal_records,
         "paper_note_value": paper_value,
     }
     result = _run_bridge(request)
     if result.get("contract_id") != contract_id or result.get("deal_room") != deal_room:
         raise LockError("transcript_binding_mismatch")
-    if result.get("status") == "accept_not_found":
-        raise LockError("posted_accept_not_observed")
 
     expected_namespace, expected_key = _paper_note_location(contract_id)
     checks = (
