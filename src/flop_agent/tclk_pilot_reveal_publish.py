@@ -41,6 +41,7 @@ BRIDGE = Path(__file__).resolve().parents[2] / "tools" / "tclk_prepare_paper_cla
 
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _CONTRACT = re.compile(r"^0x[0-9a-f]{64}$")
 _SIG = re.compile(r"^[A-Za-z0-9_-]{85}[AQgw]$")
 
@@ -79,9 +80,11 @@ def _validate_state(value: object) -> dict:
         raise RevealPublishError("reveal_publish_state_invalid")
     if value.get("state") not in states or not _HEX32.fullmatch(str(value.get("stage_id", ""))):
         raise RevealPublishError("reveal_publish_state_invalid")
-    for field in ("approval_digest", "reveal_sha256", "git_commit_sha"):
+    for field in ("approval_digest", "reveal_sha256"):
         if not _HEX64.fullmatch(str(value.get(field, ""))):
             raise RevealPublishError("reveal_publish_state_invalid")
+    if not _GIT_SHA.fullmatch(str(value.get("git_commit_sha", ""))):
+        raise RevealPublishError("reveal_publish_state_invalid")
     if not _CONTRACT.fullmatch(str(value.get("offer_id", ""))) or not _CONTRACT.fullmatch(str(value.get("contract_id", ""))):
         raise RevealPublishError("reveal_publish_state_invalid")
     if not isinstance(value.get("deal_room"), str) or not isinstance(value.get("did"), str):
