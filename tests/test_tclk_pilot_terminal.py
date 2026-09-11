@@ -8,8 +8,8 @@ import pytest
 from flop_agent import tclk_pilot_terminal as terminal
 
 STAGE = "1" * 32
-PAYER = "did:key:z6Mk" + "4" * 44
-PAYEE = "did:key:z6Mk" + "5" * 44
+PAYER = "did:key:z6Mk" + "f" * 44
+PAYEE = "did:key:z6Mk" + "g" * 44
 CONTRACT = "0x" + "6" * 64
 ROOM = "mb-p-tclk-" + "6" * 16
 
@@ -146,11 +146,11 @@ def test_terminal_collector_source_has_no_network_write_or_signer_operation():
 
 def test_pinned_bridge_requires_claimed_transcript_and_matching_paper_record():
     source = r"""
-import {makeOffer,makeAccept,encodeFrame,encodePaperRecord,hashLockFromPreimage,dealRoom} from '@flop-labs/tclk';
+import {makeOffer,makeAccept,encodeFrame,encodePaperRecord,generateHashLock,dealRoom} from '@flop-labs/tclk';
 let raw=''; for await (const c of process.stdin) raw += c; const i=JSON.parse(raw);
-const now=Date.now(); const witness='0x'+'11'.repeat(32);
-const offer=makeOffer({from:i.payer,role:'payer',amount:'1',asset:'PAPER',lock:'hash',rails:['paper'],claimByMs:now+600000,refundAfterMs:now+900000,expiresMs:now+300000,job:{proto:'a2a',id:'job-1'},nonce:'abcdef12'});
-const accept=makeAccept(offer,{from:i.payee,statement:hashLockFromPreimage(witness).hash,nonce:'12345678'});
+const now=Date.now(); const minted=generateHashLock(); const witness=minted.preimage;
+const offer=makeOffer({from:i.payer,role:'payer',amount:'1000',asset:'PAPER',lock:'hash',rails:['paper'],claimByMs:now+3600000,refundAfterMs:now+7200000,expiresMs:now+600000,job:{proto:'a2a',id:'job-1'},nonce:'0011223344556677'});
+const accept=makeAccept(offer,{from:i.payee,statement:minted.hash,nonce:'8899aabbccddeeff'});
 const lock={type:'lock',from:i.payer,contract:accept.contract,rail:'paper',ref:accept.contract};
 const reveal={type:'reveal',from:i.payee,contract:accept.contract,ref:accept.contract,['se'+'cret']:witness};
 const receipt={type:'receipt',from:i.payer,contract:accept.contract,outcome:'claimed',rail:'paper',ref:accept.contract};
@@ -159,8 +159,9 @@ process.stdout.write(JSON.stringify({offer:encodeFrame(offer),accept:encodeFrame
 """
     built = subprocess.run(
         ["node", "--input-type=module", "--eval", source],
-        input=json.dumps({"payer": PAYER, "payee": PAYEE}), text=True, capture_output=True, check=True,
+        input=json.dumps({"payer": PAYER, "payee": PAYEE}), text=True, capture_output=True, check=False,
     )
+    assert built.returncode == 0, built.stderr
     value = json.loads(built.stdout)
     request = {
         "offer_line": value["offer"],
@@ -175,14 +176,14 @@ process.stdout.write(JSON.stringify({offer:encodeFrame(offer),accept:encodeFrame
         ],
         "paper_note_value": value["paper"],
     }
-    # Rebase transcript timestamps into the contract's live deadline window.
     request["deal_records"][0]["ts"] = __import__("datetime").datetime.fromtimestamp((value["now"] + 1000) / 1000, __import__("datetime").UTC).isoformat()
     request["deal_records"][1]["ts"] = __import__("datetime").datetime.fromtimestamp((value["now"] + 2000) / 1000, __import__("datetime").UTC).isoformat()
     request["deal_records"][2]["ts"] = __import__("datetime").datetime.fromtimestamp((value["now"] + 3000) / 1000, __import__("datetime").UTC).isoformat()
     checked = subprocess.run(
         ["node", str(Path("tools/tclk_verify_terminal.mjs"))],
-        input=json.dumps(request), text=True, capture_output=True, check=True,
+        input=json.dumps(request), text=True, capture_output=True, check=False,
     )
+    assert checked.returncode == 0, checked.stderr
     output = json.loads(checked.stdout)
     assert output["status"] == "claimed"
     assert output["reveal_seq"] == 2
