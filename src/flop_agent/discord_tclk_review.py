@@ -245,7 +245,7 @@ def _auto_failure_notice(item: dict, verdict: dict, reason: str, *, retrying: bo
 
 
 def _new_auto_review_notices() -> list[str]:
-    """Resolve new review-worthy offers automatically; retry transient read failures."""
+    """Resolve new or restart-surviving reviewable offers; retry transient read failures."""
     global _AUTO_FAILURE_NOTIFIED
     try:
         items = tclk_watch.opportunities(observer.load_state())
@@ -256,10 +256,27 @@ def _new_auto_review_notices() -> list[str]:
         if isinstance(item.get("id"), str)
     }
     if not app._TCLK_NOTICE_BASELINED:
-        app._TCLK_NOTICE_SEEN = set(active_ids)
+        try:
+            stored_records = tclk_review_evidence.load_store()["records"]
+        except tclk_review_evidence.EvidenceError:
+            return []
+        stored_bindings = {
+            (record["offer_id"], record["frame_sha256"])
+            for record in stored_records
+        }
+        unresolved_reviewable_ids = {
+            str(row["item"].get("id"))
+            for row in tclk_triage.review_candidates(items)
+            if (
+                isinstance(row["item"].get("id"), str)
+                and (row["item"]["id"], row["item"].get("frame_sha256")) not in stored_bindings
+            )
+        }
+        # Baseline old/non-reviewable offers and already-captured exact evidence, but
+        # keep any still-live reviewable candidate unresolved across a Discord restart.
+        app._TCLK_NOTICE_SEEN = set(active_ids) - unresolved_reviewable_ids
         app._TCLK_NOTICE_BASELINED = True
         _AUTO_FAILURE_NOTIFIED = set()
-        return []
 
     app._TCLK_NOTICE_SEEN.intersection_update(active_ids)
     _AUTO_FAILURE_NOTIFIED.intersection_update(active_ids)
