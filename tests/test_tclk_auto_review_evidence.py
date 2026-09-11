@@ -15,6 +15,7 @@ def _offer(index: int = 1, *, job_id: str = "job-safe-open") -> dict:
     return {
         "id": "0x" + f"{index:064x}",
         "frame_type": "offer",
+        "role": "payer",
         "read_only": True,
         "accepted": False,
         "rail": "paper",
