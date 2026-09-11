@@ -152,7 +152,7 @@ const now=Date.now(); const minted=generateHashLock(); const witness=minted.prei
 const offer=makeOffer({from:i.payer,role:'payer',amount:'1000',asset:'PAPER',lock:'hash',rails:['paper'],claimByMs:now+3600000,refundAfterMs:now+7200000,expiresMs:now+600000,job:{proto:'a2a',id:'job-1'},nonce:'0011223344556677'});
 const accept=makeAccept(offer,{from:i.payee,statement:minted.hash,nonce:'8899aabbccddeeff'});
 const lock={type:'lock',from:i.payer,contract:accept.contract,rail:'paper',ref:accept.contract};
-const reveal={type:'reveal',from:i.payee,contract:accept.contract,ref:accept.contract,['se'+'cret']:witness};
+const reveal={type:'reveal',from:i.payee,contract:accept.contract,['se'+'cret']:witness};
 const receipt={type:'receipt',from:i.payer,contract:accept.contract,outcome:'claimed',rail:'paper',ref:accept.contract};
 const paper=encodePaperRecord({status:'claimed',lock:'hash',statement:accept.statement,refundAfterMs:offer.refundAfterMs,['se'+'cret']:witness});
 process.stdout.write(JSON.stringify({offer:encodeFrame(offer),accept:encodeFrame(accept),lock:encodeFrame(lock),reveal:encodeFrame(reveal),receipt:encodeFrame(receipt),paper,contract:accept.contract,room:dealRoom(accept.contract),now}));
