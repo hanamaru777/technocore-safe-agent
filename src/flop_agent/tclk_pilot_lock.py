@@ -155,7 +155,8 @@ def _run_bridge(request: dict) -> dict:
     except (OSError, subprocess.SubprocessError) as error:
         raise LockError("lock_bridge_failed") from error
     if result.returncode != 0:
-        raise LockError("lock_bridge_failed")
+        cause = RuntimeError((result.stderr or "bridge returned nonzero")[:200])
+        raise LockError("lock_bridge_failed") from cause
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as error:
