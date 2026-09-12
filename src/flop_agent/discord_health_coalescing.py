@@ -1,6 +1,6 @@
 """Coalesce short health flaps into one Discord incident plus final recovery.
 
-This is presentation-only.  It wraps the existing Discord health-notice method,
+This is presentation-only. It wraps the existing Discord health-notice method,
 reads the same local health snapshot, and stores a tiny UI-only incident state.
 It never changes Observer health, Autopilot policy, signing, posting, recovery,
 or any protected continuity counter.
@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import discord_control, discord_tclk_approval, observer, resident
+from . import discord_control, observer, resident
 
 SCHEMA_VERSION = 1
 STATE_FILE = "discord-health-coalescing.json"
@@ -75,7 +75,7 @@ def _stamp(value: object) -> datetime | None:
 
 def _red_signature(notice: str) -> str:
     lines = [line.strip() for line in notice.splitlines() if line.strip()]
-    # Ignore the common title and volatile age line.  The remaining first stable
+    # Ignore the common title and volatile age line. The remaining first stable
     # line identifies degraded/stale/paused/off incidents well enough for dedupe.
     for line in lines[1:]:
         if line.startswith("最終正常監視の確認:") or line.startswith("最終監視:"):
@@ -124,14 +124,14 @@ def _coalesced_system_notices(control) -> list[str]:
                 output.append(notice)
             elif signature not in state["seen_red_signatures"]:
                 # Do not hide a materially new failure class while an incident is
-                # already open.  Repeat flaps of the same class stay silent.
+                # already open. Repeat flaps of the same class stay silent.
                 state["seen_red_signatures"].append(signature)
                 output.append(notice)
             state["recovery_since"] = None
             continue
 
         if _is_green_health(notice) and state["incident_open"]:
-            # The base UI resolves on the first healthy sample.  Suppress that
+            # The base UI resolves on the first healthy sample. Suppress that
             # premature green; this wrapper closes only after a stable grace.
             if state.get("recovery_since") is None:
                 state["recovery_since"] = now_value.isoformat()
@@ -165,12 +165,3 @@ def install() -> None:
     _ORIGINAL_SYSTEM_NOTICES = discord_control.Control.system_notices
     discord_control.Control.system_notices = _coalesced_system_notices
     _INSTALLED = True
-
-
-def main() -> None:
-    install()
-    discord_tclk_approval.main()
-
-
-if __name__ == "__main__":
-    main()
