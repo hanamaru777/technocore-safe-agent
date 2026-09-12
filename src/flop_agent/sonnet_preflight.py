@@ -106,22 +106,28 @@ def split_x_chunks(text: str, max_chars: int = 280) -> tuple[str, ...]:
     Sonnet poem content is constrained to English word tokens and ASCII punctuation,
     so ordinary character count equals X weighted count for these poem-only chunks.
     Attribution remains outside this function and must be preflighted separately.
+    Joining returned chunks with one LF reconstructs the exact canonical poem.
     """
     if max_chars < 1:
         raise PreflightError("x_limit_invalid")
     chunks: list[str] = []
     current = ""
+    have_current = False
     for line in text.split("\n"):
-        candidate = line if not current else current + "\n" + line
+        candidate = line if not have_current else current + "\n" + line
         if len(candidate) <= max_chars:
             current = candidate
+            have_current = True
             continue
-        if not current or len(line) > max_chars:
+        if not have_current or len(line) > max_chars:
             raise PreflightError("x_line_too_long")
         chunks.append(current)
         current = line
-    if current:
+        have_current = True
+    if have_current:
         chunks.append(current)
+    if "\n".join(chunks) != text:
+        raise PreflightError("x_chunk_reconstruction_failed")
     return tuple(chunks)
 
 
