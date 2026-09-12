@@ -201,7 +201,9 @@ def existing_record(value: dict) -> dict | None:
             raise RegistrationError("reconcile_read_failed") from error
 
         if value["state"] in {"attempting", "ambiguous"} and (
-            registration != value["registration"] or str(row.get("nonce")) != value["nonce"]
+            registration != value["registration"]
+            or str(row.get("nonce")) != value["nonce"]
+            or row.get("text") != render(value["registration"])
         ):
             raise RegistrationError("existing_registration_conflict")
         matches.append((row, registration))
