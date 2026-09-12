@@ -1,0 +1,29 @@
+[Unit]
+Description=One-shot fixed sonnet-2 MurphyBTC discovery invitation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=technocore-signer
+Group=technocore-signer
+SupplementaryGroups=technocore-autopilot
+WorkingDirectory=/opt/technocore-safe-agent
+EnvironmentFile=/etc/technocore-safe-agent/signer.env
+Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
+Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+Environment=UV_CACHE_DIR=/var/lib/technocore-safe-agent/signer/uv-cache
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.sonnet_discovery_murphy_invite
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json
+# No timer, Install section, restart policy, or automatic invocation.
