@@ -28,9 +28,10 @@ _INSTALLED = False
 
 def maintenance_cycle() -> None:
     """Run one existing local-only Resident/Autopilot maintenance cycle."""
-    from . import autopilot, resident
+    from . import autopilot, resident_candidate_supersession
 
-    resident.refresh()
+    observed = observer.load_state()
+    resident_candidate_supersession.refresh(observed)
     autopilot.build_outbox()
 
 
