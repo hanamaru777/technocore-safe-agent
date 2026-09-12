@@ -70,6 +70,7 @@ def test_validate_plan_produces_exact_shape_hash_and_balanced_presence():
     assert result.canonical_text.count("\n\n") == 3
     assert not result.canonical_text.endswith("\n")
     assert all(len(chunk) <= 280 for chunk in result.x_chunks)
+    assert "\n".join(result.x_chunks) == result.canonical_text
 
 
 def test_unknown_word_fails_closed():
@@ -105,18 +106,11 @@ def test_adjacent_same_contributor_fails_closed():
 
 def test_member_without_word_fails_closed():
     lines = _plan()
-    absent = DIDS[3]
-    replacements = [DIDS[0], DIDS[1], DIDS[2]]
-    cursor = 0
-    previous = None
+    flat_index = 0
     for line in lines:
         for i, planned in enumerate(line):
-            if planned.contributor_did == absent:
-                while replacements[cursor % 3] == previous:
-                    cursor += 1
-                line[i] = s.PlannedWord(planned.token, replacements[cursor % 3])
-                cursor += 1
-            previous = line[i].contributor_did
+            line[i] = s.PlannedWord(planned.token, DIDS[flat_index % 3])
+            flat_index += 1
     with pytest.raises(s.PreflightError, match="roster_member_without_word"):
         s.validate_plan(lines, DIDS, _dictionary())
 
@@ -133,8 +127,10 @@ def test_line_overflow_and_underflow_fail_closed():
         s.validate_plan(underflow, DIDS, _dictionary())
 
 
-def test_x_chunking_never_splits_inside_a_line():
-    text = "12345\n67890\nabcde"
-    assert s.split_x_chunks(text, max_chars=11) == ("12345\n67890", "abcde")
+def test_x_chunking_never_splits_inside_a_line_and_preserves_blank_lines():
+    text = "12345\n67890\n\nabcde"
+    chunks = s.split_x_chunks(text, max_chars=11)
+    assert chunks == ("12345\n67890", "\nabcde")
+    assert "\n".join(chunks) == text
     with pytest.raises(s.PreflightError, match="x_line_too_long"):
         s.split_x_chunks("123456", max_chars=5)
