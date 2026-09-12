@@ -19,6 +19,7 @@ from . import (
     observer_request_deadline,
     observer_resident_isolation,
     observer_resilience,
+    observer_rooms_backfill_retry,
     observer_startup_resilience,
     observer_state_writer_isolation,
     observer_tclk_parser_guard,
@@ -98,6 +99,10 @@ def main() -> None:
     # asyncio loop that owns lobby/events reads. Generation tracking keeps newer
     # mutations dirty while disk I/O runs off-loop.
     observer_state_writer_isolation.install()
+    # A transient public /rooms directory timeout must not leave overall health
+    # stale for the normal one-hour discovery cadence. Retry only that GET-only
+    # backfill with bounded backoff; successful cycles keep the original cadence.
+    observer_rooms_backfill_retry.install()
     # CPU-heavy Resident scoring/outbox maintenance remains in its own supervised
     # child process. Lobby capture is deliberately not a Resident child anymore.
     observer_resident_isolation.install()
