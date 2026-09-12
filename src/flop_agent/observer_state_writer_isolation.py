@@ -13,6 +13,13 @@ dirty for the next flush.  Expensive whole-state compaction runs only when an
 actual configured bound is exceeded; per-message retention is already bounded at
 mutation time by Observer.
 
+A narrow safety snapshot is also emitted at the state root for the isolated signer.
+It contains only freshness, current health and the two protected core-gap counters.
+The state-root setgid boundary makes that file readable by technocore-autopilot but
+not replaceable by the signer. Failure to refresh this secondary snapshot never
+stops protected Observer persistence; the Sonnet lane then fails closed on stale or
+missing evidence.
+
 No network, signing, shell, URL following, or Technocore write is added here.
 """
 from __future__ import annotations
@@ -22,11 +29,17 @@ import json
 import os
 import tempfile
 
-from . import observer
+from . import core, observer
 
 _INSTALLED = False
 _BASE_MARK_DIRTY = observer.StateWriter.mark_dirty
 _BASE_RUN = observer.StateWriter.run
+SAFETY_SCHEMA_VERSION = 1
+SAFETY_NAME = "observer-safety.json"
+
+
+def safety_path():
+    return core.STATE / SAFETY_NAME
 
 
 def mark_dirty(writer) -> None:
@@ -34,7 +47,7 @@ def mark_dirty(writer) -> None:
     writer._dirty_generation = int(getattr(writer, "_dirty_generation", 0)) + 1
 
 
-def _atomic_text_write(path, encoded: str) -> None:
+def _atomic_text_write(path, encoded: str, *, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
         "w",
@@ -50,17 +63,26 @@ def _atomic_text_write(path, encoded: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(handle.name, path)
+        if mode is not None:
+            os.chmod(path, mode)
     finally:
         if os.path.exists(handle.name):
             os.unlink(handle.name)
 
 
-def _persist_serialized(state_text: str, heartbeat_text: str) -> None:
+def _persist_serialized(state_text: str, heartbeat_text: str, safety_text: str) -> None:
     _atomic_text_write(observer.state_path(), state_text)
     _atomic_text_write(observer.heartbeat_path(), heartbeat_text)
+    try:
+        _atomic_text_write(safety_path(), safety_text, mode=0o640)
+    except OSError:
+        # The safety snapshot is a secondary, fail-closed consumer bridge. Core
+        # Observer state/heartbeat persistence must not fail because this export
+        # cannot be refreshed; the Sonnet lane rejects stale/missing evidence.
+        pass
 
 
-def _serialize_snapshot(writer) -> tuple[int, str, str]:
+def _serialize_snapshot(writer) -> tuple[int, str, str, str]:
     """Capture one consistent snapshot without yielding to mutating tasks."""
     config = writer.config or observer.load_config()
     over_bound = (
@@ -93,6 +115,13 @@ def _serialize_snapshot(writer) -> tuple[int, str, str]:
             "message_gaps": int(metrics.get("message_gaps", 0)),
         },
     }
+    safety = {
+        "schema_version": SAFETY_SCHEMA_VERSION,
+        "updated_at": writer.state["updated_at"],
+        "health": writer.state.get("health", {}).get("current", "degraded"),
+        "unrecoverable_core_gap_events": metrics.get("unrecoverable_core_gap_events"),
+        "unrecoverable_core_gap_messages": metrics.get("unrecoverable_core_gap_messages"),
+    }
     # State files are data stores, not canonical signed artifacts.  Avoid recursive
     # key sorting so serialization time stays bounded as the Agent map grows.
     state_text = json.dumps(
@@ -107,14 +136,20 @@ def _serialize_snapshot(writer) -> tuple[int, str, str]:
         separators=(",", ":"),
         sort_keys=False,
     ) + "\n"
-    return generation, state_text, heartbeat_text
+    safety_text = json.dumps(
+        safety,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ) + "\n"
+    return generation, state_text, heartbeat_text, safety_text
 
 
 async def flush_async(writer) -> None:
     if not writer.dirty:
         return
-    generation, state_text, heartbeat_text = _serialize_snapshot(writer)
-    await asyncio.to_thread(_persist_serialized, state_text, heartbeat_text)
+    generation, state_text, heartbeat_text, safety_text = _serialize_snapshot(writer)
+    await asyncio.to_thread(_persist_serialized, state_text, heartbeat_text, safety_text)
     writer.write_count += 1
     if int(getattr(writer, "_dirty_generation", 0)) == generation:
         writer.dirty = False
