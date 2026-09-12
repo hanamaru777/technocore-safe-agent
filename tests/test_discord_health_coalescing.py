@@ -104,7 +104,8 @@ def test_non_health_notice_passes_through_unchanged(monkeypatch, tmp_path):
     assert coalescing._coalesced_system_notices(object()) == [notice]
 
 
-def test_service_entrypoint_uses_health_coalescing_wrapper():
-    text = (core.ROOT / "packaging" / "oracle" / "discord.service").read_text("utf-8")
-    assert "-m flop_agent.discord_health_coalescing" in text
-    assert "discord_tclk_approval" not in text
+def test_retained_tclk_approval_entrypoint_installs_health_coalescer():
+    service = (core.ROOT / "packaging" / "oracle" / "discord.service").read_text("utf-8")
+    approval = (core.ROOT / "src" / "flop_agent" / "discord_tclk_approval.py").read_text("utf-8")
+    assert "-m flop_agent.discord_tclk_approval" in service
+    assert "discord_health_coalescing.install()" in approval
