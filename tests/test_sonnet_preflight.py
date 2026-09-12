@@ -88,11 +88,11 @@ def test_invalid_did_shape_fails_closed():
 
 
 def test_did_letter_violation_fails_closed():
-    # A valid did:key whose letter set cannot spell "quiet" (q/u absent).
-    limited = "did:key:z6Mk" + ("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcde" + "f" * 5)[:44]
+    # Valid Ed25519 did:key shape, but its letters cannot spell "river".
+    limited = "did:key:z6Mk" + "A" * 44
     assert s.ED25519_DID_RE.fullmatch(limited)
     lines = _plan()
-    lines[0][0] = s.PlannedWord("quiet", limited)
+    lines[0][0] = s.PlannedWord("river", limited)
     roster = [limited, DIDS[1], DIDS[2], DIDS[3]]
     for line in lines:
         for i, planned in enumerate(line):
