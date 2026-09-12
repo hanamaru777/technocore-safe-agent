@@ -72,17 +72,18 @@ def test_roster_member_with_zero_possible_words_fails_before_assignment():
         planner.assign_words(_lines("river"), roster)
 
 
-def test_global_adjacency_unsatisfiable_fails_closed():
-    one = "did:key:z6Mk" + "RIVER" * 8 + "RIVE"
-    others = [
-        "did:key:z6Mk" + "A" * 44,
-        "did:key:z6Mk" + "B" * 44,
-        "did:key:z6Mk" + "C" * 44,
-    ]
-    roster = [one, *others]
-    assert len(one.removeprefix("did:key:z6Mk")) == 44
-    with pytest.raises(planner.PlanningError):
-        planner.assign_words(_lines("river"), roster)
+def test_global_adjacency_unsatisfiable_fails_closed_after_every_member_is_usable():
+    river_only = "did:key:z6Mk" + "rv" * 22
+    calm_only = "did:key:z6Mk" + "cAL" * 14 + "cA"
+    boat_only = "did:key:z6Mk" + "boAT" * 11
+    sun_only = "did:key:z6Mk" + "sUN" * 14 + "sU"
+    roster = [river_only, calm_only, boat_only, sun_only]
+
+    lines = [["river", "river", "calm", "boat", "sun"]]
+    lines.extend([["a"] for _ in range(13)])
+
+    with pytest.raises(planner.PlanningError, match="assignment_unsatisfiable"):
+        planner.assign_words(lines, roster)
 
 
 def test_literary_readiness_is_explicitly_manual_and_checks_seven_families():
