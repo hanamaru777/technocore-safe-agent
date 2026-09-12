@@ -10,6 +10,7 @@ from flop_agent import (
     observer,
     observer_resident_isolation,
     resident,
+    resident_candidate_supersession,
 )
 
 
@@ -26,13 +27,19 @@ class _OneCycleStop:
 
 
 def test_maintenance_cycle_uses_only_persisted_local_state(monkeypatch):
-    calls: list[str] = []
-    monkeypatch.setattr(resident, "refresh", lambda: calls.append("refresh") or {})
+    calls: list[object] = []
+    observed = {"persisted": True}
+    monkeypatch.setattr(observer, "load_state", lambda: observed)
+    monkeypatch.setattr(
+        resident_candidate_supersession,
+        "refresh",
+        lambda value: calls.append(("refresh", value)) or {},
+    )
     monkeypatch.setattr(autopilot, "build_outbox", lambda: calls.append("outbox") or {})
 
     observer_resident_isolation.maintenance_cycle()
 
-    assert calls == ["refresh", "outbox"]
+    assert calls == [("refresh", observed), "outbox"]
 
 
 def test_maintenance_process_runs_cycle_and_uses_positive_nice(monkeypatch):
