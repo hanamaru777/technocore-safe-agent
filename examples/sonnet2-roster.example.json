@@ -1,0 +1,9 @@
+{
+  "_note": "Synthetic format-only DIDs for a mechanical demo. They are not contest registrations or roster consent.",
+  "roster": [
+    "did:key:z6MkABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstu",
+    "did:key:z6MkABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstv",
+    "did:key:z6MkABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstw",
+    "did:key:z6MkABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstx"
+  ]
+}
