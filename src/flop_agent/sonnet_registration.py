@@ -22,24 +22,37 @@ DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
 FIXED = {"type": "sonnet.register.v1", "contest_id": "sonnet-2", "role": "writer", "x_account_url": "https://x.com/MinerMaru73"}
 OPEN = datetime(2026, 9, 11, 12, tzinfo=UTC)
 CLOSE = datetime(2026, 9, 18, 12, tzinfo=UTC)
+SAFETY_KEYS = {"schema_version", "updated_at", "health", "unrecoverable_core_gap_events", "unrecoverable_core_gap_messages"}
 
 
 class RegistrationError(RuntimeError):
     """Only fixed, non-secret error codes reach command output."""
 
 
+def valid_request_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 128
+        and value.strip() == value
+        and all(char.isprintable() and not char.isspace() for char in value)
+    )
+
+
 def render(registration: dict, room: str = ROOM) -> str:
     if (room != ROOM or not isinstance(registration, dict)
             or set(registration) != set(FIXED) | {"request_id"}
             or any(registration.get(k) != v for k, v in FIXED.items())
-            or not isinstance(registration.get("request_id"), str)
-            or not re.fullmatch(r"[a-f0-9]{32}", registration["request_id"])):
+            or not valid_request_id(registration.get("request_id"))):
         raise RegistrationError("registration_binding_invalid")
     return json.dumps(registration, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def state_path():
     return core.STATE / "signer" / "sonnet-2-registration.json"
+
+
+def safety_path():
+    return core.STATE / "observer-safety.json"
 
 
 def validate(value: dict) -> dict:
@@ -107,19 +120,38 @@ def registration_lock():
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def require_health() -> None:
-    # Same read-side safety evidence as the existing typed isolated lane.
-    # Missing permissions/state fail closed; this code grants no Observer access.
+def load_safety_snapshot() -> dict:
     try:
-        value = observer.load_state()
-        stamp = datetime.fromisoformat(value["updated_at"])
+        value = json.loads(safety_path().read_text("utf-8"))
+    except (OSError, ValueError, TypeError) as error:
+        raise RegistrationError("observer_state_unavailable") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != SAFETY_KEYS
+        or value.get("schema_version") != 1
+        or not isinstance(value.get("updated_at"), str)
+        or not isinstance(value.get("health"), str)
+        or type(value.get("unrecoverable_core_gap_events")) is not int
+        or type(value.get("unrecoverable_core_gap_messages")) is not int
+    ):
+        raise RegistrationError("observer_state_unavailable")
+    return value
+
+
+def require_health() -> None:
+    # The signer reads only the narrow Resident-exported safety snapshot at the
+    # state root. It never needs traversal/read access to the Observer directory.
+    try:
+        value = load_safety_snapshot()
+        stamp = datetime.fromisoformat(value["updated_at"].replace("Z", "+00:00"))
         age = (datetime.now(UTC) - stamp).total_seconds()
+    except RegistrationError:
+        raise
     except Exception as error:
         raise RegistrationError("observer_state_unavailable") from error
-    if not 0 <= age <= 300 or value.get("health", {}).get("current") != "ok":
+    if not 0 <= age <= 300 or value["health"] != "ok":
         raise RegistrationError("observer_health_not_ok")
-    metrics = value.get("metrics", {})
-    if (metrics.get("unrecoverable_core_gap_events"), metrics.get("unrecoverable_core_gap_messages")) != (117, 5_083_155):
+    if (value["unrecoverable_core_gap_events"], value["unrecoverable_core_gap_messages"]) != (117, 5_083_155):
         raise RegistrationError("protected_core_baseline_changed")
 
 
@@ -136,24 +168,58 @@ def existing_record(value: dict) -> dict | None:
     rows = payload if isinstance(payload, list) else payload.get("messages")
     if not isinstance(rows, list):
         raise RegistrationError("reconcile_read_failed")
+
+    matches: list[tuple[dict, dict]] = []
     for row in rows:
         if not isinstance(row, dict) or row.get("from") != DID:
             continue
         try:
-            registration = json.loads(row.get("text", ""))
-            render(registration)
             verify_signed_record(ROOM, row)
+            registration = json.loads(row.get("text", ""))
         except (ValueError, TypeError, RuntimeError):
             continue
-        # Even another request ID with the same fixed writer binding suppresses
-        # a second registration. Never change the locally persisted request ID.
+        if not isinstance(registration, dict):
+            continue
+        if registration.get("type") != "sonnet.register.v1" or registration.get("contest_id") != "sonnet-2":
+            continue
+
+        # Any authenticated registration for our DID is role-binding evidence.
+        # A conflicting role, writer X binding, malformed shape or request ID is
+        # terminal; never try to overwrite the first registration with another.
+        if (
+            set(registration) != set(FIXED) | {"request_id"}
+            or registration.get("role") != FIXED["role"]
+            or registration.get("x_account_url") != FIXED["x_account_url"]
+            or not valid_request_id(registration.get("request_id"))
+        ):
+            raise RegistrationError("existing_registration_conflict")
+        if type(row.get("seq")) is not int or row["seq"] < 0 or not isinstance(row.get("ts"), str) or not isinstance(row.get("sig"), str):
+            raise RegistrationError("reconcile_read_failed")
+        try:
+            datetime.fromisoformat(row["ts"].replace("Z", "+00:00"))
+        except ValueError as error:
+            raise RegistrationError("reconcile_read_failed") from error
+
         if value["state"] in {"attempting", "ambiguous"} and (
             registration != value["registration"] or str(row.get("nonce")) != value["nonce"]
         ):
             raise RegistrationError("existing_registration_conflict")
-        if type(row.get("seq")) is int and row["seq"] >= 0 and isinstance(row.get("ts"), str):
-            return row
-    return None
+        matches.append((row, registration))
+
+    if not matches:
+        return None
+
+    identities = {(item[1]["request_id"], str(item[0].get("nonce"))) for item in matches}
+    if len(identities) != 1:
+        raise RegistrationError("existing_registration_conflict")
+
+    row, registration = matches[-1]
+    if value["state"] not in {"attempting", "ambiguous"}:
+        # Before any local POST attempt, adopt the exact signed request ID that
+        # is already on the room so persisted evidence and operator output agree.
+        value["registration"] = registration
+        value["text_hash"] = hashlib.sha256(render(registration).encode()).hexdigest()
+    return row
 
 
 def mark_posted(value: dict, row: dict) -> dict:
