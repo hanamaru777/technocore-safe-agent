@@ -5,11 +5,12 @@ import pytest
 from flop_agent import sonnet_preflight as s
 
 
+_PAYLOAD = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstu"
 DIDS = [
-    "did:key:abcdefghijklmnopqrstuvwxyz",
-    "did:key:bcdefghijklmnopqrstuvwxyza",
-    "did:key:cdefghijklmnopqrstuvwxyzab",
-    "did:key:defghijklmnopqrstuvwxyzabc",
+    "did:key:z6Mk" + _PAYLOAD,
+    "did:key:z6Mk" + _PAYLOAD[:-1] + "v",
+    "did:key:z6Mk" + _PAYLOAD[:-1] + "w",
+    "did:key:z6Mk" + _PAYLOAD[:-1] + "x",
 ]
 
 
@@ -39,9 +40,9 @@ def _plan():
     return lines
 
 
-def test_parse_cmudict_uses_largest_pronunciation_count():
+def test_parse_cmudict_mirrors_official_largest_pronunciation_rule():
     raw = (
-        b"WORD W ER1 D\n"
+        b"WORD W ER1 D # comment 99\n"
         b"WORD(1) W ER1 D AH0\n"
         b"QUIET K W AY1 AH0 T\n"
     )
@@ -80,19 +81,23 @@ def test_unknown_word_fails_closed():
         s.validate_plan(lines, DIDS, _dictionary())
 
 
+def test_invalid_did_shape_fails_closed():
+    roster = ["did:key:not-ed25519", DIDS[1], DIDS[2], DIDS[3]]
+    with pytest.raises(s.PreflightError, match="invalid_contributor_did"):
+        s.validate_plan(_plan(), roster, _dictionary())
+
+
 def test_did_letter_violation_fails_closed():
-    roster = [
-        "did:key:abcde",
-        DIDS[1],
-        DIDS[2],
-        DIDS[3],
-    ]
+    # A valid did:key whose letter set cannot spell "quiet" (q/u absent).
+    limited = "did:key:z6Mk" + ("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcde" + "f" * 5)[:44]
+    assert s.ED25519_DID_RE.fullmatch(limited)
     lines = _plan()
-    lines[0][0] = s.PlannedWord("river", roster[0])
+    lines[0][0] = s.PlannedWord("quiet", limited)
+    roster = [limited, DIDS[1], DIDS[2], DIDS[3]]
     for line in lines:
         for i, planned in enumerate(line):
             if planned.contributor_did == DIDS[0]:
-                line[i] = s.PlannedWord(planned.token, roster[0])
+                line[i] = s.PlannedWord(planned.token, limited)
     with pytest.raises(s.PreflightError, match="did_letter_violation"):
         s.validate_plan(lines, roster, _dictionary())
 
