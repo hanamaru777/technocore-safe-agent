@@ -33,9 +33,14 @@ def environment(monkeypatch, tmp_path):
         def now(cls, tz=None):
             return cls(2026, 9, 12, tzinfo=UTC)
     monkeypatch.setattr(lane, "datetime", Clock)
-    observed = {"updated_at": Clock.now().isoformat(), "health": {"current": "ok"},
-                "metrics": {"unrecoverable_core_gap_events": 117, "unrecoverable_core_gap_messages": 5083155}}
-    monkeypatch.setattr(observer, "load_state", lambda: observed)
+    observed = {
+        "schema_version": 1,
+        "updated_at": Clock.now().isoformat(),
+        "health": "ok",
+        "unrecoverable_core_gap_events": 117,
+        "unrecoverable_core_gap_messages": 5083155,
+    }
+    monkeypatch.setattr(lane, "load_safety_snapshot", lambda: observed)
     rows, posts, signs, buffers = [], [], [], []
     def read(room, **kwargs):
         assert room == lane.ROOM and kwargs["limit"] == 200 and kwargs["cache_buster"]
@@ -81,7 +86,7 @@ def test_exact_canonical_writer_registration_and_secret_lifecycle(environment):
     assert set(value) == {"schema_version", "room", "did", "registration", "state", "nonce", "text_hash", "git_commit_sha", "attempted_at", "seq", "ts", "posted_record"}
 
 
-@pytest.mark.parametrize("field,value", [("contest_id", "sonnet-1"), ("role", "reader"), ("x_account_url", "https://example.invalid"), ("type", "anything"), ("text", "arbitrary"), ("request_id", "x;echo")])
+@pytest.mark.parametrize("field,value", [("contest_id", "sonnet-1"), ("role", "reader"), ("x_account_url", "https://example.invalid"), ("type", "anything"), ("text", "arbitrary"), ("request_id", "bad id")])
 def test_wrong_bindings_and_arbitrary_fields_rejected(field, value):
     with pytest.raises(lane.RegistrationError):
         lane.render({**lane.FIXED, "request_id": "a" * 32, field: value})
@@ -96,14 +101,30 @@ def test_wrong_room_and_cli_arguments_rejected(monkeypatch):
         lane.main()
 
 
+def test_safety_snapshot_reader_accepts_only_narrow_schema(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    value = {
+        "schema_version": 1,
+        "updated_at": "2026-09-12T00:00:00+00:00",
+        "health": "ok",
+        "unrecoverable_core_gap_events": 117,
+        "unrecoverable_core_gap_messages": 5083155,
+    }
+    lane.safety_path().write_text(json.dumps(value), encoding="utf-8")
+    assert lane.load_safety_snapshot() == value
+    lane.safety_path().write_text(json.dumps({**value, "rooms": {}}), encoding="utf-8")
+    with pytest.raises(lane.RegistrationError, match="observer_state_unavailable"):
+        lane.load_safety_snapshot()
+
+
 @pytest.mark.parametrize("condition", ["degraded", "events", "messages", "missing", "stale"])
 def test_health_fail_closed_before_vault_or_post(environment, monkeypatch, condition):
     observed, _, posts, signs, _, _ = environment
-    if condition == "degraded": observed["health"]["current"] = "degraded"
-    if condition == "events": observed["metrics"]["unrecoverable_core_gap_events"] += 1
-    if condition == "messages": observed["metrics"]["unrecoverable_core_gap_messages"] += 1
+    if condition == "degraded": observed["health"] = "degraded"
+    if condition == "events": observed["unrecoverable_core_gap_events"] += 1
+    if condition == "messages": observed["unrecoverable_core_gap_messages"] += 1
     if condition == "stale": observed["updated_at"] = "2020-01-01T00:00:00+00:00"
-    if condition == "missing": monkeypatch.setattr(observer, "load_state", lambda: (_ for _ in ()).throw(PermissionError()))
+    if condition == "missing": monkeypatch.setattr(lane, "load_safety_snapshot", lambda: (_ for _ in ()).throw(PermissionError()))
     with pytest.raises(lane.RegistrationError): lane.run_once()
     assert posts == signs == []
 
@@ -113,7 +134,7 @@ def test_health_change_during_signing_blocks_post(environment, monkeypatch):
     original = core.invoke_signer
     def sign(*args):
         result = original(*args)
-        observed["health"]["current"] = "degraded"
+        observed["health"] = "degraded"
         return result
     monkeypatch.setattr(core, "invoke_signer", sign)
     with pytest.raises(lane.RegistrationError): lane.run_once()
@@ -141,10 +162,51 @@ def test_ambiguous_attempt_reuses_request_and_never_reposts(environment, monkeyp
     assert len(posts) == len(signs) == 1
 
 
-def test_existing_signed_registration_suppresses_duplicate(environment):
+def test_ambiguous_reconciliation_requires_exact_nonce(environment, monkeypatch):
+    _, rows, _, _, _, record = environment
+    monkeypatch.setattr(core.httpx, "post", lambda *args, **kwargs: (_ for _ in ()).throw(core.httpx.ConnectTimeout("dummy")))
+    with pytest.raises(lane.RegistrationError):
+        lane.run_once()
+    saved = lane.load()
+    rows.append(record(lane.render(saved["registration"]), str(int(saved["nonce"]) + 1)))
+    with pytest.raises(lane.RegistrationError, match="existing_registration_conflict"):
+        lane.run_once()
+
+
+def test_existing_signed_registration_suppresses_duplicate_and_adopts_actual_request_id(environment):
     _, rows, posts, signs, _, record = environment
-    rows.append(record(lane.render({**lane.FIXED, "request_id": "c" * 32})))
-    assert lane.run_once()["action"] == "reconciled"
+    prior = {**lane.FIXED, "request_id": "register-1"}
+    rows.append(record(json.dumps(prior, separators=(",", ":"))))
+    result = lane.run_once()
+    assert result["action"] == "reconciled"
+    assert result["request_id"] == "register-1"
+    assert lane.load()["registration"] == prior
+    assert posts == signs == []
+
+
+@pytest.mark.parametrize("registration", [
+    {"type": "sonnet.register.v1", "contest_id": "sonnet-2", "role": "voter", "request_id": "vote-1"},
+    {**lane.FIXED, "x_account_url": "https://x.com/someone_else", "request_id": "writer-elsewhere"},
+])
+def test_existing_conflicting_registration_blocks_second_role_or_x(environment, registration):
+    _, rows, posts, signs, _, record = environment
+    text = json.dumps(registration, sort_keys=True, separators=(",", ":"))
+    rows.append(record(text))
+    with pytest.raises(lane.RegistrationError, match="existing_registration_conflict"):
+        lane.run_once()
+    assert posts == signs == []
+
+
+def test_multiple_existing_writer_bindings_fail_closed(environment):
+    _, rows, posts, signs, _, record = environment
+    first = {**lane.FIXED, "request_id": "register-1"}
+    second = {**lane.FIXED, "request_id": "register-2"}
+    rows.extend([
+        record(json.dumps(first, separators=(",", ":")), "100"),
+        record(json.dumps(second, separators=(",", ":")), "101"),
+    ])
+    with pytest.raises(lane.RegistrationError, match="existing_registration_conflict"):
+        lane.run_once()
     assert posts == signs == []
 
 
