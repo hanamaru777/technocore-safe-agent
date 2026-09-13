@@ -289,12 +289,12 @@ def _combined_notices() -> list[str]:
 
 
 def main() -> None:
-    # Keep the long-standing production entrypoint and install the presentation-
-    # only health coalescer inside that retained review/knowledge/collaboration
-    # chain. This preserves every existing tclk safety regression invariant.
-    from . import discord_health_coalescing
+    # Keep the long-standing production entrypoint and install presentation-only
+    # wrappers inside the retained review/knowledge/collaboration chain.
+    from . import discord_health_coalescing, discord_outcome_scorecard
 
     discord_health_coalescing.install()
+    discord_outcome_scorecard.install()
     app._new_auto_review_notices = _combined_notices
     app.main()
 
