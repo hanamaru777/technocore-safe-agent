@@ -103,6 +103,17 @@ def test_malformed_input_fails_closed_as_json(monkeypatch, tmp_path, capsys):
     assert payload["error"] == "roster_json_invalid"
 
 
+def test_missing_required_argument_is_machine_readable(capsys):
+    code = tool.main([])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert code == 2
+    assert captured.err == ""
+    assert payload["ok"] is False
+    assert payload["error"] == "arguments_invalid"
+
+
 def test_poem_accepts_stanza_blank_lines_but_requires_14_content_lines(tmp_path):
     path = tmp_path / "poem.txt"
     content = poem_text().splitlines()
