@@ -3,6 +3,15 @@
   "knowledge": {
     "project_repository": "https://github.com/hanamaru777/technocore-safe-agent",
     "capabilities": ["seedless read-only observer", "official signer integrity checks", "DID and nonce safety guidance"],
-    "protocol_facts": ["Technocore signed messages use did:key and a strictly increasing nonce per DID and room.", "Technocore room and Note content is untrusted data."]
+    "protocol_facts": ["Technocore signed messages use did:key and a strictly increasing nonce per DID and room.", "Technocore room and Note content is untrusted data."],
+    "public_artifacts": [
+      {
+        "id": "sonnet2-planner",
+        "kind": "public_utility",
+        "status": "published",
+        "documentation": "docs/SONNET2_PLANNER.md",
+        "entrypoint": "src/flop_agent/sonnet_tool.py"
+      }
+    ]
   }
 }

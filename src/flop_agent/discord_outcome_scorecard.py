@@ -2,12 +2,15 @@
 
 Presentation/read-only only. This module derives its scorecard from existing durable
 Resident candidate state, acknowledged Autopilot receipts, trusted relationships,
-already-recorded collaboration state and Observer health. It never signs, posts,
-approves, mutates protocol state, follows URLs, or changes safety/rate/continuity gates.
+already-recorded collaboration state, repository-owned public artifact metadata and
+Observer health. It never signs, posts, approves, mutates protocol state, follows URLs,
+or changes safety/rate/continuity gates.
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 from . import collaboration
 from . import discord_control as base
@@ -15,6 +18,9 @@ from . import resident
 
 _INSTALLED = False
 _ORIGINAL_ACTIVITY = base.activity_snapshot
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PUBLIC_PROFILE_PATH = _REPO_ROOT / "public-profile.json"
+_MAX_PUBLIC_ARTIFACTS = 16
 
 
 def _stamp(value: object) -> datetime | None:
@@ -45,6 +51,50 @@ def _collaboration_counts() -> tuple[int, int]:
         for item in state.get("completed_evidence_index", [])
     )
     return active, completed
+
+
+def _repo_file_exists(path_value: object) -> bool:
+    """Accept only an existing relative file inside the checked-out repository."""
+    if not isinstance(path_value, str) or not path_value.strip():
+        return False
+    relative = Path(path_value)
+    if relative.is_absolute() or ".." in relative.parts:
+        return False
+    root = _REPO_ROOT.resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return candidate.is_file()
+
+
+def _public_artifact_count() -> int:
+    """Count explicit published utilities backed by repository files only."""
+    try:
+        payload = json.loads(_PUBLIC_PROFILE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return 0
+    knowledge = payload.get("knowledge") if isinstance(payload, dict) else None
+    artifacts = knowledge.get("public_artifacts") if isinstance(knowledge, dict) else None
+    if not isinstance(artifacts, list):
+        return 0
+
+    count = 0
+    for item in artifacts[:_MAX_PUBLIC_ARTIFACTS]:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") != "public_utility" or item.get("status") != "published":
+            continue
+        artifact_id = item.get("id")
+        if not isinstance(artifact_id, str) or not artifact_id.strip():
+            continue
+        if not _repo_file_exists(item.get("documentation")):
+            continue
+        if not _repo_file_exists(item.get("entrypoint")):
+            continue
+        count += 1
+    return count
 
 
 def _unresolved_direct(activity: dict) -> dict | None:
@@ -102,6 +152,7 @@ def _activity_snapshot(*, sync_timeline: bool = True, include_trust: bool = True
     activity["active_trusted"] = len(activity.get("trusted", []))
     activity["collaboration_active"] = collaboration_active
     activity["collaboration_completed"] = collaboration_completed
+    activity["public_artifacts"] = _public_artifact_count()
     activity["oldest_unresolved_direct"] = _unresolved_direct(activity)
     return activity
 
@@ -139,7 +190,8 @@ def _durable_line(activity: dict) -> str:
         "継続成果: "
         f"active trust {activity['active_trusted']} / "
         f"協業進行 {activity['collaboration_active']} / "
-        f"協業完了 {activity['collaboration_completed']}"
+        f"協業完了 {activity['collaboration_completed']} / "
+        f"公開artifact {activity['public_artifacts']}"
     )
 
 
@@ -203,6 +255,7 @@ def _activity_message() -> str:
         f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}",
         _relationship_line(activity),
         f"active trust: {activity['active_trusted']}",
+        f"公開artifact: {activity['public_artifacts']}",
         f"自動投稿: {activity['posts']}（24h / safety cap 6、目標ではありません）",
         _oldest_line(activity),
         f"主な非アクション理由: {_non_action_reason(activity)}",
