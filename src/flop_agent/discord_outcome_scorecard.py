@@ -1,20 +1,20 @@
 """Outcome-focused Discord presentation for useful Agent relationships.
 
 Presentation/read-only only. This module derives its scorecard from existing durable
-Resident candidate state, acknowledged Autopilot receipts, trusted relationships and
-Observer health. It never signs, posts, approves, mutates protocol state, follows URLs,
-or changes any safety/rate/continuity gate.
+Resident candidate state, acknowledged Autopilot receipts, trusted relationships,
+already-recorded collaboration state and Observer health. It never signs, posts,
+approves, mutates protocol state, follows URLs, or changes safety/rate/continuity gates.
 """
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from . import collaboration
 from . import discord_control as base
 from . import resident
 
 _INSTALLED = False
 _ORIGINAL_ACTIVITY = base.activity_snapshot
-_ORIGINAL_DIGEST = base.Control.digest
 
 
 def _stamp(value: object) -> datetime | None:
@@ -24,8 +24,31 @@ def _stamp(value: object) -> datetime | None:
     return parsed
 
 
+def _collaboration_counts() -> tuple[int, int]:
+    """Read already-durable collaboration state without reconciling or mutating it."""
+    try:
+        state = collaboration.load_state()
+    except RuntimeError:
+        return 0, 0
+    records = [
+        item
+        for item in state.get("records", {}).values()
+        if isinstance(item, dict)
+    ]
+    active = sum(
+        item.get("stage") in {"replied", "task_candidate", "human_review", "active"}
+        for item in records
+    )
+    completed = sum(item.get("stage") == "completed" for item in records)
+    completed += sum(
+        isinstance(item, dict)
+        for item in state.get("completed_evidence_index", [])
+    )
+    return active, completed
+
+
 def _unresolved_direct(activity: dict) -> dict | None:
-    """Return the oldest live signed direct request without an ACKed reply."""
+    """Return the oldest live signed direct request without a recorded reply."""
     resolved = {
         item.get("conversation_id")
         for item in activity.get("sent", [])
@@ -67,14 +90,18 @@ def _unresolved_direct(activity: dict) -> dict | None:
 
 
 def _activity_snapshot(*, sync_timeline: bool = True, include_trust: bool = True) -> dict:
-    activity = _ORIGINAL_ACTIVITY(
-        sync_timeline=sync_timeline,
-        include_trust=include_trust,
+    activity = dict(
+        _ORIGINAL_ACTIVITY(
+            sync_timeline=sync_timeline,
+            include_trust=include_trust,
+        )
     )
-    activity = dict(activity)
+    collaboration_active, collaboration_completed = _collaboration_counts()
     activity["signed_direct_requests"] = len(activity.get("received", []))
     activity["acked_replies"] = len(activity.get("sent", []))
     activity["active_trusted"] = len(activity.get("trusted", []))
+    activity["collaboration_active"] = collaboration_active
+    activity["collaboration_completed"] = collaboration_completed
     activity["oldest_unresolved_direct"] = _unresolved_direct(activity)
     return activity
 
@@ -95,6 +122,24 @@ def _oldest_line(activity: dict) -> str:
         "未解決direct: "
         f"{base.short_fingerprint(item.get('fingerprint'))} / {age} / "
         f"{item.get('room', '?')} #{item.get('seq', '?')}"
+    )
+
+
+def _relationship_line(activity: dict) -> str:
+    return (
+        "関係24h: "
+        f"署名direct {activity['signed_direct_requests']} / "
+        f"ACK返信 {activity['acked_replies']} / "
+        f"ユニーク相手 {activity['counterparts']}人"
+    )
+
+
+def _durable_line(activity: dict) -> str:
+    return (
+        "継続成果: "
+        f"active trust {activity['active_trusted']} / "
+        f"協業進行 {activity['collaboration_active']} / "
+        f"協業完了 {activity['collaboration_completed']}"
     )
 
 
@@ -120,13 +165,8 @@ def _status_message() -> str:
         f"{icon} FLOP Agent {title}",
         f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}",
         f"Autopilot: {auto_label}",
-        (
-            "成果24h: "
-            f"direct {activity['signed_direct_requests']} / "
-            f"ACK返信 {activity['acked_replies']} / "
-            f"相手 {activity['counterparts']}人 / "
-            f"active trust {activity['active_trusted']}"
-        ),
+        _relationship_line(activity),
+        _durable_line(activity),
         f"自動投稿: {activity['posts']}（24h / safety cap 6、目標ではありません）",
         _oldest_line(activity),
         f"queue: {snapshot['auto'].get('queued', 0)} / 緊急 {snapshot['critical']}",
@@ -158,13 +198,8 @@ def _activity_message() -> str:
     lines = [
         "📊 FLOP Agent 24時間アウトカム",
         f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}",
-        (
-            "関係成果: "
-            f"署名direct {activity['signed_direct_requests']} / "
-            f"ACK返信 {activity['acked_replies']} / "
-            f"ユニーク相手 {activity['counterparts']}人 / "
-            f"active trust {activity['active_trusted']}"
-        ),
+        _relationship_line(activity),
+        _durable_line(activity),
         f"自動投稿: {activity['posts']}（24h / safety cap 6、目標ではありません）",
         _oldest_line(activity),
         f"主な非アクション理由: {_non_action_reason(activity)}",
@@ -228,9 +263,9 @@ def _digest(_control) -> str:
 
     return (
         f"{icon} FLOP Agent 6時間アウトカム（{title}）\n"
-        f"署名direct {activity['signed_direct_requests']} / ACK返信 {activity['acked_replies']} / "
-        f"ユニーク相手 {activity['counterparts']}人 / active trust {activity['active_trusted']}\n"
-        f"自動投稿 {activity['posts']}（24h / safety cap 6） / "
+        f"{_relationship_line(activity)}\n"
+        f"{_durable_line(activity)}\n"
+        f"自動投稿 {activity['posts']}（24h / safety cap 6、目標ではありません） / "
         f"新しいgap +{new_gaps} / queue {snapshot['auto'].get('queued', 0)}\n"
         f"{_oldest_line(activity)}\n"
         f"主な非アクション理由: {_non_action_reason(activity)}\n"
