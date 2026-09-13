@@ -69,7 +69,7 @@ def atomic_json_write(path: Path, value: dict, *, compact: bool = False, mode: i
 
 
 def default_state() -> dict:
-    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "compaction_acknowledged": True, "cursors": {}, "bootstrap_tails": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "discovered_rooms": {}, "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "tclk": {"schema_version": 1, "offers": {}, "seen_offer_ids": []}, "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0, "discovery_queue_dropped": 0, "discovery_samples": 0}}
+    return {"schema_version": SCHEMA_VERSION, "created_at": now(), "updated_at": now(), "compaction_acknowledged": True, "cursors": {}, "bootstrap_tails": {}, "room_generations": {}, "agents": {}, "rooms": {}, "discovery_queue": [], "discovered_rooms": {}, "opportunities": [], "event_ids": [], "returning_dids": [], "error_history": [], "tclk": {"schema_version": 1, "offers": {}, "seen_offer_ids": []}, "health": {"current": "ok", "rooms": {}}, "metrics": {"unique_dids_discovered": 0, "returning_did_encounters": 0, "unique_returning_dids": 0, "self_messages": 0, "rooms_observed": 0, "questions_detected": 0, "help_candidates": 0, "collab_candidates": 0, "contribution_candidates": 0, "inbound_mailbox_messages": 0, "message_gaps": 0, "estimated_missing_messages": 0, "discovery_queue_dropped": 0, "discovery_samples": 0}}
 
 
 def read_json(path: Path, *, default: dict | None = None) -> dict:
@@ -435,9 +435,41 @@ def process_message(state: dict, config: dict, room: str, message: dict, own_did
     _note_agent_eviction_priority(state, fingerprint, agent)
 
 
+def observe_room_generation(state: dict, room: str, payload: dict | list) -> tuple[bool, bool]:
+    """Adopt a valid epoch or discard the stale-since response on epoch change.
+
+    Returns (state_changed, epoch_changed). Unknown/malformed generations retain
+    legacy cursor behavior. Only observed room generations are kept, bounded.
+    """
+    generation = payload.get("generation") if isinstance(payload, dict) else None
+    if type(generation) is not int or generation < 0: return False, False
+    known = state.get("room_generations")
+    if not isinstance(known, dict): return False, False
+    previous = known.get(room)
+    if previous == generation and type(previous) is int: return False, False
+    changed_epoch = type(previous) is int and previous >= 0 and previous != generation
+    if room not in known and len(known) >= 1000: known.pop(next(iter(known)))
+    known[room] = generation
+    if changed_epoch:
+        state["cursors"].pop(room, None)
+        state["bootstrap_tails"].pop(room, None)
+    return True, changed_epoch
+
+
+def reset_room_epoch_if_rewound(state: dict, room: str, last_seq: object) -> bool:
+    """Directory fallback for old states whose generation was never recorded."""
+    cursor = state.get("cursors", {}).get(room)
+    if type(last_seq) is not int or last_seq < 0 or type(cursor) is not int or cursor <= last_seq: return False
+    state["cursors"].pop(room, None)
+    state["bootstrap_tails"].pop(room, None)
+    return True
+
+
 def process_payload(state: dict, config: dict, room: str, payload: dict | list, own_did: str | None, mailbox: str | None, *, bootstrap: bool) -> bool:
     messages = payload.get("messages", payload if isinstance(payload, list) else [])
     if not isinstance(messages, list): set_error(state, room, "invalid_response"); return True
+    generation_changed, new_epoch = observe_room_generation(state, room, payload)
+    if new_epoch: return True  # Ignore the entire response fetched with the old since.
     since, valid = state["cursors"].get(room, 0), sorted((m for m in messages if isinstance(m, dict) and isinstance(m.get("seq"), int)), key=lambda m: m["seq"]); changed = False
     if bootstrap and room not in state["bootstrap_tails"]: state["bootstrap_tails"][room] = {"from_seq": valid[0]["seq"] if valid else None, "to_seq": valid[-1]["seq"] if valid else None, "returned_count": len(valid), "is_tail_only": True, "recorded_at": now()}; changed = True
     previous, highest, seen = since, since, set()
@@ -449,7 +481,7 @@ def process_payload(state: dict, config: dict, room: str, payload: dict | list, 
             missing = seq - previous - 1; metric_event(state, "message_gaps", "message_gap", room, message, extra={"missing_from": previous + 1, "missing_to": seq - 1, "estimated_missing": missing}); state["metrics"]["estimated_missing_messages"] += missing
         process_message(state, config, room, message, own_did, mailbox); previous, highest = seq, max(highest, seq)
     if highest > since: state["cursors"][room] = highest
-    return changed
+    return changed or generation_changed
 
 
 class ReadBudget:
@@ -486,10 +518,12 @@ async def read_rooms(client: httpx.AsyncClient) -> tuple[list[dict] | None, floa
 async def backfill_into_state(client: httpx.AsyncClient, budget: "ReadBudget", state: dict, config: dict) -> bool:
     before_rooms, before_queue = len(state.get("discovered_rooms", {})), len(state.get("discovery_queue", [])); await budget.acquire(); rooms, retry, error = await read_rooms(client)
     if error: set_error(state, "rooms", error, str(retry or "")); return True
+    active_rooms, rewound = set(observed_rooms(config)), False
     for item in rooms or []:
-        if not isinstance(item, dict) or not isinstance(item.get("room"), str) or not isinstance(item.get("last_seq"), int) or not isinstance(item.get("topic"), str): continue
+        if not isinstance(item, dict) or not isinstance(item.get("room"), str) or type(item.get("last_seq")) is not int or item["last_seq"] < 0 or not isinstance(item.get("topic"), str): continue
+        if item["room"] in active_rooms: rewound = reset_room_epoch_if_rewound(state, item["room"], item["last_seq"]) or rewound
         queue_public_room(state, config, item["room"], "rooms", {"seq": None, "text": item["topic"]}, item["topic"])
-    return set_success(state, "rooms") or len(state.get("discovered_rooms", {})) != before_rooms or len(state.get("discovery_queue", [])) != before_queue
+    return set_success(state, "rooms") or rewound or len(state.get("discovered_rooms", {})) != before_rooms or len(state.get("discovery_queue", [])) != before_queue
 
 
 async def discover_backfill_async(client: httpx.AsyncClient | None = None) -> dict:

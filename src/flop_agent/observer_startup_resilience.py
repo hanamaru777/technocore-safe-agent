@@ -293,6 +293,14 @@ async def _try_events_live_probe(
             writer.mark_dirty()
         return "retry", retry
 
+    generation_changed, new_epoch = observer.observe_room_generation(
+        state, room, payload or {}
+    )
+    if new_epoch:
+        if writer and generation_changed:
+            writer.mark_dirty()
+        return "success", None  # The normal worker must re-read with since=0.
+
     live = observer_resilience._valid_messages(payload or {})
     if not _unseen_live_is_contiguous(live, cursor):
         metrics["startup_live_probe_fallbacks"] += 1
