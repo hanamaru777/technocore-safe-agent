@@ -1,3 +1,4 @@
+import ast
 import inspect
 
 from flop_agent import discord_outcome_scorecard as score
@@ -47,7 +48,6 @@ def test_collaboration_counts_are_read_only_and_include_pruned_completed(monkeyp
             "completed_evidence_index": [{"id": "old-completed"}],
         },
     )
-
     assert score._collaboration_counts() == (2, 2)
 
 
@@ -79,9 +79,7 @@ def test_oldest_unresolved_direct_ignores_recorded_reply(monkeypatch):
         }
     }
     monkeypatch.setattr(score.resident, "load_state", lambda: state)
-
     unresolved = score._unresolved_direct({"sent": [{"conversation_id": "c1"}]})
-
     assert unresolved["candidate_id"] == "c2"
     assert unresolved["room"] == "work"
     assert unresolved["seq"] == 11
@@ -92,9 +90,7 @@ def test_activity_snapshot_adds_outcomes_without_reinterpreting_base(monkeypatch
     monkeypatch.setattr(score, "_ORIGINAL_ACTIVITY", lambda **_kwargs: original)
     monkeypatch.setattr(score, "_collaboration_counts", lambda: (2, 4))
     monkeypatch.setattr(score, "_unresolved_direct", lambda _activity: {"candidate_id": "c2"})
-
     result = score._activity_snapshot()
-
     assert result is not original
     assert result["signed_direct_requests"] == 2
     assert result["acked_replies"] == 1
@@ -115,9 +111,7 @@ def test_status_prioritizes_outcomes_not_six_post_target(monkeypatch):
         "oldest_unresolved_direct": None,
     }
     monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
-
     rendered = score._status_message()
-
     assert "関係24h: 署名direct 2 / ACK返信 1 / ユニーク相手 2人" in rendered
     assert "継続成果: active trust 1 / 協業進行 2 / 協業完了 3" in rendered
     assert "safety cap 6、目標ではありません" in rendered
@@ -151,9 +145,7 @@ def test_digest_keeps_gap_visibility_but_reports_non_action_reason(monkeypatch):
     })
     saved = {}
     monkeypatch.setattr(score.base, "save_ui_state", lambda state: saved.update(state))
-
     rendered = score._digest(None)
-
     assert "6時間アウトカム" in rendered
     assert "新しいgap +2" in rendered
     assert "主な非アクション理由: 初回DIDのためreview-only" in rendered
@@ -165,15 +157,18 @@ def test_digest_keeps_gap_visibility_but_reports_non_action_reason(monkeypatch):
 
 def test_scorecard_has_no_network_signing_or_protocol_write_surface():
     source = inspect.getsource(score)
-    forbidden = (
-        "httpx",
-        "requests",
-        "urllib",
-        "socket",
-        "subprocess",
+    tree = ast.parse(source)
+    imported_roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split(".", 1)[0])
+    assert imported_roots.isdisjoint({"httpx", "requests", "urllib", "socket", "subprocess"})
+    forbidden_write_symbols = (
         "post_signed",
         "invoke_signer",
         "SIGN_SEED",
         "with_vault_seed",
     )
-    assert all(token not in source for token in forbidden)
+    assert all(token not in source for token in forbidden_write_symbols)
