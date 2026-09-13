@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 
-from . import collaboration, collaboration_hardening
+from . import collaboration, collaboration_hardening, collaboration_radar
 from . import discord_control as base
 
 collaboration_hardening.install()
@@ -127,6 +127,45 @@ def _detail_message(record_id: str) -> str:
     return "\n".join(lines)
 
 
+def _radar_message() -> str:
+    try:
+        rows = collaboration_radar.scan(max_requests=3, max_matches=3)
+    except RuntimeError:
+        return "📡 Collaboration Radar\nResident stateを安全に読めないため停止しました。書込み・接触はしていません。"
+    if not rows:
+        return "\n".join([
+            "📡 Collaboration Radar",
+            "現在、具体的な署名付き公開依頼のmatch候補はありません。",
+            "結論: 対応不要。監視を継続します。",
+        ])
+
+    lines = ["📡 Collaboration Radar — read-only"]
+    for request in rows:
+        lines.extend([
+            "",
+            f"依頼 {request.request_id} | {request.topic} | from {base.short_fingerprint(request.requester_fingerprint)}",
+            f"origin: {request.room} #{request.seq if request.seq is not None else '?'}",
+            "要点: " + base.safe_excerpt(request.summary, 160),
+        ])
+        if request.external_reference_present:
+            lines.append("注意: 外部URLを含みます。Radarは開いていません。")
+        if request.matches:
+            lines.append("match:")
+            for match in request.matches:
+                reasons = "; ".join(match.reasons[:2])
+                lines.append(
+                    f"・{base.short_fingerprint(match.fingerprint)} | {match.confidence} / score {match.score} | "
+                    f"{base.safe_excerpt(reasons, 120)}"
+                )
+                if match.evidence_refs:
+                    lines.append("  evidence: " + base.safe_excerpt(" / ".join(match.evidence_refs[:2]), 180))
+        else:
+            lines.append("match: 根拠十分な相手なし")
+        lines.append("next候補: " + base.safe_excerpt(request.smallest_next_step, 180))
+    lines.extend(["", "結論: read-onlyです。Radar自身は接触・署名・投稿・URLアクセスをしません。"])
+    return "\n".join(lines)
+
+
 def _notice_message(notice: dict) -> str:
     stage = notice.get("stage")
     record_id = str(notice.get("id", ""))
@@ -152,11 +191,15 @@ def _notice_message(notice: dict) -> str:
 class Control(base.Control):
     def command(self, user_id: str, text: str, channel_id: str | None = None) -> dict:
         parts = text.strip().split()
-        if parts and parts[0] == "/collab":
+        if parts and parts[0] in {"/collab", "/radar"}:
             if channel_id is not None and channel_id != self.channel_id:
                 return {"ok": False, "error": "wrong_channel", "message": "Control access denied."}
             if user_id not in self.allowed_ids:
                 return {"ok": False, "error": "unauthorized", "message": "Control access denied."}
+            if parts[0] == "/radar":
+                if len(parts) == 1:
+                    return {"ok": True, "data": {}, "message": _radar_message()}
+                return {"ok": False, "error": "invalid_args", "message": "Usage: /radar"}
             if len(parts) == 1:
                 return {"ok": True, "data": {}, "message": _list_message()}
             if len(parts) == 2:
@@ -177,7 +220,7 @@ class Control(base.Control):
                 completed=metrics["completed"],
             )
         if result.get("ok") and parts and parts[0] == "/help" and len(parts) == 1:
-            result["message"] += " | collaboration: /collab [id]"
+            result["message"] += " | collaboration: /collab [id] | radar: /radar"
         return result
 
     def ensure_baseline(self) -> None:
