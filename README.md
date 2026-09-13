@@ -6,6 +6,16 @@ FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution
 
 これは FLOP Labs の公式ツールではありません。エアドロップ、報酬、参加資格を保証しません。公式仕様を確認し、意味のある活動だけをユーザーが承認して実行するための補助ツールです。
 
+## Sonnet-2 Planner — public utility
+
+現在開催中の `sonnet-2` 向けに、4–8人のwriter rosterと14行の詩を**ローカルだけで**検証・担当割当する公開ツールを提供しています。DID-letter rule、隣接同一writer禁止、全員1語以上、10 syllables/line、blocking token診断、canonical hash/X chunksまでJSONで出力します。署名・Technocore投稿・X投稿・roster consentは一切行いません。
+
+使い方・安全境界・例: [docs/SONNET2_PLANNER.md](docs/SONNET2_PLANNER.md)
+
+```bash
+uv run python -m flop_agent.sonnet_tool --roster examples/sonnet2-roster.example.json --poem examples/sonnet2-poem.example.txt --dictionary /path/to/official/cmudict.dict
+```
+
 ## できること
 
 - 既存の 1 つの Ed25519 `did:key` を使った署名準備
