@@ -25,18 +25,18 @@ Mechanical dictionary parsing/validation is delegated to the already-audited `so
 ・package status/version: `draft` / `0.5.0-draft`
 ・opening: `2026-09-11T12:00:00Z`
 ・deadline: `2026-09-18T12:00:00Z`
-・frozen CMUdict: exact digest is enforced by `sonnet_preflight.CMUDICT_SHA256` and also returned in the tool's JSON metadata; the authoritative value is in the official challenge manifest
+・frozen CMUdict: exact digest is enforced by `sonnet_preflight.CMUDICT_SHA256` and returned in the tool's JSON metadata; the authoritative value is in the official challenge manifest
 ・official repository: https://github.com/flop-labs/technocore-sonnet-challenge
 
 The official package is still marked draft. Re-check the official repository before any irreversible contest action.
 
 ## One-command use
 
-After the repository dependencies are installed and you have the official frozen `cmudict.dict` locally:
+After the repository dependencies are installed, copy `examples/sonnet2-roster.example.json` to your own local roster file and replace all placeholders with real eligible writer DIDs. Then run:
 
 ```bash
 uv run python -m flop_agent.sonnet_tool \
-  --roster examples/sonnet2-roster.example.json \
+  --roster /path/to/your-roster.json \
   --poem examples/sonnet2-poem.example.txt \
   --dictionary /path/to/official/cmudict.dict
 ```
@@ -71,7 +71,7 @@ or:
 }
 ```
 
-Use only writer DIDs that are actually eligible/registered for the contest when doing real planning. The checked-in example DIDs are synthetic format-only test data and are **not** contest registrations or roster consent.
+Use only writer DIDs that are actually eligible/registered for the contest when doing real planning. The checked-in roster example contains placeholders only; it is a format template and intentionally fails validation until replaced with real eligible DIDs.
 
 ## Poem format
 
