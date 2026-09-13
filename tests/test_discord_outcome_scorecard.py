@@ -1,4 +1,5 @@
 import ast
+import json
 import inspect
 
 from flop_agent import discord_outcome_scorecard as score
@@ -51,6 +52,64 @@ def test_collaboration_counts_are_read_only_and_include_pruned_completed(monkeyp
     assert score._collaboration_counts() == (2, 2)
 
 
+def test_public_artifact_count_requires_published_repo_files(monkeypatch, tmp_path):
+    docs = tmp_path / "docs"
+    source = tmp_path / "src" / "flop_agent"
+    docs.mkdir()
+    source.mkdir(parents=True)
+    (docs / "SONNET2_PLANNER.md").write_text("public docs", encoding="utf-8")
+    (source / "sonnet_tool.py").write_text("# local-only tool\n", encoding="utf-8")
+    profile = tmp_path / "public-profile.json"
+    profile.write_text(
+        json.dumps({
+            "knowledge": {
+                "public_artifacts": [
+                    {
+                        "id": "sonnet2-planner",
+                        "kind": "public_utility",
+                        "status": "published",
+                        "documentation": "docs/SONNET2_PLANNER.md",
+                        "entrypoint": "src/flop_agent/sonnet_tool.py",
+                    },
+                    {
+                        "id": "missing",
+                        "kind": "public_utility",
+                        "status": "published",
+                        "documentation": "docs/missing.md",
+                        "entrypoint": "src/flop_agent/sonnet_tool.py",
+                    },
+                    {
+                        "id": "unsafe-path",
+                        "kind": "public_utility",
+                        "status": "published",
+                        "documentation": "../outside.md",
+                        "entrypoint": "src/flop_agent/sonnet_tool.py",
+                    },
+                    {
+                        "id": "draft",
+                        "kind": "public_utility",
+                        "status": "draft",
+                        "documentation": "docs/SONNET2_PLANNER.md",
+                        "entrypoint": "src/flop_agent/sonnet_tool.py",
+                    },
+                ]
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(score, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(score, "_PUBLIC_PROFILE_PATH", profile)
+    assert score._public_artifact_count() == 1
+
+
+def test_public_artifact_count_fails_closed_on_bad_metadata(monkeypatch, tmp_path):
+    profile = tmp_path / "public-profile.json"
+    profile.write_text("not-json", encoding="utf-8")
+    monkeypatch.setattr(score, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(score, "_PUBLIC_PROFILE_PATH", profile)
+    assert score._public_artifact_count() == 0
+
+
 def test_oldest_unresolved_direct_ignores_recorded_reply(monkeypatch):
     state = {
         "candidates": {
@@ -89,6 +148,7 @@ def test_activity_snapshot_adds_outcomes_without_reinterpreting_base(monkeypatch
     original = dict(BASE_ACTIVITY)
     monkeypatch.setattr(score, "_ORIGINAL_ACTIVITY", lambda **_kwargs: original)
     monkeypatch.setattr(score, "_collaboration_counts", lambda: (2, 4))
+    monkeypatch.setattr(score, "_public_artifact_count", lambda: 1)
     monkeypatch.setattr(score, "_unresolved_direct", lambda _activity: {"candidate_id": "c2"})
     result = score._activity_snapshot()
     assert result is not original
@@ -97,6 +157,7 @@ def test_activity_snapshot_adds_outcomes_without_reinterpreting_base(monkeypatch
     assert result["active_trusted"] == 1
     assert result["collaboration_active"] == 2
     assert result["collaboration_completed"] == 4
+    assert result["public_artifacts"] == 1
     assert result["oldest_unresolved_direct"] == {"candidate_id": "c2"}
 
 
@@ -108,15 +169,32 @@ def test_status_prioritizes_outcomes_not_six_post_target(monkeypatch):
         "active_trusted": 1,
         "collaboration_active": 2,
         "collaboration_completed": 3,
+        "public_artifacts": 1,
         "oldest_unresolved_direct": None,
     }
     monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
     rendered = score._status_message()
     assert "関係24h: 署名direct 2 / ACK返信 1 / ユニーク相手 2人" in rendered
-    assert "継続成果: active trust 1 / 協業進行 2 / 協業完了 3" in rendered
+    assert "継続成果: active trust 1 / 協業進行 2 / 協業完了 3 / 公開artifact 1" in rendered
     assert "safety cap 6、目標ではありません" in rendered
     assert "1/6" not in rendered
     assert "投稿しなかった主因: 投稿あり" not in rendered
+
+
+def test_activity_message_surfaces_public_artifact(monkeypatch):
+    activity = {
+        **BASE_ACTIVITY,
+        "signed_direct_requests": 2,
+        "acked_replies": 1,
+        "active_trusted": 1,
+        "collaboration_active": 0,
+        "collaboration_completed": 0,
+        "public_artifacts": 1,
+        "oldest_unresolved_direct": None,
+    }
+    monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
+    rendered = score._activity_message()
+    assert "公開artifact: 1" in rendered
 
 
 def test_digest_keeps_gap_visibility_but_reports_non_action_reason(monkeypatch):
@@ -127,6 +205,7 @@ def test_digest_keeps_gap_visibility_but_reports_non_action_reason(monkeypatch):
         "active_trusted": 1,
         "collaboration_active": 1,
         "collaboration_completed": 2,
+        "public_artifacts": 1,
         "oldest_unresolved_direct": None,
     }
     monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
@@ -149,7 +228,7 @@ def test_digest_keeps_gap_visibility_but_reports_non_action_reason(monkeypatch):
     assert "6時間アウトカム" in rendered
     assert "新しいgap +2" in rendered
     assert "主な非アクション理由: 初回DIDのためreview-only" in rendered
-    assert "協業完了 2" in rendered
+    assert "協業完了 2 / 公開artifact 1" in rendered
     assert saved["pending_gap_delta"] == 0
     assert saved["digest_baseline"]["message_gaps"] == 12
     assert "投稿あり" not in rendered
