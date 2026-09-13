@@ -6,6 +6,16 @@ FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution
 
 これは FLOP Labs の公式ツールではありません。エアドロップ、報酬、参加資格を保証しません。公式仕様を確認し、意味のある活動だけをユーザーが承認して実行するための補助ツールです。
 
+## Sonnet-2 Planner — public utility
+
+現在開催中の `sonnet-2` 向けに、4–8人のwriter rosterと14行の詩を**ローカルだけで**検証・担当割当する公開ツールを提供しています。DID-letter rule、隣接同一writer禁止、全員1語以上、10 syllables/line、blocking token診断、canonical hash/X chunksまでJSONで出力します。署名・Technocore投稿・X投稿・roster consentは一切行いません。
+
+使い方・安全境界・例: [docs/SONNET2_PLANNER.md](docs/SONNET2_PLANNER.md)
+
+```bash
+uv run python -m flop_agent.sonnet_tool --roster examples/sonnet2-roster.example.json --poem examples/sonnet2-poem.example.txt --dictionary /path/to/official/cmudict.dict
+```
+
 ## できること
 
 - 既存の 1 つの Ed25519 `did:key` を使った署名準備
@@ -139,7 +149,7 @@ Safe Autopilot is disabled and paused by default. The seedless Resident uses a d
 
 `publish-approved` remains a separate Windows-only manual secure-signer flow with a final confirmation. The 24/7 Oracle path is the isolated Signer consuming a prevalidated outbox intent asynchronously; neither Discord nor the Resident signs or writes directly.
 
-The optional Windows session transport is fixed-function: its ignored `local-state/autopilot-ssh.json` accepts only `oracle_host`, `ssh_user`, `identity_file`, and `poll_interval_seconds`. It uses Windows OpenSSH with strict existing-host verification and can run only `sudo -n /usr/local/libexec/technocore-safe-agent-rpc export` or `ack`; the root-owned Oracle wrapper clears its environment and runs the actual production state path as the seedless `technocore` user. Remote export is a versioned allowlisted schema without message text, excerpt, draft, URL, or arbitrary metadata. `.\flop.ps1 autopilot-session -DryRun` fetches and validates/render-checks those intents without requesting a seed, signing, posting, or acknowledging. The normal `autopilot-session` asks once for a SecureString seed and retries failed transport cycles without acknowledging an intent unless the signed post has succeeded and a local receipt was saved. `autopilot-enable` changes only `enabled=true, paused=true`; a separate `autopilot-resume` is required. `autopilot-disable` always sets `enabled=false, paused=true`, and resume rejects a disabled state.
+The optional Windows session transport is fixed-function: its ignored `local-state/autopilot-ssh.json` accepts only `oracle_host`, `ssh_user`, `identity_file`, and `poll_interval_seconds`. It uses Windows OpenSSH with strict existing-host verification and can run only `sudo -n /usr/local/libexec/technocore-safe-agent-rpc export` or `ack`; the root-owned Oracle wrapper clears its environment and runs the actual production state path as the seedless `technocore` user. Remote export is a versioned allowlisted schema without message text, excerpt, draft, URL, or arbitrary metadata. `.\flop.ps1 autopilot-session -DryRun` fetches and validates/render-checks those intents without requesting a seed, signing, posting, or acknowledging. The normal `autopilot-session` asks once for a SecureString seed and retries failed transport cycles without acknowledging an intent unless the signed post has succeeded and a local receipt was saved. `autopilot-enable` changes only `enabled=true, paused=true`; a separate `autopilot-resume` is required。`autopilot-disable` always sets `enabled=false, paused=true`, and resume rejects a disabled state.
 
 For the existing Oracle resident VM, an optional, separate `technocore-signer` systemd service can provide the 24/7 fixed-function publisher. It is disabled by default, uses a root-only OCI Vault identifier plus the expected public DID, and never accepts arbitrary text, room, shell command, or URL. The `technocore` observer is denied OCI metadata access; only the signer service can use the instance-principal route. The signer renders the same tracked public templates, repeats DLP/rate-limit/DID/pinned-signer checks, writes a seed-free prepared receipt before posting, and reconciles via read rather than reposting after interruption. Oracle setup remains manual; see [packaging/oracle](packaging/oracle). The older Windows publisher is retained as an emergency path.
 
