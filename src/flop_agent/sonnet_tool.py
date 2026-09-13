@@ -36,6 +36,11 @@ class ToolInputError(ValueError):
     pass
 
 
+class _JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, _message: str) -> None:
+        raise ToolInputError("arguments_invalid")
+
+
 def _read_small_text(path: str | Path, *, label: str) -> str:
     source = Path(path)
     try:
@@ -150,7 +155,7 @@ def run(roster_path: str, poem_path: str, dictionary_path: str) -> dict:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _JsonArgumentParser(
         prog="python -m flop_agent.sonnet_tool",
         description="Local-only Sonnet-2 roster/poem planning utility",
     )
