@@ -195,11 +195,14 @@ def _activity_message() -> str:
     activity = _activity_snapshot()
     snapshot = activity["snapshot"]
     recent = activity.get("interactions", [])[-3:]
+    # The existing discord_collaboration overlay appends its detailed collaboration
+    # pipeline line to /activity. Keep this renderer focused on 24h relationship
+    # outcomes so the final layered command does not report collaboration twice.
     lines = [
         "📊 FLOP Agent 24時間アウトカム",
         f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}",
         _relationship_line(activity),
-        _durable_line(activity),
+        f"active trust: {activity['active_trusted']}",
         f"自動投稿: {activity['posts']}（24h / safety cap 6、目標ではありません）",
         _oldest_line(activity),
         f"主な非アクション理由: {_non_action_reason(activity)}",
