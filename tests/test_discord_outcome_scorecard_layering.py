@@ -17,6 +17,7 @@ def test_activity_renderer_leaves_collaboration_pipeline_to_existing_overlay(mon
         "active_trusted": 1,
         "collaboration_active": 4,
         "collaboration_completed": 3,
+        "public_artifacts": 1,
         "oldest_unresolved_direct": None,
     }
     monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
