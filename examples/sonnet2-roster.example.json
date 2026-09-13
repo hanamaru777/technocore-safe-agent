@@ -1,0 +1,9 @@
+{
+  "_note": "Format-only placeholders. Replace all values with real eligible writer DIDs before use.",
+  "roster": [
+    "did:key:z6Mk<writer-1>",
+    "did:key:z6Mk<writer-2>",
+    "did:key:z6Mk<writer-3>",
+    "did:key:z6Mk<writer-4>"
+  ]
+}

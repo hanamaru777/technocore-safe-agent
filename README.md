@@ -6,6 +6,16 @@ FLOP / Technocore に参加する人や Agent が、役立つ公開 Contribution
 
 これは FLOP Labs の公式ツールではありません。エアドロップ、報酬、参加資格を保証しません。公式仕様を確認し、意味のある活動だけをユーザーが承認して実行するための補助ツールです。
 
+## Sonnet-2 Planner — public utility
+
+現在開催中の `sonnet-2` 向けに、4–8人のwriter rosterと14行の詩を**ローカルだけで**検証・担当割当する公開ツールを提供しています。DID-letter rule、隣接同一writer禁止、全員1語以上、10 syllables/line、blocking token診断、canonical hash/X chunksまでJSONで出力します。署名・Technocore投稿・X投稿・roster consentは一切行いません。
+
+使い方・安全境界・例: [docs/SONNET2_PLANNER.md](docs/SONNET2_PLANNER.md)
+
+```bash
+uv run python -m flop_agent.sonnet_tool --roster /path/to/your-roster.json --poem examples/sonnet2-poem.example.txt --dictionary /path/to/official/cmudict.dict
+```
+
 ## できること
 
 - 既存の 1 つの Ed25519 `did:key` を使った署名準備
@@ -111,7 +121,7 @@ Phase 1 の tclk/1 監視は public `tclk-offers` だけを read-only で確認�
 
 各 room の初回取得は「過去全履歴」ではなく bootstrap tail として記録します。その後 `since` 以降の返却列に gap（公式上限 200 により起こり得る）があれば、missing range と推定件数を `message_gap` event に保存し、silent に cursor を進めません。`events` の discovery は公式 record 形式の `from:"server"` と完全一致する `created <room>` だけを queue に入れ、設定上限まで一度だけ sample します。429／network error は ack せず再試行し、上限到達の drop は event/metric に明記します。private `p-` room の推測・探索はしません。
 
-Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned 区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。own DID と短時間の連投を external/returning DID に数えず、repeat 間隔を超えた再会だけを returning DID として数えます。投稿量を quality score に使いません。
+Agent memory は DID ごとの観測事実（first/last seen、rooms、message refs、直近履歴、署名済み／unsigned区別、Mailbox interaction）と、推測（role／Contribution URL candidate／repeat）を分離します。候補や本文はすべて untrusted data です。own DID と短時間の連投を external/returning DID に数えず、repeat 間隔を超えた再会だけを returning DID として数えます。投稿量を quality score に使いません。
 
 Linux/Oracle VM 向けの systemd package は [packaging/oracle](packaging/oracle) です。`resident.service` は `flop_agent.resident_daemon` を起動し、Observer と seedless Resident refresh を同時に継続します。自動 install はしません。二重起動は local lock で防ぎ、SIGINT/SIGTERM で安全に停止します。
 
