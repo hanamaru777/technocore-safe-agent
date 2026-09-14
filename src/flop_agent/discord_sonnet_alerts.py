@@ -14,25 +14,47 @@ from .public_record import verify_signed_record
 REPO = "flop-labs/technocore-sonnet-challenge"
 ISSUES = (25, 16, 22)
 OFFICIAL_MAINTAINERS = {"sv"}
+
 DISCOVERY_ROOM = "mb-sonnet-2-discovery"
 RESULTS_ROOM = "d-sonnet-2-results"
 REFEREE_DID = "did:key:z6MkowHQwsx9xr84WbWN3YCnKutyBnBXkT1ChKY4uEAAMzte"
+
 TEAM_ROOM = "d-sonnet-2-team-maru73s2"
 GAME_ID = "maru73s2"
+MARU_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
+MARU_REGISTRATION_REQUEST_ID = "32c15433c6d73af1cea5d6467dece016"
+
 POLL_SECONDS = 300
 MAX_BACKOFF_SECONDS = 1800
 PENDING_LIMIT = 32
 GITHUB_PAGE_LIMIT = 5
 PROCESS_STARTED_AT = time.time()
 
-INVITED_DIDS = {
-    "maru-invite-lon-20260914-1": "did:key:z6MkqRmKyNcvzfYX2PRXj2TRoXMYDKDy6RQzL6VAwj4DBhhj",
-    "maru-invite-fuego-20260914-1": "did:key:z6Mkt6jAezZ7WyPyN1bTXX63ps4vn8MSvNwtfA9JFgsqeFTB",
-    "maru-invite-hunte-20260912-1": "did:key:z6MkuEVGgRAqUR3KyBFLMHqE15dosbpFPoqpjz5b1VrUgatq",
-    "maru-invite-shrimp-20260912-1": "did:key:z6Mkt1dE2bNSCEti4oVvjvuWzQAdEAG98t3T9naCQFLHoenj",
-    "maru-invite-noob-20260912-1": "did:key:z6MkmVhZbUKWmg3r6TTi3SVM3myYJ9BLbWYPSdc5iWPuPhb6",
+INVITATIONS = {
+    "maru-invite-lon-20260914-1": {
+        "did": "did:key:z6MkqRmKyNcvzfYX2PRXj2TRoXMYDKDy6RQzL6VAwj4DBhhj",
+        "sent_seq": 84020,
+    },
+    "maru-invite-fuego-20260914-1": {
+        "did": "did:key:z6Mkt6jAezZ7WyPyN1bTXX63ps4vn8MSvNwtfA9JFgsqeFTB",
+        "sent_seq": 84021,
+    },
+    "maru-invite-hunte-20260912-1": {
+        "did": "did:key:z6MkuEVGgRAqUR3KyBFLMHqE15dosbpFPoqpjz5b1VrUgatq",
+        "sent_seq": 8995,
+    },
+    "maru-invite-shrimp-20260912-1": {
+        "did": "did:key:z6Mkt1dE2bNSCEti4oVvjvuWzQAdEAG98t3T9naCQFLHoenj",
+        "sent_seq": 8997,
+    },
+    "maru-invite-noob-20260912-1": {
+        "did": "did:key:z6MkmVhZbUKWmg3r6TTi3SVM3myYJ9BLbWYPSdc5iWPuPhb6",
+        "sent_seq": 9000,
+    },
 }
-INVITE_IDS = tuple(INVITED_DIDS)
+INVITED_DIDS = {request_id: item["did"] for request_id, item in INVITATIONS.items()}
+INVITE_BY_DID = {item["did"]: request_id for request_id, item in INVITATIONS.items()}
+INVITE_IDS = tuple(INVITATIONS)
 FIXED_ROOMS = {DISCOVERY_ROOM, RESULTS_ROOM}
 
 
@@ -53,7 +75,7 @@ def state_path():
 
 def _default() -> dict:
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "github": {},
         "rooms": {},
         "pending": [],
@@ -69,7 +91,7 @@ def _load() -> dict:
         return _default()
     if (
         not isinstance(value, dict)
-        or value.get("schema_version") != 4
+        or value.get("schema_version") != 5
         or not isinstance(value.get("github"), dict)
         or not isinstance(value.get("rooms"), dict)
         or not isinstance(value.get("pending"), list)
@@ -81,7 +103,7 @@ def _load() -> dict:
     except (TypeError, ValueError, OverflowError):
         return _default()
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "github": value["github"],
         "rooms": value["rooms"],
         "pending": [item for item in value["pending"] if isinstance(item, str)][:PENDING_LIMIT],
@@ -107,25 +129,49 @@ def _authoritative(row: dict) -> bool:
 def _github_relevant(issue: int, row: dict) -> tuple[str, str] | None:
     if not _authoritative(row):
         return None
-    text = str(row.get("body") or "").lower()
-    if issue == 25 and any(request_id in text for request_id in INVITE_IDS):
-        return (
-            "MARU discovery invitation update",
-            "返信・状態の公式更新です。roster consent は推測していません。",
-        )
-    if issue in {16, 25} and "maru" in text and any(
-        term in text for term in ("writer", "team", "disposition", "accept", "declin")
-    ):
+
+    text = str(row.get("body") or "")
+    lowered = text.lower()
+
+    # #25 is a narrow, MARU-only authoritative lookup. Any authoritative new
+    # comment on that issue is actionable; do not require the maintainer to
+    # repeat our handle or request_id in the response.
+    if issue == 25:
         return (
             "MARU official disposition update",
-            "writer/team の公式判断を確認してください。",
+            "MARU専用の公式照会 #25 に authoritative な新規/更新コメントがあります。",
         )
-    if issue == 22 and "asad" in text and any(
-        term in text for term in ("writer", "role", "resolution", "disposition")
+
+    maru_anchors = (
+        "maru",
+        MARU_DID.lower(),
+        MARU_REGISTRATION_REQUEST_ID.lower(),
+        GAME_ID,
+    )
+    if issue == 16 and any(anchor in lowered for anchor in maru_anchors):
+        if any(
+            term in lowered
+            for term in ("writer", "team", "disposition", "accept", "declin", "registration")
+        ):
+            return (
+                "MARU official disposition update",
+                "writer/team の公式判断に関係する更新です。",
+            )
+
+    if issue == 22 and "asad" in lowered and any(
+        term in lowered
+        for term in (
+            "writer",
+            "role",
+            "resolution",
+            "disposition",
+            "attribution",
+            "migration",
+        )
     ):
         return (
             "Asad support-lane update",
-            "Asad の現在の役割解決に関係する公式更新です。",
+            "Asad の役割・移行・attribution 解決に関係する公式更新です。",
         )
     return None
 
@@ -134,7 +180,13 @@ def _fetch(issue: int) -> list[dict]:
     rows: list[dict] = []
     for page in range(1, GITHUB_PAGE_LIMIT + 1):
         response = httpx.get(
-            f"https://api.github.com/repos/{REPO}/issues/{issue}/comments?per_page=100&page={page}",
+            f"https://api.github.com/repos/{REPO}/issues/{issue}/comments",
+            params={
+                "per_page": 100,
+                "page": page,
+                "sort": "created",
+                "direction": "asc",
+            },
             headers={"Accept": "application/vnd.github+json"},
             timeout=5.0,
         )
@@ -159,7 +211,10 @@ def _parse_room_payload(payload: object) -> list[dict]:
 def _room_export(room: str) -> list[dict]:
     if room not in FIXED_ROOMS:
         raise ValueError("room_not_allowlisted")
-    response = httpx.get(f"{core.BASE_URL}/r/{quote(room, safe='')}/export", timeout=20)
+    response = httpx.get(
+        f"{core.BASE_URL}/r/{quote(room, safe='')}/export",
+        timeout=20,
+    )
     response.raise_for_status()
     rows: list[dict] = []
     for line in response.text.splitlines():
@@ -192,7 +247,11 @@ def _room_rows(room: str, since: int | None = None) -> list[dict]:
         return rows
 
     exported = _room_export(room)
-    retained = [row for row in exported if type(row.get("seq")) is int and row["seq"] > since]
+    retained = [
+        row
+        for row in exported
+        if type(row.get("seq")) is int and row["seq"] > since
+    ]
     retained_sequences = [row["seq"] for row in retained]
     if not retained_sequences:
         raise RoomRetentionGap(room, since + 1, first_seq - 1, [])
@@ -202,44 +261,74 @@ def _room_rows(room: str, since: int | None = None) -> list[dict]:
     return retained
 
 
-def _public_evidence(rows: list[tuple[str, dict]]) -> list[tuple[str, dict, tuple[str, str]]]:
+def _public_evidence(
+    rows: list[tuple[str, dict]],
+) -> list[tuple[str, dict, tuple[str, str]]]:
     result = []
-    for room, row in rows:
-        try:
-            payload = json.loads(row.get("text", ""))
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(payload, dict):
-            continue
 
-        invite_candidate = (
+    for room, row in rows:
+        sender = row.get("from")
+        sequence = row.get("seq")
+
+        invite_candidate = False
+        if (
             room == DISCOVERY_ROOM
-            and payload.get("type") in {"sonnet.invite-response.v1", "sonnet.invite-status.v1"}
-            and payload.get("contest_id") == "sonnet-2"
-            and payload.get("request_id") in INVITED_DIDS
-            and row.get("from") == INVITED_DIDS[payload["request_id"]]
-        )
-        team_candidate = (
-            room == RESULTS_ROOM
-            and row.get("from") == REFEREE_DID
-            and payload.get("contest_id") == "sonnet-2"
-            and payload.get("game_id") == GAME_ID
-            and payload.get("poem_room") == TEAM_ROOM
-            and payload.get("type") in {"sonnet.setup.v1", "sonnet.resetup.v1"}
-            and type(payload.get("room_generation")) is int
-            and payload["room_generation"] > 0
-        )
+            and sender in INVITE_BY_DID
+            and type(sequence) is int
+        ):
+            request_id = INVITE_BY_DID[sender]
+            invite_candidate = sequence > INVITATIONS[request_id]["sent_seq"]
+
+        team_candidate = False
+        payload: dict | None = None
+        if room == RESULTS_ROOM and sender == REFEREE_DID:
+            try:
+                decoded = json.loads(row.get("text", ""))
+            except (TypeError, ValueError):
+                decoded = None
+            if isinstance(decoded, dict):
+                payload = decoded
+                team_candidate = (
+                    payload.get("contest_id") == "sonnet-2"
+                    and payload.get("game_id") == GAME_ID
+                    and payload.get("poem_room") == TEAM_ROOM
+                    and payload.get("type") in {"sonnet.setup.v1", "sonnet.resetup.v1"}
+                    and type(payload.get("room_generation")) is int
+                    and payload["room_generation"] > 0
+                )
+
         if not (invite_candidate or team_candidate):
             continue
+
         try:
             verify_signed_record(room, row)
         except (KeyError, TypeError, ValueError, RuntimeError):
             continue
 
         if invite_candidate:
-            result.append(("invite", row, ("MARU discovery invitation response", "署名済みの返信・状態を確認。roster consent や参加承諾は推測していません。")))
+            result.append(
+                (
+                    "invite",
+                    row,
+                    (
+                        "招待済みwriterの新規activity",
+                        "招待後に本人DIDの署名済みdiscovery投稿を確認。返信・参加意思・roster consentとはまだ断定しません。",
+                    ),
+                )
+            )
+
         if team_candidate:
-            result.append(("team", row, ("MARU team-room generation/setup receipt", "referee の署名済みgeneration/setup receipt を確認しました。team request 自体から参加・権限は推測していません。")))
+            result.append(
+                (
+                    "team",
+                    row,
+                    (
+                        "MARU team-room generation/setup receipt",
+                        "referee の署名済みresults recordで正式room/generationを確認しました。team request自体から参加・権限は推測していません。",
+                    ),
+                )
+            )
+
     return result
 
 
@@ -262,27 +351,39 @@ def _startup_new(row: dict) -> bool:
 
 def _notice(row: dict, relevant: tuple[str, str]) -> str:
     headline, why = relevant
-    excerpt = discord_control.safe_excerpt(row.get("body", row.get("text", "")), 220)
-    return "\n".join([
-        f"🟣 Sonnet-2: {headline}",
-        f"何が起きた: {excerpt or '署名済み/公式更新を検出'}",
-        f"重要性: {why}",
-        "MARU: 公式・署名済みの根拠を確認",
-        "注意: 返信・招待・roster consent・投稿は行っていません。",
-    ])
+    excerpt = discord_control.safe_excerpt(
+        row.get("body", row.get("text", "")),
+        220,
+    )
+    return "\n".join(
+        [
+            f"🟣 Sonnet-2: {headline}",
+            f"何が起きた: {excerpt or '署名済み/公式更新を検出'}",
+            f"重要性: {why}",
+            "MARU: 公式・署名済みの根拠を確認",
+            "注意: activity・返信・招待はroster consentを自動では意味しません。このwatcherは署名・投稿を行っていません。",
+        ]
+    )
 
 
 def _gap_notice(error: RoomRetentionGap) -> str:
-    return "\n".join([
-        "🔴 Sonnet-2: 監視ギャップを検出",
-        f"何が起きた: {error.room} の seq {error.missing_from}..{error.missing_to} はexport保持範囲にも残っていません。",
-        "重要性: この区間にMARU関連の返信・setup証拠があった可能性を自動では否定できません。",
-        "MARU: 公式状態を手動再確認するまで不可逆操作を進めない",
-        "注意: 自動送信・再招待・roster consent は行っていません。",
-    ])
+    return "\n".join(
+        [
+            "🔴 Sonnet-2: 監視ギャップを検出",
+            f"何が起きた: {error.room} の seq {error.missing_from}..{error.missing_to} はexport保持範囲にも残っていません。",
+            "重要性: この区間にMARU関連のactivity・setup証拠があった可能性を自動では否定できません。",
+            "MARU: 公式状態を手動再確認するまで不可逆操作を進めない",
+            "注意: 自動送信・再招待・roster consent は行っていません。",
+        ]
+    )
 
 
-def _github_poll(state: dict, issue: int, rows: list[dict], notices: list[str]) -> None:
+def _github_poll(
+    state: dict,
+    issue: int,
+    rows: list[dict],
+    notices: list[str],
+) -> None:
     source = f"gh:{issue}"
     raw_progress = state["github"].get(source)
     progress = raw_progress if isinstance(raw_progress, dict) else {}
@@ -297,8 +398,13 @@ def _github_poll(state: dict, issue: int, rows: list[dict], notices: list[str]) 
         updated = str(row.get("updated_at", ""))
         is_new = identifier > baseline_id or updated > baseline_updated
         relevant = _github_relevant(issue, row)
-        if relevant and ((initialized and is_new) or (not initialized and _startup_new(row))):
+
+        if relevant and (
+            (initialized and is_new)
+            or (not initialized and _startup_new(row))
+        ):
             notices.append(_notice(row, relevant))
+
         next_id = max(next_id, identifier)
         next_updated = max(next_updated, updated)
 
@@ -309,7 +415,12 @@ def _github_poll(state: dict, issue: int, rows: list[dict], notices: list[str]) 
     }
 
 
-def _room_poll(state: dict, room: str, rows: list[dict], notices: list[str]) -> None:
+def _room_poll(
+    state: dict,
+    room: str,
+    rows: list[dict],
+    notices: list[str],
+) -> None:
     raw_progress = state["rooms"].get(room)
     progress = raw_progress if isinstance(raw_progress, dict) else {}
     initialized = progress.get("initialized") is True
@@ -318,15 +429,28 @@ def _room_poll(state: dict, room: str, rows: list[dict], notices: list[str]) -> 
     for row in rows:
         sequence = row.get("seq") if type(row.get("seq")) is int else -1
         is_new = sequence > prior_seq
+
         for _kind, evidence_row, relevant in _public_evidence([(room, row)]):
-            if (initialized and is_new) or (not initialized and _startup_new(evidence_row)):
+            if (
+                (initialized and is_new)
+                or (not initialized and _startup_new(evidence_row))
+            ):
                 notices.append(_notice(evidence_row, relevant))
+
         prior_seq = max(prior_seq, sequence)
 
-    state["rooms"][room] = {"initialized": True, "seq": prior_seq}
+    state["rooms"][room] = {
+        "initialized": True,
+        "seq": prior_seq,
+    }
 
 
-def poll_notices(*, now: float | None = None, fetch=_fetch, room_read=_room_rows) -> list[str]:
+def poll_notices(
+    *,
+    now: float | None = None,
+    fetch=_fetch,
+    room_read=_room_rows,
+) -> list[str]:
     """Fixed GET-only polling; called by Discord's existing ``to_thread`` worker."""
     current = time.time() if now is None else now
     state = _load()
@@ -346,8 +470,15 @@ def poll_notices(*, now: float | None = None, fetch=_fetch, room_read=_room_rows
     for issue in ISSUES:
         try:
             rows = fetch(issue)
-        except (httpx.HTTPError, OSError, TypeError, ValueError, RuntimeError):
+        except (
+            httpx.HTTPError,
+            OSError,
+            TypeError,
+            ValueError,
+            RuntimeError,
+        ):
             continue
+
         successes += 1
         _github_poll(state, issue, rows, notices)
 
@@ -355,15 +486,27 @@ def poll_notices(*, now: float | None = None, fetch=_fetch, room_read=_room_rows
         raw_progress = state["rooms"].get(room)
         progress = raw_progress if isinstance(raw_progress, dict) else {}
         initialized = progress.get("initialized") is True
-        since = progress.get("seq") if initialized and type(progress.get("seq")) is int else None
+        since = (
+            progress.get("seq")
+            if initialized and type(progress.get("seq")) is int
+            else None
+        )
+
         gap_error: RoomRetentionGap | None = None
         try:
             rows = room_read(room, since)
         except RoomRetentionGap as error:
             rows = error.rows
             gap_error = error
-        except (httpx.HTTPError, OSError, TypeError, ValueError, RuntimeError):
+        except (
+            httpx.HTTPError,
+            OSError,
+            TypeError,
+            ValueError,
+            RuntimeError,
+        ):
             continue
+
         successes += 1
         _room_poll(state, room, rows, notices)
         if gap_error is not None:
@@ -371,11 +514,21 @@ def poll_notices(*, now: float | None = None, fetch=_fetch, room_read=_room_rows
 
     if not successes:
         failures = min(state["failures"] + 1, 6)
-        state.update(failures=failures, next_poll_at=current + min(MAX_BACKOFF_SECONDS, 30 * 2 ** (failures - 1)))
+        state.update(
+            failures=failures,
+            next_poll_at=current
+            + min(
+                MAX_BACKOFF_SECONDS,
+                30 * 2 ** (failures - 1),
+            ),
+        )
         _save(state)
         return []
 
-    state.update(failures=0, next_poll_at=current + POLL_SECONDS)
+    state.update(
+        failures=0,
+        next_poll_at=current + POLL_SECONDS,
+    )
     state["pending"] = notices[4 : 4 + PENDING_LIMIT]
     _save(state)
     return notices[:4]
