@@ -625,17 +625,23 @@ async def room_worker(
             )
             backoff = _next_error_backoff(room, backoff, effective_retry)
         else:
-            changed, drain_immediately = await process_live_payload_with_recovery(
-                client,
-                budget,
-                state,
-                config,
-                room,
-                payload or {},
-                own_did,
-                mailbox,
-                bootstrap=room not in state.get("cursors", {}),
+            generation_changed, new_epoch = observer.observe_room_generation(
+                state, room, payload or {}
             )
+            changed = generation_changed
+            if not new_epoch:
+                processed, drain_immediately = await process_live_payload_with_recovery(
+                    client,
+                    budget,
+                    state,
+                    config,
+                    room,
+                    payload or {},
+                    own_did,
+                    mailbox,
+                    bootstrap=room not in state.get("cursors", {}),
+                )
+                changed = processed or changed
             if _gap_recovery_failed(state, room):
                 backoff = _next_error_backoff(
                     room,
