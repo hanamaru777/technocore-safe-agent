@@ -42,6 +42,18 @@ def short_fingerprint(value: object) -> str:
     text = str(value or "unknown"); return text[:8] if text else "unknown"
 
 
+def counterpart_label(item: object) -> str:
+    """Use only an already-persisted, safe display label; never look one up."""
+    row = item if isinstance(item, dict) else {}
+    for key in ("display_label", "display_name", "handle", "label"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            rendered = safe_excerpt(value, 48)
+            if rendered and not rendered.lower().startswith("did:key:"):
+                return rendered
+    return short_fingerprint(row.get("fingerprint") if row else item)
+
+
 def discord_message_chunks(value: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     if limit < 1: raise ValueError("Discord message limit must be positive")
     chunks: list[str] = []; current = ""
@@ -153,6 +165,7 @@ def sync_interactions() -> list[dict]:
     cache_key = (*_resident_file_revision(), _auto_interaction_revision(auto_state))
     if cache_key == _INTERACTION_CACHE_KEY: return [item for item in ui.get("interactions", []) if isinstance(item, dict)]
     records = {item.get("id"): item for item in ui.get("interactions", []) if isinstance(item, dict) and item.get("id")}
+    labels = {str(item.get("fingerprint")): counterpart_label(item) for item in records.values() if item.get("fingerprint")}
     try: local = resident.load_state()
     except RuntimeError: local = {"candidates": {}}
     observed: dict | None = None
@@ -165,12 +178,15 @@ def sync_interactions() -> list[dict]:
             try: observed = observer.load_state()
             except RuntimeError: observed = {"agents": {}}
         message = _find_message(observed, str(item.get("fingerprint", "")), item.get("room"), item.get("seq")); context_text = item.get("context", {}).get("excerpt", ""); summary = (message or {}).get("text") or context_text or f"署名付き直接リクエスト topic={signals.get('conversation_topic', '不明')}"
-        records[identifier] = {"id": identifier, "direction": "受信", "at": (message or {}).get("ts") or item.get("created_at"), "fingerprint": item.get("fingerprint"), "did": item.get("did"), "room": item.get("room"), "seq": item.get("seq"), "kind": CATEGORY_LABELS.get(item.get("category"), "署名付き直接リクエスト"), "summary": safe_excerpt(summary, 240), "conversation_id": item.get("candidate_id")}
+        label = counterpart_label(item)
+        labels[str(item.get("fingerprint"))] = label
+        records[identifier] = {"id": identifier, "direction": "受信", "at": (message or {}).get("ts") or item.get("created_at"), "fingerprint": item.get("fingerprint"), "did": item.get("did"), "room": item.get("room"), "seq": item.get("seq"), "kind": CATEGORY_LABELS.get(item.get("category"), "署名付き直接リクエスト"), "summary": safe_excerpt(summary, 240), "conversation_id": item.get("candidate_id"), "display_label": label if label != short_fingerprint(item.get("fingerprint")) else None}
     for intent_id, receipt in auto_state.get("receipts", {}).items():
         intent = auto_state.get("outbox", {}).get(intent_id)
         if not isinstance(intent, dict) or _is_controlled_test_intent(intent): continue
         identifier = f"out:{intent_id}"; actual_text = verified_outbound_text(auto_state, intent, receipt); record = records.get(identifier, {})
-        record.update({"id": identifier, "direction": "送信", "at": receipt.get("at"), "fingerprint": intent.get("fingerprint"), "did": intent.get("source_did"), "room": intent.get("room"), "seq": intent.get("seq"), "kind": "自動返信", "summary": actual_text if actual_text is not None else record.get("summary", "送信済み（正確な本文は保持されていません）"), "exact_text": actual_text is not None, "conversation_id": intent.get("source_candidate_id")}); records[identifier] = record
+        label = labels.get(str(intent.get("fingerprint")))
+        record.update({"id": identifier, "direction": "送信", "at": receipt.get("at"), "fingerprint": intent.get("fingerprint"), "did": intent.get("source_did"), "room": intent.get("room"), "seq": intent.get("seq"), "kind": "自動返信", "summary": actual_text if actual_text is not None else record.get("summary", "送信済み（正確な本文は保持されていません）"), "exact_text": actual_text is not None, "conversation_id": intent.get("source_candidate_id"), "display_label": label if label and label != short_fingerprint(intent.get("fingerprint")) else None}); records[identifier] = record
     ordered = sorted(records.values(), key=lambda item: _parse_time(item.get("at")) or datetime.min.replace(tzinfo=UTC))[-INTERACTION_HISTORY_LIMIT:]
     if ordered != ui.get("interactions", []): ui["interactions"] = ordered; save_ui_state(ui)
     _INTERACTION_CACHE_KEY = cache_key; return ordered
@@ -240,8 +256,8 @@ def tclk_offer_message(offer_id: str) -> str:
 
 
 def outbound_interaction_message(item: dict, inbound: dict | None = None) -> str:
-    received = safe_excerpt((inbound or {}).get("summary", ""), 180); sent = item.get("summary") if item.get("exact_text") else "送信済み（正確な本文は保持されていません）"; received_line = f"受信: {received}\n" if received else ""
-    return ("🔵 FLOP Agent 自動返信完了\n\n" f"時刻: {human_time(item.get('at'))}\n" f"相手: {short_fingerprint(item.get('fingerprint'))} | {item.get('room', '?')} #{item.get('seq', '?')}\n" f"{received_line}" f"送信: {sent}\n\n" f"履歴を見る: /history {item.get('fingerprint') or ''}").rstrip()
+    label = counterpart_label(item); received = safe_excerpt((inbound or {}).get("summary", ""), 180); sent = item.get("summary") if item.get("exact_text") else "送信済み（正確な本文は保持されていません）"; received_line = f"{label} → MARU Agent: {received}\n" if received else ""
+    return ("🔵 FLOP Agent 自動返信完了\n\n" f"時刻: {human_time(item.get('at'))}\n" f"相手: {label} | {item.get('room', '?')} #{item.get('seq', '?')}\n" f"{received_line}" f"MARU Agent → {label}: {sent}\nState: 返信を記録済み\nMARU: 何もしなくてOK\n\n" f"履歴を見る: /history {item.get('fingerprint') or ''}").rstrip()
 
 def _latest_post_at(auto_state: dict) -> str | None:
     values = [item.get("at") for item in filtered_rate_history(auto_state) if _parse_time(item.get("at"))]; return max(values, key=lambda value: _parse_time(value) or datetime.min.replace(tzinfo=UTC), default=None)
@@ -367,16 +383,101 @@ def immediate_health_incidents(snapshot: dict) -> dict[str, str]:
     return incidents
 
 
+def _clock(value: object) -> str:
+    stamp = _parse_time(value)
+    if stamp is None:
+        return "--:--"
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp.astimezone(DISPLAY_TZ).strftime("%H:%M")
+
+
+def conversation_line(item: dict, *, limit: int = 240) -> str:
+    """Human conversation rendering over the existing bounded, local timeline."""
+    label = counterpart_label(item)
+    if item.get("direction") == "送信":
+        text = item.get("summary") if item.get("exact_text") else "送信済み（正確な本文は保持されていません）"
+        return f"{_clock(item.get('at'))} MARU Agent → {label}: {text}"
+    return f"{_clock(item.get('at'))} {label} → MARU Agent: {safe_excerpt(item.get('summary', ''), limit)}"
+
+
+def _mission_blocker(activity: dict) -> str:
+    snapshot = activity["snapshot"]
+    if snapshot.get("problems"):
+        return " / ".join(str(item) for item in snapshot["problems"])
+    unresolved = activity.get("oldest_unresolved_direct")
+    if isinstance(unresolved, dict):
+        return f"{counterpart_label(unresolved)} からの直接依頼を安全に確認中"
+    if snapshot.get("auto", {}).get("queued", 0):
+        return "署名済み処理待ち（Signerの既存経路）"
+    return "なし"
+
+
+def _mission_maru_action(activity: dict) -> str:
+    snapshot = activity["snapshot"]
+    if snapshot.get("problems"):
+        return "/status で安全状態を確認"
+    if activity.get("bootstrap_pending"):
+        item = activity["bootstrap_pending"][0]
+        return f"/reply-approved {item.get('candidate_id')} SEND を確認して実行"
+    if snapshot.get("auto", {}).get("enabled") and not snapshot.get("auto", {}).get("paused") and not activity.get("trusted") and activity.get("trust_candidates"):
+        return "/trust-candidates を確認"
+    return "何もしなくてOK"
+
+
+def mission_message(activity: dict | None = None) -> str:
+    """Read-only operator summary derived from the existing local state only."""
+    activity = activity or activity_snapshot(sync_timeline=False, include_trust=True)
+    snapshot = activity["snapshot"]
+    interactions = activity.get("interactions", [])
+    latest = interactions[-1] if interactions else None
+    if snapshot.get("problems"):
+        now = "安全状態を確認中"
+    elif latest is not None:
+        now = f"{counterpart_label(latest)} との直接やりとりを監視中"
+    elif snapshot.get("health") == "ok":
+        now = "公開roomを安全に監視中"
+    else:
+        now = f"監視状態 {snapshot.get('health', 'unknown')} を確認中"
+    try:
+        from . import collaboration
+        collaboration_rows = collaboration.records(include_tclk=False)
+    except (ImportError, RuntimeError):
+        collaboration_rows = []
+    lines = ["🎯 FLOP AGENT MISSION CONTROL", f"NOW: {now}", "Goal: 安全条件を満たす有用な対話だけを継続的に見つける", "", "👥 WHO / STATUS"]
+    if latest is not None:
+        meaning = latest.get("summary") if latest.get("direction") == "送信" and latest.get("exact_text") else safe_excerpt(latest.get("summary", ""), 100)
+        lines.append(f"・{counterpart_label(latest)} — {latest.get('direction', '不明')} — {meaning or '内容不明'}")
+    if collaboration_rows:
+        row = collaboration_rows[0]
+        lines.append(f"・{counterpart_label(row)} — {safe_excerpt(row.get('stage'), 32) or '状態不明'} — {safe_excerpt(row.get('task_summary'), 100) or '安全な会話状態を監視中'}")
+    if latest is None and not collaboration_rows:
+        lines.append("・直接のやりとりはまだありません")
+    lines.extend(["", "💬 RECENT"])
+    recent = interactions[-3:]
+    if recent:
+        lines.extend("・" + conversation_line(item, limit=120) for item in recent)
+    else:
+        lines.append("・まだ直接のやりとりはありません")
+    lines.extend(["", "🚧 BLOCKER", _mission_blocker(activity), "", "🙋 MARU", _mission_maru_action(activity)])
+    return "\n".join(lines)
+
+
 def status_message() -> str:
     activity = activity_snapshot(sync_timeline=False, include_trust=False); snapshot = activity["snapshot"]; interactions = activity["interactions"]; latest_interaction = interactions[-1] if interactions else None; needs_attention = bool(snapshot["problems"] or snapshot["critical"] or snapshot["direct"] or snapshot["auto"].get("queued", 0)); icon = "🔴" if snapshot["problems"] else "🟡" if needs_attention else "🟢"; title = "異常" if snapshot["problems"] else "確認あり" if needs_attention else "正常"; auto_label = "ON" if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") else "停止/一時停止"
-    lines = [f"{icon} FLOP Agent {title}", f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}", f"Autopilot: {auto_label} / 直近24h 自動投稿 {activity['posts']}/6（上限・目標ではありません）", f"queue: {snapshot['auto'].get('queued', 0)} / eligible {activity['eligible']} / ignored {activity['ignored']} / blocked {activity['blocked']}", f"要対応: 緊急 {snapshot['critical']} / 直接リクエスト {snapshot['direct']}", f"最終監視: {snapshot['last_refresh_age']}", f"最終投稿: {human_age(activity['latest_post']) if activity['latest_post'] else 'なし'}"]
+    lines = [f"{icon} FLOP Agent {title}"]
+    if snapshot["problems"]:
+        lines.extend(["異常: " + " / ".join(snapshot["problems"]), "結論: 対応が必要です。詳細は /status を再確認してください。", "", mission_message(activity), ""])
+    else:
+        lines.extend([mission_message(activity), ""])
+    lines.extend([f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}", f"Autopilot: {auto_label} / 直近24h 自動投稿 {activity['posts']}/6（上限・目標ではありません）", f"queue: {snapshot['auto'].get('queued', 0)} / eligible {activity['eligible']} / ignored {activity['ignored']} / blocked {activity['blocked']}", f"要対応: 緊急 {snapshot['critical']} / 直接リクエスト {snapshot['direct']}", f"最終監視: {snapshot['last_refresh_age']}", f"最終投稿: {human_age(activity['latest_post']) if activity['latest_post'] else 'なし'}"])
     if latest_interaction: lines.append(f"最終やりとり: {short_fingerprint(latest_interaction.get('fingerprint'))} / {latest_interaction.get('direction')} / {human_age(latest_interaction.get('at'))}")
     if activity["reasons"]: lines.append("主な非投稿理由: " + max(activity["reasons"], key=activity["reasons"].get))
     if activity["zero_reason"]: lines.append(f"0投稿の理由: {activity['zero_reason']}")
     if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and snapshot["direct"]:
         trusted = trusted_relationships(); trust_rows = trust_candidates(); bootstrap = bootstrap_pending_approvals()
         if not trusted and (trust_rows or bootstrap): lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
-    if snapshot["problems"]: lines.append("異常: " + " / ".join(snapshot["problems"])); lines.append("結論: 対応が必要です。詳細は /status を再確認してください。")
+    if snapshot["problems"]: pass
     elif needs_attention: lines.append("結論: 確認事項があります。直接リクエストまたはqueueを確認してください。")
     else: lines.append("結論: 対応不要。そのまま稼働中。")
     return "\n".join(lines)
@@ -387,7 +488,7 @@ def history_message(filter_value: str | None = None, limit: int = INTERACTION_DI
     records = records[-limit:]
     if not records: return "🧾 最近のやりとり\nまだ直接のやりとり記録はありません。\n※監視しただけの他Agent会話は含めず、自分のDIDが関与した直接受信・自動返信だけを記録します。"
     lines = ["🧾 最近のやりとり"]
-    for item in records: lines.extend(["", f"{human_time(item.get('at'))} | {item.get('direction')} | {short_fingerprint(item.get('fingerprint'))}", f"{item.get('room', '?')} #{item.get('seq', '?')} | {item.get('kind', 'やりとり')}", f"内容: {item.get('summary', '') if item.get('direction') == '送信' and item.get('exact_text') else safe_excerpt(item.get('summary', ''), 240)}"])
+    for item in records: lines.extend(["", conversation_line(item), f"{item.get('room', '?')} #{item.get('seq', '?')} | {item.get('kind', 'やりとり')}"])
     return "\n".join(lines)
 def activity_message() -> str:
     activity = activity_snapshot(); snapshot = activity["snapshot"]; recent = activity["interactions"][-3:]; lines = ["📊 FLOP Agent 24時間活動", f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}", f"自動投稿: {activity['posts']}/6（上限・目標ではありません）", f"eligible {activity['eligible']} / ignored {activity['ignored']} / blocked {activity['blocked']}", f"直接受信 {len(activity['received'])} / 直接送信 {len(activity['sent'])} / 相手 {activity['counterparts']}人", f"queue: {snapshot['auto'].get('queued', 0)} / 最終投稿: {human_age(activity['latest_post']) if activity['latest_post'] else 'なし'}"]
@@ -396,8 +497,7 @@ def activity_message() -> str:
     if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and not activity["trusted"] and (activity["trust_candidates"] or activity["bootstrap_pending"]): lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
     if recent:
         lines.append("直近のやりとり:")
-        for item in recent:
-            content = item.get("summary", "") if item.get("direction") == "送信" and item.get("exact_text") else safe_excerpt(item.get("summary", ""), 80); lines.append(f"- {short_fingerprint(item.get('fingerprint'))} / {item.get('direction')} / {content}")
+        for item in recent: lines.append("- " + conversation_line(item, limit=80))
     else: lines.append("直近の直接やりとり: なし")
     return "\n".join(lines)
 
@@ -412,6 +512,7 @@ class Control:
         if not parts: return {"ok": False, "error": "empty", "message": "Use /help for local control commands."}
         action, args = parts[0], parts[1:]
         if action == "/status": return {"ok": True, "data": {}, "message": status_message()}
+        if action == "/mission" and not args: return {"ok": True, "data": {}, "message": mission_message()}
         if action == "/activity" and not args: return {"ok": True, "data": {}, "message": activity_message()}
         if action == "/tclk-opportunities" and not args: return {"ok": True, "data": {}, "message": tclk_opportunities_message()}
         if action == "/tclk" and len(args) == 1: return {"ok": True, "data": {}, "message": tclk_offer_message(args[0])}
@@ -436,7 +537,7 @@ class Control:
         if action == "/autopilot-queue": data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
         if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
         if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot outbox generation resumed locally; Discord cannot publish."}
-        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /status /activity /trust-candidates /trusted /history [相手ID] /candidate <id> /tclk-opportunities /tclk <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
+        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /mission /status /activity /trust-candidates /trusted /history [相手ID] /candidate <id> /tclk-opportunities /tclk <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
         if action == "/help-debug": return {"ok": True, "data": {}, "message": "Debug: /resident-status /intel /opportunities /agents /agent <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
     def notifications(self) -> list[dict]:
