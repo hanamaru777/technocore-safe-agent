@@ -41,10 +41,21 @@ def signed_activity(
     request_id="maru-invite-lon-20260914-1",
     *,
     ts="1970-01-01T00:30:00Z",
-    text='{"type":"sonnet.note.v1","contest_id":"sonnet-2","text":"interested"}',
+    text=None,
 ):
     meta = alerts.INVITATIONS[request_id]
     actual_seq = meta["sent_seq"] + 1 if seq is None else seq
+    if text is None:
+        text = json.dumps(
+            {
+                "type": "sonnet.note.v1",
+                "contest_id": "sonnet-2",
+                "target_did": alerts.MARU_DID,
+                "text": "interested",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     return {
         "from": meta["did"],
         "nonce": str(actual_seq),
@@ -117,19 +128,34 @@ def test_issue_16_matches_exact_maru_identifiers():
     assert alerts._github_relevant(16, row(2, f"{alerts.MARU_REGISTRATION_REQUEST_ID} disposition accepted"))
 
 
-def test_invited_writer_activity_uses_exact_signed_sender_after_invite(monkeypatch):
+def test_invited_writer_activity_requires_exact_sender_target_and_post_invite_seq(monkeypatch):
     monkeypatch.setattr(alerts, "verify_signed_record", lambda *_a: None)
     rid = "maru-invite-lon-20260914-1"
     sent_seq = alerts.INVITATIONS[rid]["sent_seq"]
-    before = signed_activity(seq=sent_seq, request_id=rid, text="plain text before boundary")
-    after = signed_activity(seq=sent_seq + 1, request_id=rid, text="plain text interested")
-    values = alerts._public_evidence([(alerts.DISCOVERY_ROOM, before), (alerts.DISCOVERY_ROOM, after)])
+    before = signed_activity(seq=sent_seq, request_id=rid)
+    after = signed_activity(seq=sent_seq + 1, request_id=rid)
+    unrelated = signed_activity(seq=sent_seq + 2, request_id=rid, text='{"type":"sonnet.note.v1","contest_id":"sonnet-2","target_did":"did:key:z6MkSomebodyElse123456789ABCDEFGHJKLMNPQ","text":"hello"}')
+    values = alerts._public_evidence([
+        (alerts.DISCOVERY_ROOM, before),
+        (alerts.DISCOVERY_ROOM, after),
+        (alerts.DISCOVERY_ROOM, unrelated),
+    ])
     assert len(values) == 1
     assert "roster consent" in values[0][2][1]
-    assert "新規activity" in values[0][2][0]
+    assert "MARU宛てactivity" in values[0][2][0]
     wrong = dict(after)
     wrong["from"] = "did:key:z6MknotInvitedWriter123456789ABCDEFGHJKLMNPQ"
     assert alerts._public_evidence([(alerts.DISCOVERY_ROOM, wrong)]) == []
+
+
+def test_plain_text_candidate_mention_of_maru_is_detected(monkeypatch):
+    monkeypatch.setattr(alerts, "verify_signed_record", lambda *_a: None)
+    rid = "maru-invite-fuego-20260914-1"
+    message = signed_activity(
+        request_id=rid,
+        text="MinerMaru73 yes, I saw your sonnet-2 invitation.",
+    )
+    assert len(alerts._public_evidence([(alerts.DISCOVERY_ROOM, message)])) == 1
 
 
 def test_team_setup_requires_exact_referee_game_room_and_generation(monkeypatch):
