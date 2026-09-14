@@ -425,6 +425,22 @@ def _mission_maru_action(activity: dict) -> str:
     return "何もしなくてOK"
 
 
+def _mission_goal(activity: dict, collaboration_rows: list[dict], latest: dict | None) -> str:
+    snapshot = activity["snapshot"]
+    if snapshot.get("problems"):
+        return "安全状態の確認を優先し、通常の処理を保留中"
+    unresolved = activity.get("oldest_unresolved_direct")
+    if isinstance(unresolved, dict):
+        return f"{counterpart_label(unresolved)} からの直接依頼を安全に解決する"
+    active = next((row for row in collaboration_rows if row.get("stage") in {"contacted", "replied", "task_candidate", "human_review", "active"}), None)
+    if active is not None:
+        subject = safe_excerpt(active.get("task_summary") or active.get("task_topic") or "協業", 100)
+        return f"{counterpart_label(active)} との {subject} を安全に前進させる"
+    if latest is not None:
+        return f"{counterpart_label(latest)} との直近のやりとりを安全に完了する"
+    return "安全条件を満たす有用な対話だけを継続的に見つける"
+
+
 def mission_message(activity: dict | None = None) -> str:
     """Read-only operator summary derived from the existing local state only."""
     activity = activity or activity_snapshot(sync_timeline=False, include_trust=True)
@@ -444,7 +460,7 @@ def mission_message(activity: dict | None = None) -> str:
         collaboration_rows = collaboration.records(include_tclk=False)
     except (ImportError, RuntimeError):
         collaboration_rows = []
-    lines = ["🎯 FLOP AGENT MISSION CONTROL", f"NOW: {now}", "Goal: 安全条件を満たす有用な対話だけを継続的に見つける", "", "👥 WHO / STATUS"]
+    lines = ["🎯 FLOP AGENT MISSION CONTROL", f"NOW: {now}", f"Goal: {_mission_goal(activity, collaboration_rows, latest)}", "", "👥 WHO / STATUS"]
     if latest is not None:
         meaning = latest.get("summary") if latest.get("direction") == "送信" and latest.get("exact_text") else safe_excerpt(latest.get("summary", ""), 100)
         lines.append(f"・{counterpart_label(latest)} — {latest.get('direction', '不明')} — {meaning or '内容不明'}")
@@ -464,7 +480,7 @@ def mission_message(activity: dict | None = None) -> str:
 
 
 def status_message() -> str:
-    activity = activity_snapshot(sync_timeline=False, include_trust=False); snapshot = activity["snapshot"]; interactions = activity["interactions"]; latest_interaction = interactions[-1] if interactions else None; needs_attention = bool(snapshot["problems"] or snapshot["critical"] or snapshot["direct"] or snapshot["auto"].get("queued", 0)); icon = "🔴" if snapshot["problems"] else "🟡" if needs_attention else "🟢"; title = "異常" if snapshot["problems"] else "確認あり" if needs_attention else "正常"; auto_label = "ON" if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") else "停止/一時停止"
+    activity = activity_snapshot(sync_timeline=False, include_trust=True); snapshot = activity["snapshot"]; interactions = activity["interactions"]; latest_interaction = interactions[-1] if interactions else None; needs_attention = bool(snapshot["problems"] or snapshot["critical"] or snapshot["direct"] or snapshot["auto"].get("queued", 0)); icon = "🔴" if snapshot["problems"] else "🟡" if needs_attention else "🟢"; title = "異常" if snapshot["problems"] else "確認あり" if needs_attention else "正常"; auto_label = "ON" if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") else "停止/一時停止"
     lines = [f"{icon} FLOP Agent {title}"]
     if snapshot["problems"]:
         lines.extend(["異常: " + " / ".join(snapshot["problems"]), "結論: 対応が必要です。詳細は /status を再確認してください。", "", mission_message(activity), ""])
@@ -475,7 +491,7 @@ def status_message() -> str:
     if activity["reasons"]: lines.append("主な非投稿理由: " + max(activity["reasons"], key=activity["reasons"].get))
     if activity["zero_reason"]: lines.append(f"0投稿の理由: {activity['zero_reason']}")
     if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") and snapshot["direct"]:
-        trusted = trusted_relationships(); trust_rows = trust_candidates(); bootstrap = bootstrap_pending_approvals()
+        trusted, trust_rows, bootstrap = activity["trusted"], activity["trust_candidates"], activity["bootstrap_pending"]
         if not trusted and (trust_rows or bootstrap): lines.append("初回trust設定が必要: /trust-candidates（故障ではありません）")
     if snapshot["problems"]: pass
     elif needs_attention: lines.append("結論: 確認事項があります。直接リクエストまたはqueueを確認してください。")

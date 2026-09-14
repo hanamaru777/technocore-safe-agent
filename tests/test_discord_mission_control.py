@@ -1,4 +1,6 @@
-from flop_agent import discord_collaboration, discord_control, discord_outcome_scorecard
+from datetime import UTC, datetime, timedelta
+
+from flop_agent import autopilot, collaboration, core, discord_collaboration, discord_control, discord_outcome_scorecard, observer, resident
 
 
 INBOUND = "\u53d7\u4fe1"
@@ -53,6 +55,47 @@ def test_status_is_mission_first_normally_but_critical_safety_stays_first(monkey
     assert critical_message.index("\u7570\u5e38: Autopilot OFF") < critical_message.index("FLOP AGENT MISSION CONTROL")
 
 
+def test_status_mission_action_uses_same_trust_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    observer.atomic_json_write(observer.config_path(), observer.DEFAULT_CONFIG)
+    state = resident.default_state()
+    state["cached_observer"] = {"health": {"current": "ok"}, "cursors": {}}
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat()
+    state["candidates"] = {"bootstrap-1": {
+        "candidate_id": "bootstrap-1", "status": "approved", "fingerprint": "abc123456789",
+        "did": "did:key:z", "room": "lobby", "seq": 1, "category": "conversation",
+        "created_at": datetime.now(UTC).isoformat(), "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        "signals": {"direct_public_signed": True}, "context": {"excerpt": "Can you explain nonce safety?"},
+    }}
+    state["relationships"] = {"abc123456789": {"approval_rejection_history": [{"candidate_id": "bootstrap-1", "decision": "approved"}]}}
+    resident.save_state(state)
+    auto = {"enabled": True, "paused": False, "outbox": {}, "receipts": {}, "rate_history": []}
+    monkeypatch.setattr(autopilot, "load", lambda: auto)
+    monkeypatch.setattr(autopilot, "status", lambda _state=None: {"enabled": True, "paused": False, "queued": 0, "receipts": 0})
+    monkeypatch.setattr(autopilot, "durable_publication_at", lambda *_args: False)
+    monkeypatch.setattr(autopilot, "active_trusted_relationships", lambda *_args: [])
+    message = discord_control.status_message()
+    assert "/reply-approved bootstrap-1 SEND" in message
+    assert "\u4f55\u3082\u3057\u306a\u304f\u3066OK" not in message
+
+
+def test_mission_goal_is_specific_for_direct_request_and_collaboration(monkeypatch):
+    direct = _activity()
+    direct["oldest_unresolved_direct"] = {"fingerprint": "direct123456", "room": "lobby", "seq": 7}
+    monkeypatch.setattr(collaboration, "records", lambda **_kwargs: [])
+    direct_message = discord_control.mission_message(direct)
+    assert "direct12" in direct_message and "\u76f4\u63a5\u4f9d\u983c" in direct_message
+
+    collab_activity = _activity()
+    collab_activity["interactions"] = []
+    monkeypatch.setattr(collaboration, "records", lambda **_kwargs: [{
+        "fingerprint": "collab123456", "stage": "active",
+        "task_summary": "Review the bounded public test result.",
+    }])
+    collab_message = discord_control.mission_message(collab_activity)
+    assert "Review the bounded public test result." in collab_message
+
+
 def test_production_scorecard_keeps_same_status_ordering(monkeypatch):
     normal = _activity()
     normal.update({"signed_direct_requests": 0, "acked_replies": 0, "active_trusted": 0, "collaboration_active": 0, "collaboration_completed": 0, "public_artifacts": 0})
@@ -61,15 +104,22 @@ def test_production_scorecard_keeps_same_status_ordering(monkeypatch):
     assert rendered.index("FLOP AGENT MISSION CONTROL") < rendered.index("\u76e3\u8996:")
 
 
-def test_collaboration_notice_is_self_contained_and_human_first():
+def test_collaboration_notice_uses_persisted_interaction_label_and_fallback(monkeypatch):
+    monkeypatch.setattr(discord_collaboration.base, "sync_interactions", lambda: [{
+        "fingerprint": "abcdef123456", "display_label": "Helpful Agent",
+    }])
     message = discord_collaboration._notice_message({
         "id": "collab1", "stage": "replied", "fingerprint": "abcdef123456",
-        "display_label": "Helpful Agent", "task_summary": "I can reproduce the test failure.",
+        "task_summary": "I can reproduce the test failure.",
     })
     assert "Helpful Agent replied" in message
     assert "Helpful Agent \u2192 MARU Agent" in message
     assert "State:" in message and "Waiting on: Agent" in message
     assert "MARU:" in message
+
+    monkeypatch.setattr(discord_collaboration.base, "sync_interactions", lambda: [])
+    fallback = discord_collaboration._notice_message({"id": "collab2", "stage": "replied", "fingerprint": "abcdef123456"})
+    assert "abcdef12 replied" in fallback
 
 
 def test_collaboration_detail_leads_with_state_dialogue_waiting_and_next(monkeypatch):

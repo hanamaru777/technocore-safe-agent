@@ -85,6 +85,18 @@ def _conversation(record: dict) -> tuple[str | None, str | None]:
     return received, sent
 
 
+def _notice_label(notice: dict) -> str:
+    """Resolve only a label already persisted in the local interaction timeline."""
+    fingerprint = notice.get("fingerprint")
+    for item in reversed(base.sync_interactions()):
+        if item.get("fingerprint") != fingerprint:
+            continue
+        label = base.counterpart_label(item)
+        if label != base.short_fingerprint(fingerprint):
+            return label
+    return base.short_fingerprint(fingerprint)
+
+
 def _list_message() -> str:
     rows = collaboration.records(include_tclk=False)
     metrics = _counts(rows)
@@ -201,7 +213,7 @@ def _radar_message() -> str:
 def _notice_message(notice: dict) -> str:
     stage = notice.get("stage")
     record_id = str(notice.get("id", ""))
-    fingerprint = base.counterpart_label(notice)
+    fingerprint = _notice_label(notice)
     summary = base.safe_excerpt(notice.get("task_summary") or "", 160)
     if stage == "replied":
         lines = [f"🔵 {fingerprint} replied"]
