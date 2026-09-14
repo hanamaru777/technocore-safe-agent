@@ -22,6 +22,7 @@ GAME_ID = "maru73s2"
 POLL_SECONDS = 300
 MAX_BACKOFF_SECONDS = 1800
 PENDING_LIMIT = 32
+GITHUB_PAGE_LIMIT = 5
 PROCESS_STARTED_AT = time.time()
 
 INVITED_DIDS = {
@@ -83,9 +84,7 @@ def _load() -> dict:
         "schema_version": 4,
         "github": value["github"],
         "rooms": value["rooms"],
-        "pending": [item for item in value["pending"] if isinstance(item, str)][
-            :PENDING_LIMIT
-        ],
+        "pending": [item for item in value["pending"] if isinstance(item, str)][:PENDING_LIMIT],
         "next_poll_at": next_poll_at,
         "failures": failures,
     }
@@ -132,16 +131,22 @@ def _github_relevant(issue: int, row: dict) -> tuple[str, str] | None:
 
 
 def _fetch(issue: int) -> list[dict]:
-    response = httpx.get(
-        f"https://api.github.com/repos/{REPO}/issues/{issue}/comments?per_page=100&sort=updated&direction=desc",
-        headers={"Accept": "application/vnd.github+json"},
-        timeout=5.0,
-    )
-    response.raise_for_status()
-    value = response.json()
-    if not isinstance(value, list):
-        raise ValueError("github_shape")
-    return [row for row in value if isinstance(row, dict)]
+    rows: list[dict] = []
+    for page in range(1, GITHUB_PAGE_LIMIT + 1):
+        response = httpx.get(
+            f"https://api.github.com/repos/{REPO}/issues/{issue}/comments?per_page=100&page={page}",
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        value = response.json()
+        if not isinstance(value, list):
+            raise ValueError("github_shape")
+        page_rows = [row for row in value if isinstance(row, dict)]
+        rows.extend(page_rows)
+        if len(value) < 100:
+            return rows
+    raise RuntimeError("github_comment_page_limit")
 
 
 def _parse_room_payload(payload: object) -> list[dict]:
@@ -154,10 +159,7 @@ def _parse_room_payload(payload: object) -> list[dict]:
 def _room_export(room: str) -> list[dict]:
     if room not in FIXED_ROOMS:
         raise ValueError("room_not_allowlisted")
-    response = httpx.get(
-        f"{core.BASE_URL}/r/{quote(room, safe='')}/export",
-        timeout=20,
-    )
+    response = httpx.get(f"{core.BASE_URL}/r/{quote(room, safe='')}/export", timeout=20)
     response.raise_for_status()
     rows: list[dict] = []
     for line in response.text.splitlines():
@@ -190,11 +192,7 @@ def _room_rows(room: str, since: int | None = None) -> list[dict]:
         return rows
 
     exported = _room_export(room)
-    retained = [
-        row
-        for row in exported
-        if type(row.get("seq")) is int and row["seq"] > since
-    ]
+    retained = [row for row in exported if type(row.get("seq")) is int and row["seq"] > since]
     retained_sequences = [row["seq"] for row in retained]
     if not retained_sequences:
         raise RoomRetentionGap(room, since + 1, first_seq - 1, [])
@@ -204,9 +202,7 @@ def _room_rows(room: str, since: int | None = None) -> list[dict]:
     return retained
 
 
-def _public_evidence(
-    rows: list[tuple[str, dict]],
-) -> list[tuple[str, dict, tuple[str, str]]]:
+def _public_evidence(rows: list[tuple[str, dict]]) -> list[tuple[str, dict, tuple[str, str]]]:
     result = []
     for room, row in rows:
         try:
@@ -241,27 +237,9 @@ def _public_evidence(
             continue
 
         if invite_candidate:
-            result.append(
-                (
-                    "invite",
-                    row,
-                    (
-                        "MARU discovery invitation response",
-                        "署名済みの返信・状態を確認。roster consent や参加承諾は推測していません。",
-                    ),
-                )
-            )
+            result.append(("invite", row, ("MARU discovery invitation response", "署名済みの返信・状態を確認。roster consent や参加承諾は推測していません。")))
         if team_candidate:
-            result.append(
-                (
-                    "team",
-                    row,
-                    (
-                        "MARU team-room generation/setup receipt",
-                        "referee の署名済みgeneration/setup receipt を確認しました。team request 自体から参加・権限は推測していません。",
-                    ),
-                )
-            )
+            result.append(("team", row, ("MARU team-room generation/setup receipt", "referee の署名済みgeneration/setup receipt を確認しました。team request 自体から参加・権限は推測していません。")))
     return result
 
 
@@ -285,27 +263,23 @@ def _startup_new(row: dict) -> bool:
 def _notice(row: dict, relevant: tuple[str, str]) -> str:
     headline, why = relevant
     excerpt = discord_control.safe_excerpt(row.get("body", row.get("text", "")), 220)
-    return "\n".join(
-        [
-            f"🟣 Sonnet-2: {headline}",
-            f"何が起きた: {excerpt or '署名済み/公式更新を検出'}",
-            f"重要性: {why}",
-            "MARU: 公式・署名済みの根拠を確認",
-            "注意: 返信・招待・roster consent・投稿は行っていません。",
-        ]
-    )
+    return "\n".join([
+        f"🟣 Sonnet-2: {headline}",
+        f"何が起きた: {excerpt or '署名済み/公式更新を検出'}",
+        f"重要性: {why}",
+        "MARU: 公式・署名済みの根拠を確認",
+        "注意: 返信・招待・roster consent・投稿は行っていません。",
+    ])
 
 
 def _gap_notice(error: RoomRetentionGap) -> str:
-    return "\n".join(
-        [
-            "🔴 Sonnet-2: 監視ギャップを検出",
-            f"何が起きた: {error.room} の seq {error.missing_from}..{error.missing_to} はexport保持範囲にも残っていません。",
-            "重要性: この区間にMARU関連の返信・setup証拠があった可能性を自動では否定できません。",
-            "MARU: 公式状態を手動再確認するまで不可逆操作を進めない",
-            "注意: 自動送信・再招待・roster consent は行っていません。",
-        ]
-    )
+    return "\n".join([
+        "🔴 Sonnet-2: 監視ギャップを検出",
+        f"何が起きた: {error.room} の seq {error.missing_from}..{error.missing_to} はexport保持範囲にも残っていません。",
+        "重要性: この区間にMARU関連の返信・setup証拠があった可能性を自動では否定できません。",
+        "MARU: 公式状態を手動再確認するまで不可逆操作を進めない",
+        "注意: 自動送信・再招待・roster consent は行っていません。",
+    ])
 
 
 def _github_poll(state: dict, issue: int, rows: list[dict], notices: list[str]) -> None:
@@ -313,32 +287,29 @@ def _github_poll(state: dict, issue: int, rows: list[dict], notices: list[str]) 
     raw_progress = state["github"].get(source)
     progress = raw_progress if isinstance(raw_progress, dict) else {}
     initialized = progress.get("initialized") is True
-    prior_id = progress.get("max_id") if type(progress.get("max_id")) is int else -1
-    prior_updated = str(progress.get("max_updated_at", ""))
+    baseline_id = progress.get("max_id") if type(progress.get("max_id")) is int else -1
+    baseline_updated = str(progress.get("max_updated_at", ""))
+    next_id = baseline_id
+    next_updated = baseline_updated
 
     for row in rows:
         identifier = row.get("id") if type(row.get("id")) is int else -1
         updated = str(row.get("updated_at", ""))
-        is_new = identifier > prior_id or updated > prior_updated
+        is_new = identifier > baseline_id or updated > baseline_updated
         relevant = _github_relevant(issue, row)
         if relevant and ((initialized and is_new) or (not initialized and _startup_new(row))):
             notices.append(_notice(row, relevant))
-        prior_id = max(prior_id, identifier)
-        prior_updated = max(prior_updated, updated)
+        next_id = max(next_id, identifier)
+        next_updated = max(next_updated, updated)
 
     state["github"][source] = {
         "initialized": True,
-        "max_id": prior_id,
-        "max_updated_at": prior_updated,
+        "max_id": next_id,
+        "max_updated_at": next_updated,
     }
 
 
-def _room_poll(
-    state: dict,
-    room: str,
-    rows: list[dict],
-    notices: list[str],
-) -> None:
+def _room_poll(state: dict, room: str, rows: list[dict], notices: list[str]) -> None:
     raw_progress = state["rooms"].get(room)
     progress = raw_progress if isinstance(raw_progress, dict) else {}
     initialized = progress.get("initialized") is True
@@ -400,11 +371,7 @@ def poll_notices(*, now: float | None = None, fetch=_fetch, room_read=_room_rows
 
     if not successes:
         failures = min(state["failures"] + 1, 6)
-        state.update(
-            failures=failures,
-            next_poll_at=current
-            + min(MAX_BACKOFF_SECONDS, 30 * 2 ** (failures - 1)),
-        )
+        state.update(failures=failures, next_poll_at=current + min(MAX_BACKOFF_SECONDS, 30 * 2 ** (failures - 1)))
         _save(state)
         return []
 
