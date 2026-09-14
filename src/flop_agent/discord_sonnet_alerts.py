@@ -271,6 +271,30 @@ def _room_rows(room: str, since: int | None = None) -> list[dict]:
     return retained
 
 
+def _candidate_targets_maru(row: dict, request_id: str) -> bool:
+    raw = str(row.get("text") or "")
+    lowered = raw.lower()
+    anchors = (
+        MARU_DID.lower(),
+        "minermaru73",
+        GAME_ID,
+        request_id.lower(),
+    )
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        if payload.get("target_did") == MARU_DID:
+            return True
+        if payload.get("request_id") == request_id:
+            return True
+        message = str(payload.get("text") or "").lower()
+        if any(anchor in message for anchor in anchors):
+            return True
+    return any(anchor in lowered for anchor in anchors)
+
+
 def _public_evidence(
     rows: list[tuple[str, dict]],
 ) -> list[tuple[str, dict, tuple[str, str]]]:
@@ -287,7 +311,10 @@ def _public_evidence(
             and type(sequence) is int
         ):
             request_id = INVITE_BY_DID[sender]
-            invite_candidate = sequence > INVITATIONS[request_id]["sent_seq"]
+            invite_candidate = (
+                sequence > INVITATIONS[request_id]["sent_seq"]
+                and _candidate_targets_maru(row, request_id)
+            )
 
         team_candidate = False
         if room == RESULTS_ROOM and sender == REFEREE_DID:
@@ -319,8 +346,8 @@ def _public_evidence(
                     "invite",
                     row,
                     (
-                        "招待済みwriterの新規activity",
-                        "招待後に本人DIDの署名済みdiscovery投稿を確認。返信・参加意思・roster consentとはまだ断定しません。",
+                        "招待済みwriterからMARU宛てactivity",
+                        "招待後に本人DIDの署名済みMARU宛てdiscovery投稿を確認。参加意思・availability・roster consentとはまだ断定しません。",
                     ),
                 )
             )
