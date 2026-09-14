@@ -64,6 +64,19 @@ def test_initial_history_baselines_then_new_event_and_restart_dedupes(monkeypatc
     assert alerts.poll_notices(now=1602, fetch=lambda i: [historical, fresh] if i == 25 else [], room_read=empty_rooms) == []
 
 
+def test_corrupt_state_rebaselines_without_replay_then_allows_new_event(monkeypatch, tmp_path):
+    configure(monkeypatch, tmp_path)
+    clock = {"value": 2000.0}
+    monkeypatch.setattr(alerts.time, "time", lambda: clock["value"])
+    alerts.state_path().write_text("{broken", encoding="utf-8")
+    historical = row(7, "authoritative result", created="1970-01-01T00:25:00Z")
+    assert alerts.poll_notices(now=2000, fetch=lambda i: [historical] if i == 25 else [], room_read=empty_rooms) == []
+    clock["value"] = 2301.0
+    newer = row(8, "new authoritative result", created="1970-01-01T00:35:00Z")
+    assert len(alerts.poll_notices(now=2301, fetch=lambda i: [historical, newer] if i == 25 else [], room_read=empty_rooms)) == 1
+    assert alerts.poll_notices(now=2602, fetch=lambda i: [historical, newer] if i == 25 else [], room_read=empty_rooms) == []
+
+
 def test_multiple_new_github_rows_in_one_poll_are_all_notified(monkeypatch, tmp_path):
     configure(monkeypatch, tmp_path)
     state = alerts._default()
