@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -101,3 +101,23 @@ def test_healthcheck_rejects_legacy_top_level_refresh_without_resident_status(tm
 
     assert result.returncode != 0
     assert "resident heartbeat status is invalid" in result.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Oracle healthcheck is a Linux shell script")
+def test_healthcheck_rejects_stale_nested_resident_refresh(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    result = _run_healthcheck(
+        tmp_path,
+        {
+            "schema_version": 1,
+            "updated_at": now.isoformat(),
+            "status": "ok",
+            "resident_status": {
+                "read_only": True,
+                "last_refresh_at": (now - timedelta(minutes=10)).isoformat(),
+            },
+        },
+    )
+
+    assert result.returncode != 0
+    assert "resident refresh is stale" in result.stderr
