@@ -1,4 +1,7 @@
+import json
+
 import httpx
+import pytest
 
 from flop_agent import core, discord_sonnet_alerts as alerts
 
@@ -51,28 +54,10 @@ def test_initial_history_baselines_then_new_event_and_restart_dedupes(monkeypatc
     configure(monkeypatch, tmp_path)
     historical = row(1, "MARU writer team disposition", created="1970-01-01T00:00:01Z")
     fresh = row(2, "MARU writer team disposition", created="1970-01-01T00:16:41Z")
-    assert (
-        alerts.poll_notices(
-            now=1000,
-            fetch=lambda i: [historical] if i == 25 else [],
-            room_read=empty_rooms,
-        )
-        == []
-    )
-    notices = alerts.poll_notices(
-        now=1301,
-        fetch=lambda i: [historical, fresh] if i == 25 else [],
-        room_read=empty_rooms,
-    )
+    assert alerts.poll_notices(now=1000, fetch=lambda i: [historical] if i == 25 else [], room_read=empty_rooms) == []
+    notices = alerts.poll_notices(now=1301, fetch=lambda i: [historical, fresh] if i == 25 else [], room_read=empty_rooms)
     assert len(notices) == 1
-    assert (
-        alerts.poll_notices(
-            now=1602,
-            fetch=lambda i: [historical, fresh] if i == 25 else [],
-            room_read=empty_rooms,
-        )
-        == []
-    )
+    assert alerts.poll_notices(now=1602, fetch=lambda i: [historical, fresh] if i == 25 else [], room_read=empty_rooms) == []
 
 
 def test_source_that_failed_first_poll_baselines_on_its_first_success(monkeypatch, tmp_path):
@@ -91,26 +76,13 @@ def test_source_that_failed_first_poll_baselines_on_its_first_success(monkeypatc
     assert alerts.poll_notices(now=1000, fetch=fetch, room_read=empty_rooms) == []
     first["value"] = False
     assert alerts.poll_notices(now=1301, fetch=fetch, room_read=empty_rooms) == []
-    assert len(
-        alerts.poll_notices(
-            now=1602,
-            fetch=lambda i: [historical, newer] if i == 16 else [],
-            room_read=empty_rooms,
-        )
-    ) == 1
+    assert len(alerts.poll_notices(now=1602, fetch=lambda i: [historical, newer] if i == 16 else [], room_read=empty_rooms)) == 1
 
 
 def test_sv_contributor_is_official_but_other_contributor_is_not():
     text = "MARU writer team disposition"
-    assert alerts._github_relevant(
-        25, row(1, text, association="CONTRIBUTOR", login="sv")
-    )
-    assert (
-        alerts._github_relevant(
-            25, row(2, text, association="CONTRIBUTOR", login="random")
-        )
-        is None
-    )
+    assert alerts._github_relevant(25, row(1, text, association="CONTRIBUTOR", login="sv"))
+    assert alerts._github_relevant(25, row(2, text, association="CONTRIBUTOR", login="random")) is None
 
 
 def test_room_evidence_is_signed_and_never_calls_reply_consent(monkeypatch):
@@ -128,9 +100,7 @@ def test_room_evidence_is_signed_and_never_calls_reply_consent(monkeypatch):
             '"type":"sonnet.setup.v1","room_generation":1}'
         ),
     }
-    values = alerts._public_evidence(
-        [(alerts.DISCOVERY_ROOM, invite), (alerts.RESULTS_ROOM, team)]
-    )
+    values = alerts._public_evidence([(alerts.DISCOVERY_ROOM, invite), (alerts.RESULTS_ROOM, team)])
     assert len(values) == 2
     assert "consent" in values[0][2][1]
     assert "generation/setup" in values[1][2][0]
@@ -147,47 +117,15 @@ def test_room_evidence_is_signed_and_never_calls_reply_consent(monkeypatch):
 
 def test_full_history_high_water_does_not_replay(monkeypatch, tmp_path):
     configure(monkeypatch, tmp_path)
-    events = [
-        row(i, "MARU writer team disposition", created="1970-01-01T00:00:00Z")
-        for i in range(300)
-    ]
-    assert (
-        alerts.poll_notices(
-            now=1000,
-            fetch=lambda i: events if i == 25 else [],
-            room_read=empty_rooms,
-        )
-        == []
-    )
-    assert (
-        alerts.poll_notices(
-            now=1301,
-            fetch=lambda i: events if i == 25 else [],
-            room_read=empty_rooms,
-        )
-        == []
-    )
+    events = [row(i, "MARU writer team disposition", created="1970-01-01T00:00:00Z") for i in range(300)]
+    assert alerts.poll_notices(now=1000, fetch=lambda i: events if i == 25 else [], room_read=empty_rooms) == []
+    assert alerts.poll_notices(now=1301, fetch=lambda i: events if i == 25 else [], room_read=empty_rooms) == []
     newer = row(999, "MARU writer team disposition", created="1970-01-01T00:22:00Z")
-    assert len(
-        alerts.poll_notices(
-            now=1602,
-            fetch=lambda i: [*events, newer] if i == 25 else [],
-            room_read=empty_rooms,
-        )
-    ) == 1
-    assert (
-        alerts.poll_notices(
-            now=1903,
-            fetch=lambda i: [*events, newer] if i == 25 else [],
-            room_read=empty_rooms,
-        )
-        == []
-    )
+    assert len(alerts.poll_notices(now=1602, fetch=lambda i: [*events, newer] if i == 25 else [], room_read=empty_rooms)) == 1
+    assert alerts.poll_notices(now=1903, fetch=lambda i: [*events, newer] if i == 25 else [], room_read=empty_rooms) == []
 
 
-def test_room_cursor_uses_since_and_failed_initial_room_does_not_replay(
-    monkeypatch, tmp_path
-):
+def test_room_cursor_uses_since_and_failed_initial_room_does_not_replay(monkeypatch, tmp_path):
     configure(monkeypatch, tmp_path)
     monkeypatch.setattr(alerts, "verify_signed_record", lambda *_a: None)
     calls = []
@@ -212,77 +150,67 @@ def test_room_cursor_uses_since_and_failed_initial_room_does_not_replay(
     assert (alerts.DISCOVERY_ROOM, 10) in calls
 
 
-def test_more_than_four_notices_are_delivered_from_pending_without_loss(
-    monkeypatch, tmp_path
-):
+def test_room_rows_recovers_newest_limit_gap_from_export(monkeypatch):
+    live = {"messages": [{"seq": 5, "text": "x"}, {"seq": 6, "text": "y"}]}
+    monkeypatch.setattr(core, "read_room", lambda *_a, **_k: live)
+    export_rows = [{"seq": seq, "text": str(seq)} for seq in range(2, 7)]
+
+    class Response:
+        text = "\n".join(json.dumps(item) for item in export_rows)
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(alerts.httpx, "get", lambda *_a, **_k: Response())
+    rows = alerts._room_rows(alerts.DISCOVERY_ROOM, 1)
+    assert [item["seq"] for item in rows] == [2, 3, 4, 5, 6]
+
+
+def test_unrecoverable_room_gap_emits_one_fail_closed_notice(monkeypatch, tmp_path):
     configure(monkeypatch, tmp_path)
     state = alerts._default()
-    state["github"]["gh:25"] = {
-        "initialized": True,
-        "max_id": 0,
-        "max_updated_at": "",
-    }
+    state["rooms"][alerts.DISCOVERY_ROOM] = {"initialized": True, "seq": 1}
+    alerts._save(state)
+    retained = [signed_invite(3), signed_invite(4)]
+
+    def room_read(room, since=None):
+        if room == alerts.DISCOVERY_ROOM:
+            raise alerts.RoomRetentionGap(room, 2, 2, retained)
+        return []
+
+    monkeypatch.setattr(alerts, "verify_signed_record", lambda *_a: None)
+    notices = alerts.poll_notices(now=1000, fetch=lambda _i: [], room_read=room_read)
+    assert any("監視ギャップ" in notice for notice in notices)
+    saved = alerts._load()
+    assert saved["rooms"][alerts.DISCOVERY_ROOM]["seq"] == 4
+    assert alerts.poll_notices(now=1301, fetch=lambda _i: [], room_read=lambda *_a: []) == []
+
+
+def test_more_than_four_notices_are_delivered_from_pending_without_loss(monkeypatch, tmp_path):
+    configure(monkeypatch, tmp_path)
+    state = alerts._default()
+    state["github"]["gh:25"] = {"initialized": True, "max_id": 0, "max_updated_at": ""}
     for issue in (16, 22):
-        state["github"][f"gh:{issue}"] = {
-            "initialized": True,
-            "max_id": 0,
-            "max_updated_at": "",
-        }
+        state["github"][f"gh:{issue}"] = {"initialized": True, "max_id": 0, "max_updated_at": ""}
     state["rooms"][alerts.DISCOVERY_ROOM] = {"initialized": True, "seq": 0}
     state["rooms"][alerts.RESULTS_ROOM] = {"initialized": True, "seq": 0}
     alerts._save(state)
-    events = [
-        row(i, "MARU writer team disposition", created=f"1970-01-01T00:20:{i:02d}Z")
-        for i in range(1, 6)
-    ]
-    first = alerts.poll_notices(
-        now=1301,
-        fetch=lambda i: events if i == 25 else [],
-        room_read=empty_rooms,
-    )
-    second = alerts.poll_notices(
-        now=1302,
-        fetch=lambda _i: [],
-        room_read=empty_rooms,
-    )
+    events = [row(i, "MARU writer team disposition", created=f"1970-01-01T00:20:{i:02d}Z") for i in range(1, 6)]
+    first = alerts.poll_notices(now=1301, fetch=lambda i: events if i == 25 else [], room_read=empty_rooms)
+    second = alerts.poll_notices(now=1302, fetch=lambda _i: [], room_read=empty_rooms)
     assert len(first) == 4
     assert len(second) == 1
 
 
 def test_timeout_rate_limit_and_irrelevant_are_safe(monkeypatch, tmp_path):
     configure(monkeypatch, tmp_path)
-    assert (
-        alerts.poll_notices(
-            now=1000,
-            fetch=lambda _i: (_ for _ in ()).throw(httpx.TimeoutException("x")),
-            room_read=empty_rooms,
-        )
-        == []
-    )
-    assert (
-        alerts.poll_notices(
-            now=1100,
-            fetch=lambda _i: (_ for _ in ()).throw(
-                httpx.HTTPStatusError(
-                    "x",
-                    request=httpx.Request("GET", "https://x"),
-                    response=httpx.Response(429),
-                )
-            ),
-            room_read=empty_rooms,
-        )
-        == []
-    )
+    assert alerts.poll_notices(now=1000, fetch=lambda _i: (_ for _ in ()).throw(httpx.TimeoutException("x")), room_read=empty_rooms) == []
+    assert alerts.poll_notices(now=1100, fetch=lambda _i: (_ for _ in ()).throw(httpx.HTTPStatusError("x", request=httpx.Request("GET", "https://x"), response=httpx.Response(429))), room_read=empty_rooms) == []
     assert alerts._github_relevant(25, row(1, "unrelated", association="NONE")) is None
 
 
 def test_asad_lane_is_self_contained_and_source_is_get_only():
-    assert alerts._github_relevant(
-        22, row(1, "Asad writer role resolution", association="MEMBER")
-    )
-    source = (
-        core.ROOT / "src" / "flop_agent" / "discord_sonnet_alerts.py"
-    ).read_text("utf-8")
+    assert alerts._github_relevant(22, row(1, "Asad writer role resolution", association="MEMBER"))
+    source = (core.ROOT / "src" / "flop_agent" / "discord_sonnet_alerts.py").read_text("utf-8")
     assert "httpx.post" not in source
     assert "oracle_signer" not in source
     assert "invoke_signer" not in source

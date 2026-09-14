@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
+from urllib.parse import quote
 
 import httpx
 
@@ -31,6 +32,18 @@ INVITED_DIDS = {
     "maru-invite-noob-20260912-1": "did:key:z6MkmVhZbUKWmg3r6TTi3SVM3myYJ9BLbWYPSdc5iWPuPhb6",
 }
 INVITE_IDS = tuple(INVITED_DIDS)
+FIXED_ROOMS = {DISCOVERY_ROOM, RESULTS_ROOM}
+
+
+class RoomRetentionGap(RuntimeError):
+    """A live room cursor fell behind the newest-limit window and export is partial."""
+
+    def __init__(self, room: str, missing_from: int, missing_to: int, rows: list[dict]):
+        super().__init__(f"{room} missing seq {missing_from}..{missing_to}")
+        self.room = room
+        self.missing_from = missing_from
+        self.missing_to = missing_to
+        self.rows = rows
 
 
 def state_path():
@@ -70,7 +83,9 @@ def _load() -> dict:
         "schema_version": 4,
         "github": value["github"],
         "rooms": value["rooms"],
-        "pending": [item for item in value["pending"] if isinstance(item, str)][:PENDING_LIMIT],
+        "pending": [item for item in value["pending"] if isinstance(item, str)][
+            :PENDING_LIMIT
+        ],
         "next_poll_at": next_poll_at,
         "failures": failures,
     }
@@ -118,7 +133,7 @@ def _github_relevant(issue: int, row: dict) -> tuple[str, str] | None:
 
 def _fetch(issue: int) -> list[dict]:
     response = httpx.get(
-        f"https://api.github.com/repos/{REPO}/issues/{issue}/comments?per_page=100&sort=created&direction=asc",
+        f"https://api.github.com/repos/{REPO}/issues/{issue}/comments?per_page=100&sort=updated&direction=desc",
         headers={"Accept": "application/vnd.github+json"},
         timeout=5.0,
     )
@@ -129,12 +144,64 @@ def _fetch(issue: int) -> list[dict]:
     return [row for row in value if isinstance(row, dict)]
 
 
-def _room_rows(room: str, since: int | None = None) -> list[dict]:
-    payload = core.read_room(room, since=since, limit=200)
+def _parse_room_payload(payload: object) -> list[dict]:
     rows = payload if isinstance(payload, list) else payload.get("messages") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         raise ValueError("room_shape")
     return [row for row in rows if isinstance(row, dict)]
+
+
+def _room_export(room: str) -> list[dict]:
+    if room not in FIXED_ROOMS:
+        raise ValueError("room_not_allowlisted")
+    response = httpx.get(
+        f"{core.BASE_URL}/r/{quote(room, safe='')}/export",
+        timeout=20,
+    )
+    response.raise_for_status()
+    rows: list[dict] = []
+    for line in response.text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError("room_export_shape") from error
+        if not isinstance(row, dict):
+            raise ValueError("room_export_shape")
+        rows.append(row)
+    return rows
+
+
+def _room_rows(room: str, since: int | None = None) -> list[dict]:
+    if room not in FIXED_ROOMS:
+        raise ValueError("room_not_allowlisted")
+    if since is None:
+        return _room_export(room)
+
+    rows = _parse_room_payload(core.read_room(room, since=since, limit=200))
+    if not rows:
+        return []
+    sequences = [row.get("seq") for row in rows if type(row.get("seq")) is int]
+    if not sequences:
+        raise ValueError("room_seq_shape")
+    first_seq = min(sequences)
+    if first_seq <= since + 1:
+        return rows
+
+    exported = _room_export(room)
+    retained = [
+        row
+        for row in exported
+        if type(row.get("seq")) is int and row["seq"] > since
+    ]
+    retained_sequences = [row["seq"] for row in retained]
+    if not retained_sequences:
+        raise RoomRetentionGap(room, since + 1, first_seq - 1, [])
+    export_first = min(retained_sequences)
+    if export_first > since + 1:
+        raise RoomRetentionGap(room, since + 1, export_first - 1, retained)
+    return retained
 
 
 def _public_evidence(
@@ -143,19 +210,37 @@ def _public_evidence(
     result = []
     for room, row in rows:
         try:
-            verify_signed_record(room, row)
-            payload = json.loads(row["text"])
-        except (KeyError, TypeError, ValueError, RuntimeError):
+            payload = json.loads(row.get("text", ""))
+        except (TypeError, ValueError):
             continue
         if not isinstance(payload, dict):
             continue
-        if (
+
+        invite_candidate = (
             room == DISCOVERY_ROOM
             and payload.get("type") in {"sonnet.invite-response.v1", "sonnet.invite-status.v1"}
             and payload.get("contest_id") == "sonnet-2"
             and payload.get("request_id") in INVITED_DIDS
             and row.get("from") == INVITED_DIDS[payload["request_id"]]
-        ):
+        )
+        team_candidate = (
+            room == RESULTS_ROOM
+            and row.get("from") == REFEREE_DID
+            and payload.get("contest_id") == "sonnet-2"
+            and payload.get("game_id") == GAME_ID
+            and payload.get("poem_room") == TEAM_ROOM
+            and payload.get("type") in {"sonnet.setup.v1", "sonnet.resetup.v1"}
+            and type(payload.get("room_generation")) is int
+            and payload["room_generation"] > 0
+        )
+        if not (invite_candidate or team_candidate):
+            continue
+        try:
+            verify_signed_record(room, row)
+        except (KeyError, TypeError, ValueError, RuntimeError):
+            continue
+
+        if invite_candidate:
             result.append(
                 (
                     "invite",
@@ -166,16 +251,7 @@ def _public_evidence(
                     ),
                 )
             )
-        if (
-            room == RESULTS_ROOM
-            and row.get("from") == REFEREE_DID
-            and payload.get("contest_id") == "sonnet-2"
-            and payload.get("game_id") == GAME_ID
-            and payload.get("poem_room") == TEAM_ROOM
-            and payload.get("type") in {"sonnet.setup.v1", "sonnet.resetup.v1"}
-            and type(payload.get("room_generation")) is int
-            and payload["room_generation"] > 0
-        ):
+        if team_candidate:
             result.append(
                 (
                     "team",
@@ -216,6 +292,18 @@ def _notice(row: dict, relevant: tuple[str, str]) -> str:
             f"重要性: {why}",
             "MARU: 公式・署名済みの根拠を確認",
             "注意: 返信・招待・roster consent・投稿は行っていません。",
+        ]
+    )
+
+
+def _gap_notice(error: RoomRetentionGap) -> str:
+    return "\n".join(
+        [
+            "🔴 Sonnet-2: 監視ギャップを検出",
+            f"何が起きた: {error.room} の seq {error.missing_from}..{error.missing_to} はexport保持範囲にも残っていません。",
+            "重要性: この区間にMARU関連の返信・setup証拠があった可能性を自動では否定できません。",
+            "MARU: 公式状態を手動再確認するまで不可逆操作を進めない",
+            "注意: 自動送信・再招待・roster consent は行っていません。",
         ]
     )
 
@@ -297,12 +385,18 @@ def poll_notices(*, now: float | None = None, fetch=_fetch, room_read=_room_rows
         progress = raw_progress if isinstance(raw_progress, dict) else {}
         initialized = progress.get("initialized") is True
         since = progress.get("seq") if initialized and type(progress.get("seq")) is int else None
+        gap_error: RoomRetentionGap | None = None
         try:
             rows = room_read(room, since)
+        except RoomRetentionGap as error:
+            rows = error.rows
+            gap_error = error
         except (httpx.HTTPError, OSError, TypeError, ValueError, RuntimeError):
             continue
         successes += 1
         _room_poll(state, room, rows, notices)
+        if gap_error is not None:
+            notices.append(_gap_notice(gap_error))
 
     if not successes:
         failures = min(state["failures"] + 1, 6)
