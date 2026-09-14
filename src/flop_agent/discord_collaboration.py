@@ -58,11 +58,50 @@ def _counts(rows: list[dict]) -> dict:
     return counts
 
 
+def _waiting_on(record: dict) -> str:
+    stage = record.get("stage")
+    if stage in {"contacted", "active"}:
+        return "counterpart"
+    if stage == "replied":
+        return "Agent"
+    if stage in {"task_candidate", "human_review", "blocked"}:
+        return "MARU"
+    return "none"
+
+
+def _conversation(record: dict) -> tuple[str | None, str | None]:
+    """Read the already-safe timeline; do not reconcile or mutate collaboration."""
+    fingerprint = record.get("fingerprint")
+    inbound = outbound = None
+    for item in base.sync_interactions():
+        if item.get("fingerprint") != fingerprint:
+            continue
+        if item.get("direction") == "受信":
+            inbound = item
+        elif item.get("direction") == "送信":
+            outbound = item
+    received = base.safe_excerpt((inbound or {}).get("summary", ""), 180) or None
+    sent = (outbound or {}).get("summary") if (outbound or {}).get("exact_text") else None
+    return received, sent
+
+
+def _notice_label(notice: dict) -> str:
+    """Resolve only a label already persisted in the local interaction timeline."""
+    fingerprint = notice.get("fingerprint")
+    for item in reversed(base.sync_interactions()):
+        if item.get("fingerprint") != fingerprint:
+            continue
+        label = base.counterpart_label(item)
+        if label != base.short_fingerprint(fingerprint):
+            return label
+    return base.short_fingerprint(fingerprint)
+
+
 def _list_message() -> str:
     rows = collaboration.records(include_tclk=False)
     metrics = _counts(rows)
     lines = [
-        "🤝 FLOP Collaboration Pipeline",
+        "🤝 FLOP Collaboration",
         (
             "contacted {contacted} / replied {replied} / task {task} / "
             "active {active} / completed {completed}"
@@ -79,13 +118,16 @@ def _list_message() -> str:
         return "\n".join(lines)
     for record in rows[:5]:
         summary = base.safe_excerpt(record.get("task_summary") or "", 100)
+        received, sent = _conversation(record)
+        label = base.counterpart_label(record)
         lines.extend([
             "",
-            f"{record.get('id')} | {STAGE_LABELS.get(record.get('stage'), record.get('stage'))} | {base.short_fingerprint(record.get('fingerprint'))}",
-            f"最終変化: {base.human_age(record.get('last_activity_at'))}",
+            f"{label} — {STAGE_LABELS.get(record.get('stage'), record.get('stage'))}",
+            f"何が起きているか: {summary or '安全な会話状態を監視中'}",
+            f"Waiting on: {_waiting_on(record)} / 最終変化: {base.human_age(record.get('last_activity_at'))}",
         ])
-        if summary:
-            lines.append(f"要点: {summary}")
+        if received: lines.append(f"{label} → MARU Agent: {received}")
+        if sent: lines.append(f"MARU Agent → {label}: {sent}")
         lines.append("next: " + _next_text(record))
     if len(rows) > 5:
         lines.append(f"\n他 {len(rows) - 5}件。詳細は /collab <id>")
@@ -96,16 +138,18 @@ def _detail_message(record_id: str) -> str:
     record = collaboration.get(record_id, include_tclk=True)
     if record is None:
         return "🤝 Collaboration\nそのcollaboration IDは見つかりません。/collab で一覧を確認してください。"
+    received, sent = _conversation(record)
+    label = base.counterpart_label(record)
     lines = [
         "🤝 FLOP Collaboration",
-        f"ID: {record.get('id')}",
-        f"stage: {STAGE_LABELS.get(record.get('stage'), record.get('stage'))}",
-        f"相手: {base.short_fingerprint(record.get('fingerprint'))}",
-        f"origin: {record.get('room', '?')} #{record.get('source_seq', '?')}",
-        f"初回candidate: {record.get('source_candidate_id') or '-'}",
-        f"初回intent: {record.get('first_contact_intent_id') or '-'}",
-        f"last: {base.human_age(record.get('last_activity_at'))}",
+        f"相手: {label}",
+        f"何が起きているか: {base.safe_excerpt(record.get('task_summary') or '', 280) or '安全な会話状態を監視中'}",
+        f"State: {STAGE_LABELS.get(record.get('stage'), record.get('stage'))}",
+        f"Waiting on: {_waiting_on(record)}",
     ]
+    if received: lines.append(f"{label} → MARU Agent: {received}")
+    if sent: lines.append(f"MARU Agent → {label}: {sent}")
+    lines.extend([f"next: {_next_text(record)}", "", f"ID: {record.get('id')}", f"origin: {record.get('room', '?')} #{record.get('source_seq', '?')}", f"初回candidate: {record.get('source_candidate_id') or '-'}", f"初回intent: {record.get('first_contact_intent_id') or '-'}", f"last: {base.human_age(record.get('last_activity_at'))}"])
     if record.get("task_topic"):
         lines.append(f"topic: {record.get('task_topic')}")
     if record.get("task_summary"):
@@ -169,23 +213,21 @@ def _radar_message() -> str:
 def _notice_message(notice: dict) -> str:
     stage = notice.get("stage")
     record_id = str(notice.get("id", ""))
-    fingerprint = base.short_fingerprint(notice.get("fingerprint"))
+    fingerprint = _notice_label(notice)
     summary = base.safe_excerpt(notice.get("task_summary") or "", 160)
     if stage == "replied":
-        lines = ["🔵 FLOP Agent 相手から返信", f"相手: {fingerprint}", f"collab: {record_id}"]
-        if summary:
-            lines.append("要点: " + summary)
-        lines.append("結論: 対応不要。BOTが安全条件内で継続します。")
+        lines = [f"🔵 {fingerprint} replied"]
+        if summary: lines.append(f"{fingerprint} → MARU Agent: {summary}")
+        lines.extend(["State: 相手から返信あり", "Waiting on: Agent", "MARU: 何もしなくてOK", f"詳細: /collab {record_id}"])
         return "\n".join(lines)
     if stage in {"task_candidate", "human_review"}:
-        lines = ["🟡 FLOP Agent 仕事候補", f"相手: {fingerprint}", f"collab: {record_id}"]
-        if summary:
-            lines.append("要点: " + summary)
-        lines.append(f"次にやること: /collab {record_id}")
+        lines = [f"🟡 {fingerprint} の確認が必要"]
+        if summary: lines.append(f"{fingerprint} → MARU Agent: {summary}")
+        lines.extend([f"State: {STAGE_LABELS.get(stage, stage)}", "Waiting on: MARU", f"MARU: /collab {record_id}"])
         return "\n".join(lines)
     if stage == "completed":
-        return f"🟢 FLOP Agent Collaboration完了\n相手: {fingerprint}\ncollab: {record_id}\n証拠を /collab {record_id} で確認できます。"
-    return f"🔴 FLOP Agent Collaboration停止\n相手: {fingerprint}\ncollab: {record_id}\n再送・実行せず /collab {record_id} を確認してください。"
+        return f"🟢 {fingerprint} とのCollaboration完了\nState: 完了\nWaiting on: none\nMARU: 何もしなくてOK\n証拠: /collab {record_id}"
+    return f"🔴 {fingerprint} とのCollaboration停止\nState: 停止\nWaiting on: MARU\nMARU: 再送・実行せず /collab {record_id} を確認"
 
 
 class Control(base.Control):

@@ -139,7 +139,7 @@ def _unresolved_direct(activity: dict) -> dict | None:
     }
 
 
-def _activity_snapshot(*, sync_timeline: bool = True, include_trust: bool = True) -> dict:
+def _activity_snapshot(*, sync_timeline: bool = True, include_trust: bool = True, status_fast: bool = False) -> dict:
     activity = dict(
         _ORIGINAL_ACTIVITY(
             sync_timeline=sync_timeline,
@@ -153,7 +153,7 @@ def _activity_snapshot(*, sync_timeline: bool = True, include_trust: bool = True
     activity["collaboration_active"] = collaboration_active
     activity["collaboration_completed"] = collaboration_completed
     activity["public_artifacts"] = _public_artifact_count()
-    activity["oldest_unresolved_direct"] = _unresolved_direct(activity)
+    activity["oldest_unresolved_direct"] = None if status_fast else _unresolved_direct(activity)
     return activity
 
 
@@ -196,7 +196,11 @@ def _durable_line(activity: dict) -> str:
 
 
 def _status_message() -> str:
-    activity = _activity_snapshot(sync_timeline=False, include_trust=True)
+    activity = base.populate_status_trust(
+        _activity_snapshot(sync_timeline=False, include_trust=False, status_fast=True)
+    )
+    if activity["snapshot"].get("direct", 0) > 0 or int(activity["snapshot"].get("resident", {}).get("approved", 0)) > 0:
+        activity["oldest_unresolved_direct"] = _unresolved_direct(activity)
     snapshot = activity["snapshot"]
     interactions = activity.get("interactions", [])
     latest = interactions[-1] if interactions else None
@@ -213,8 +217,20 @@ def _status_message() -> str:
         if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused")
         else "停止/一時停止"
     )
-    lines = [
-        f"{icon} FLOP Agent {title}",
+    lines = [f"{icon} FLOP Agent {title}"]
+    # In production this renderer overlays discord_control.  Keep a true safety
+    # incident visually first, but otherwise lead with the common Mission Control.
+    if snapshot["problems"]:
+        lines.extend([
+            "異常: " + " / ".join(snapshot["problems"]),
+            "結論: 対応が必要です。詳細は /status を再確認してください。",
+            "",
+            base.mission_message(activity, reconcile_collaboration=False),
+            "",
+        ])
+    else:
+        lines.extend([base.mission_message(activity, reconcile_collaboration=False), ""])
+    lines.extend([
         f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}",
         f"Autopilot: {auto_label}",
         _relationship_line(activity),
@@ -224,7 +240,7 @@ def _status_message() -> str:
         f"queue: {snapshot['auto'].get('queued', 0)} / 緊急 {snapshot['critical']}",
         f"主な非アクション理由: {_non_action_reason(activity)}",
         f"最終監視: {snapshot['last_refresh_age']}",
-    ]
+    ])
     if latest:
         lines.append(
             "最終やりとり: "
@@ -232,10 +248,7 @@ def _status_message() -> str:
             f"{latest.get('direction')} / {base.human_age(latest.get('at'))}"
         )
     if snapshot["problems"]:
-        lines.extend([
-            "異常: " + " / ".join(snapshot["problems"]),
-            "結論: 対応が必要です。詳細は /status を再確認してください。",
-        ])
+        pass
     elif needs_attention:
         lines.append("結論: 未解決directまたはqueueを確認してください。")
     else:

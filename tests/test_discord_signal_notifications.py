@@ -182,7 +182,7 @@ def test_history_records_when_who_and_what(monkeypatch, tmp_path):
     observer.save_state(observed)
     message = discord_control.history_message()
     assert "最近のやりとり" in message
-    assert "受信 | abc123" in message
+    assert "abc123 → MARU Agent:" in message
     assert "lobby #99" in message
     assert "Can you review repo safety?" in message
     assert "https://bad.invalid" not in message

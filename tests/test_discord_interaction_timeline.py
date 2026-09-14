@@ -169,7 +169,7 @@ def test_outbound_notice_pairs_sanitized_inbound_with_exact_fixed_reply(monkeypa
     intent = auto_state["outbox"]["intent-1"]
     auto_state["rate_history"].append({"at": "2026-08-31T12:05:00+00:00", "fingerprint": intent["fingerprint"], "room": intent["room"], "text_hash": hashlib.sha256(autopilot.render(intent).encode()).hexdigest()})
     notice = control.interaction_notices()[0]
-    assert "受信:" in notice and "送信:" in notice
+    assert "→ MARU Agent:" in notice and "MARU Agent →" in notice
     assert "https://unsafe.invalid" not in notice and "@everyone" not in notice and "\x00" not in notice
     assert "The public technocore-safe-agent repository" in notice
     history = discord_control.history_message()
