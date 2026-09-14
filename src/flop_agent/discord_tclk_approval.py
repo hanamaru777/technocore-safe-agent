@@ -285,7 +285,8 @@ _ORIGINAL_NOTICES = app._new_auto_review_notices
 
 
 def _combined_notices() -> list[str]:
-    return [*_ORIGINAL_NOTICES(), *_new_prepared_approval_notices(), *_new_prepared_reveal_notices()]
+    from . import discord_sonnet_alerts
+    return [*_ORIGINAL_NOTICES(), *_new_prepared_approval_notices(), *_new_prepared_reveal_notices(), *discord_sonnet_alerts.poll_notices()]
 
 
 def main() -> None:
