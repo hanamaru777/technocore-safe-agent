@@ -104,6 +104,21 @@ def test_production_scorecard_keeps_same_status_ordering(monkeypatch):
     assert rendered.index("FLOP AGENT MISSION CONTROL") < rendered.index("\u76e3\u8996:")
 
 
+def test_production_status_fast_path_never_loads_full_resident_or_observer(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    observer.atomic_json_write(observer.config_path(), observer.DEFAULT_CONFIG)
+    state = resident.default_state()
+    state["cached_observer"] = {"health": {"current": "ok"}, "cursors": {}}
+    state["daemon"]["last_refresh_at"] = datetime.now(UTC).isoformat()
+    resident.save_state(state)
+    auto = autopilot.default_state()
+    auto.update({"enabled": True, "paused": False, "migrated_at": datetime.now(UTC).isoformat()})
+    autopilot.save(auto)
+    monkeypatch.setattr(resident, "load_state", lambda: (_ for _ in ()).throw(AssertionError("status must not parse Resident state")))
+    monkeypatch.setattr(observer, "load_state", lambda: (_ for _ in ()).throw(AssertionError("status must not parse Observer state")))
+    assert "FLOP AGENT MISSION CONTROL" in discord_outcome_scorecard._status_message()
+
+
 def test_collaboration_notice_uses_persisted_interaction_label_and_fallback(monkeypatch):
     monkeypatch.setattr(discord_collaboration.base, "sync_interactions", lambda: [{
         "fingerprint": "abcdef123456", "display_label": "Helpful Agent",

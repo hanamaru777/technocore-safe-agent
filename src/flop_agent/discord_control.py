@@ -425,6 +425,17 @@ def _mission_maru_action(activity: dict) -> str:
     return "何もしなくてOK"
 
 
+def populate_status_trust(activity: dict) -> dict:
+    """Load full Resident trust detail only when its small heartbeat says it matters."""
+    resident_snapshot = activity["snapshot"].get("resident", {})
+    relevant = activity["snapshot"].get("direct", 0) > 0 or int(resident_snapshot.get("approved", 0)) > 0
+    if relevant:
+        activity["trusted"] = trusted_relationships()
+        activity["trust_candidates"] = trust_candidates()
+        activity["bootstrap_pending"] = bootstrap_pending_approvals()
+    return activity
+
+
 def _mission_goal(activity: dict, collaboration_rows: list[dict], latest: dict | None) -> str:
     snapshot = activity["snapshot"]
     if snapshot.get("problems"):
@@ -441,7 +452,7 @@ def _mission_goal(activity: dict, collaboration_rows: list[dict], latest: dict |
     return "安全条件を満たす有用な対話だけを継続的に見つける"
 
 
-def mission_message(activity: dict | None = None) -> str:
+def mission_message(activity: dict | None = None, *, reconcile_collaboration: bool = True) -> str:
     """Read-only operator summary derived from the existing local state only."""
     activity = activity or activity_snapshot(sync_timeline=False, include_trust=True)
     snapshot = activity["snapshot"]
@@ -457,7 +468,7 @@ def mission_message(activity: dict | None = None) -> str:
         now = f"監視状態 {snapshot.get('health', 'unknown')} を確認中"
     try:
         from . import collaboration
-        collaboration_rows = collaboration.records(include_tclk=False)
+        collaboration_rows = collaboration.records(include_tclk=False, reconcile_state=reconcile_collaboration)
     except (ImportError, RuntimeError):
         collaboration_rows = []
     lines = ["🎯 FLOP AGENT MISSION CONTROL", f"NOW: {now}", f"Goal: {_mission_goal(activity, collaboration_rows, latest)}", "", "👥 WHO / STATUS"]
@@ -480,12 +491,12 @@ def mission_message(activity: dict | None = None) -> str:
 
 
 def status_message() -> str:
-    activity = activity_snapshot(sync_timeline=False, include_trust=True); snapshot = activity["snapshot"]; interactions = activity["interactions"]; latest_interaction = interactions[-1] if interactions else None; needs_attention = bool(snapshot["problems"] or snapshot["critical"] or snapshot["direct"] or snapshot["auto"].get("queued", 0)); icon = "🔴" if snapshot["problems"] else "🟡" if needs_attention else "🟢"; title = "異常" if snapshot["problems"] else "確認あり" if needs_attention else "正常"; auto_label = "ON" if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") else "停止/一時停止"
+    activity = populate_status_trust(activity_snapshot(sync_timeline=False, include_trust=False)); snapshot = activity["snapshot"]; interactions = activity["interactions"]; latest_interaction = interactions[-1] if interactions else None; needs_attention = bool(snapshot["problems"] or snapshot["critical"] or snapshot["direct"] or snapshot["auto"].get("queued", 0)); icon = "🔴" if snapshot["problems"] else "🟡" if needs_attention else "🟢"; title = "異常" if snapshot["problems"] else "確認あり" if needs_attention else "正常"; auto_label = "ON" if snapshot["auto"].get("enabled") and not snapshot["auto"].get("paused") else "停止/一時停止"
     lines = [f"{icon} FLOP Agent {title}"]
     if snapshot["problems"]:
-        lines.extend(["異常: " + " / ".join(snapshot["problems"]), "結論: 対応が必要です。詳細は /status を再確認してください。", "", mission_message(activity), ""])
+        lines.extend(["異常: " + " / ".join(snapshot["problems"]), "結論: 対応が必要です。詳細は /status を再確認してください。", "", mission_message(activity, reconcile_collaboration=False), ""])
     else:
-        lines.extend([mission_message(activity), ""])
+        lines.extend([mission_message(activity, reconcile_collaboration=False), ""])
     lines.extend([f"監視: {'監視中' if snapshot['health'] == 'ok' else '監視状態 ' + str(snapshot['health'])}", f"Autopilot: {auto_label} / 直近24h 自動投稿 {activity['posts']}/6（上限・目標ではありません）", f"queue: {snapshot['auto'].get('queued', 0)} / eligible {activity['eligible']} / ignored {activity['ignored']} / blocked {activity['blocked']}", f"要対応: 緊急 {snapshot['critical']} / 直接リクエスト {snapshot['direct']}", f"最終監視: {snapshot['last_refresh_age']}", f"最終投稿: {human_age(activity['latest_post']) if activity['latest_post'] else 'なし'}"])
     if latest_interaction: lines.append(f"最終やりとり: {short_fingerprint(latest_interaction.get('fingerprint'))} / {latest_interaction.get('direction')} / {human_age(latest_interaction.get('at'))}")
     if activity["reasons"]: lines.append("主な非投稿理由: " + max(activity["reasons"], key=activity["reasons"].get))

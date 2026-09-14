@@ -515,8 +515,8 @@ def transition_notices() -> list[dict]:
     return notices
 
 
-def records(*, include_tclk: bool = False) -> list[dict]:
-    state = reconcile(include_tclk=include_tclk)
+def records(*, include_tclk: bool = False, reconcile_state: bool = True) -> list[dict]:
+    state = reconcile(include_tclk=include_tclk) if reconcile_state else load_state()
     rank = {
         "human_review": 8,
         "task_candidate": 7,
