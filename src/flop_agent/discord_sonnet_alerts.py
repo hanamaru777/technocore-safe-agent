@@ -73,9 +73,10 @@ def state_path():
     return resident.resident_dir() / "discord-sonnet-alerts.json"
 
 
-def _default() -> dict:
+def _default(*, initial_cutoff: float | None = None) -> dict:
     return {
-        "schema_version": 5,
+        "schema_version": 6,
+        "initial_cutoff": PROCESS_STARTED_AT if initial_cutoff is None else float(initial_cutoff),
         "github": {},
         "rooms": {},
         "pending": [],
@@ -84,26 +85,35 @@ def _default() -> dict:
     }
 
 
+def _corrupt_default() -> dict:
+    """Baseline at corruption-detection time so lost cursors cannot replay history."""
+    return _default(initial_cutoff=time.time())
+
+
 def _load() -> dict:
     try:
         value = json.loads(state_path().read_text("utf-8"))
-    except (FileNotFoundError, OSError, TypeError, ValueError):
+    except FileNotFoundError:
         return _default()
+    except (OSError, TypeError, ValueError):
+        return _corrupt_default()
     if (
         not isinstance(value, dict)
-        or value.get("schema_version") != 5
+        or value.get("schema_version") != 6
         or not isinstance(value.get("github"), dict)
         or not isinstance(value.get("rooms"), dict)
         or not isinstance(value.get("pending"), list)
     ):
-        return _default()
+        return _corrupt_default()
     try:
+        initial_cutoff = float(value.get("initial_cutoff"))
         next_poll_at = float(value.get("next_poll_at", 0))
         failures = max(0, int(value.get("failures", 0)))
     except (TypeError, ValueError, OverflowError):
-        return _default()
+        return _corrupt_default()
     return {
-        "schema_version": 5,
+        "schema_version": 6,
+        "initial_cutoff": initial_cutoff,
         "github": value["github"],
         "rooms": value["rooms"],
         "pending": [item for item in value["pending"] if isinstance(item, str)][:PENDING_LIMIT],
@@ -280,21 +290,19 @@ def _public_evidence(
             invite_candidate = sequence > INVITATIONS[request_id]["sent_seq"]
 
         team_candidate = False
-        payload: dict | None = None
         if room == RESULTS_ROOM and sender == REFEREE_DID:
             try:
                 decoded = json.loads(row.get("text", ""))
             except (TypeError, ValueError):
                 decoded = None
             if isinstance(decoded, dict):
-                payload = decoded
                 team_candidate = (
-                    payload.get("contest_id") == "sonnet-2"
-                    and payload.get("game_id") == GAME_ID
-                    and payload.get("poem_room") == TEAM_ROOM
-                    and payload.get("type") in {"sonnet.setup.v1", "sonnet.resetup.v1"}
-                    and type(payload.get("room_generation")) is int
-                    and payload["room_generation"] > 0
+                    decoded.get("contest_id") == "sonnet-2"
+                    and decoded.get("game_id") == GAME_ID
+                    and decoded.get("poem_room") == TEAM_ROOM
+                    and decoded.get("type") in {"sonnet.setup.v1", "sonnet.resetup.v1"}
+                    and type(decoded.get("room_generation")) is int
+                    and decoded["room_generation"] > 0
                 )
 
         if not (invite_candidate or team_candidate):
@@ -344,9 +352,9 @@ def _record_time(row: dict) -> float | None:
     return None
 
 
-def _startup_new(row: dict) -> bool:
+def _initial_new(row: dict, cutoff: float) -> bool:
     timestamp = _record_time(row)
-    return timestamp is not None and timestamp > PROCESS_STARTED_AT
+    return timestamp is not None and timestamp > cutoff
 
 
 def _notice(row: dict, relevant: tuple[str, str]) -> str:
@@ -401,7 +409,7 @@ def _github_poll(
 
         if relevant and (
             (initialized and is_new)
-            or (not initialized and _startup_new(row))
+            or (not initialized and _initial_new(row, state["initial_cutoff"]))
         ):
             notices.append(_notice(row, relevant))
 
@@ -433,7 +441,10 @@ def _room_poll(
         for _kind, evidence_row, relevant in _public_evidence([(room, row)]):
             if (
                 (initialized and is_new)
-                or (not initialized and _startup_new(evidence_row))
+                or (
+                    not initialized
+                    and _initial_new(evidence_row, state["initial_cutoff"])
+                )
             ):
                 notices.append(_notice(evidence_row, relevant))
 
