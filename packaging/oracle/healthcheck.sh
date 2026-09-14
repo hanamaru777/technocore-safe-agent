@@ -15,7 +15,16 @@ for path in (observer, resident):
     if set(data) < {"schema_version", "updated_at", "status"} or data.get("schema_version") != 1 or data.get("status") != "ok": raise SystemExit(f"heartbeat is not ok: {path.name}")
     age = (datetime.now(UTC) - datetime.fromisoformat(data["updated_at"])).total_seconds()
     if age > 300: raise SystemExit(f"heartbeat is stale: {path.name} {age:.0f}s")
-if not json.loads(resident.read_text("utf-8")).get("last_refresh_at"): raise SystemExit("resident has not refreshed")
+resident_data = json.loads(resident.read_text("utf-8"))
+resident_status = resident_data.get("resident_status")
+if not isinstance(resident_status, dict) or resident_status.get("read_only") is not True:
+    raise SystemExit("resident heartbeat status is invalid")
+last_refresh_at = resident_status.get("last_refresh_at")
+if not isinstance(last_refresh_at, str) or not last_refresh_at:
+    raise SystemExit("resident has not refreshed")
+refresh_age = (datetime.now(UTC) - datetime.fromisoformat(last_refresh_at)).total_seconds()
+if refresh_age > 300:
+    raise SystemExit(f"resident refresh is stale: {refresh_age:.0f}s")
 print("resident healthcheck ok")
 PY
 if systemctl is-active --quiet technocore-safe-agent-signer.service; then
