@@ -34,22 +34,26 @@ def test_sv_contributor_is_official_but_other_contributor_is_not():
 
 def test_room_evidence_is_signed_and_never_calls_reply_consent(monkeypatch):
     monkeypatch.setattr(alerts, "verify_signed_record", lambda *_a: None)
-    invite = {"from": "did:key:z6Mtest", "nonce": "1", "text": '{"type":"sonnet.invite-response.v1","contest_id":"sonnet-2","request_id":"maru-invite-lon-20260914-1"}'}
-    team = {"from": "did:key:z6Mtest", "nonce": "2", "text": '{"contest_id":"sonnet-2","game_id":"maru73s2","poem_room":"d-sonnet-2-team-maru73s2","type":"sonnet.team-setup-receipt.v1","referee_receipt":"proof"}'}
-    values = alerts._public_evidence([(alerts.DISCOVERY_ROOM, invite), (alerts.TEAM_ROOM, team)])
+    invite = {"from": alerts.INVITED_DIDS["maru-invite-lon-20260914-1"], "nonce": "1", "text": '{"type":"sonnet.invite-response.v1","contest_id":"sonnet-2","request_id":"maru-invite-lon-20260914-1"}'}
+    team = {"from": alerts.REFEREE_DID, "nonce": "2", "text": '{"contest_id":"sonnet-2","game_id":"maru73s2","poem_room":"d-sonnet-2-team-maru73s2","type":"sonnet.setup.v1","room_generation":1}'}
+    values = alerts._public_evidence([(alerts.DISCOVERY_ROOM, invite), (alerts.RESULTS_ROOM, team)])
     assert len(values) == 2 and "consent" in values[0][2][1] and "generation/setup" in values[1][2][0]
     original_invite = dict(invite); original_invite["text"] = original_invite["text"].replace("invite-response", "note")
     assert alerts._public_evidence([(alerts.DISCOVERY_ROOM, original_invite)]) == []
-    bad = dict(team); bad["text"] = bad["text"].replace("referee_receipt", "untrusted_receipt")
-    assert len(alerts._public_evidence([(alerts.TEAM_ROOM, bad)])) == 0
+    bad = dict(team); bad["from"] = "did:key:z6Mkother"
+    assert len(alerts._public_evidence([(alerts.RESULTS_ROOM, bad)])) == 0
+    wrong = dict(invite); wrong["from"] = alerts.INVITED_DIDS["maru-invite-fuego-20260914-1"]
+    assert alerts._public_evidence([(alerts.DISCOVERY_ROOM, wrong)]) == []
 
 
 def test_ordered_bounded_dedupe_does_not_realert_retained_latest(monkeypatch, tmp_path):
     configure(monkeypatch, tmp_path); monkeypatch.setattr(alerts, "SEEN_LIMIT", 3)
-    state = {"schema_version": 2, "initialized": True, "seen": [], "next_poll_at": 0, "failures": 0}; alerts._save(state)
+    state = {"schema_version": 3, "initialized": True, "github": {}, "rooms": {}, "next_poll_at": 0, "failures": 0}; alerts._save(state)
     events = [row(i, "MARU writer team disposition", created="1970-01-01T00:00:00Z") for i in range(5)]
     assert len(alerts.poll_notices(now=1000, fetch=lambda i: events if i == 25 else [], room_read=empty_rooms)) == 4
-    assert alerts.poll_notices(now=1301, fetch=lambda i: events[-3:] if i == 25 else [], room_read=empty_rooms) == []
+    assert alerts.poll_notices(now=1301, fetch=lambda i: events if i == 25 else [], room_read=empty_rooms) == []
+    newer = row(9, "MARU writer team disposition", created="1970-01-01T00:22:00Z")
+    assert len(alerts.poll_notices(now=1602, fetch=lambda i: [*events, newer] if i == 25 else [], room_read=empty_rooms)) == 1
 
 
 def test_timeout_rate_limit_and_irrelevant_are_safe(monkeypatch, tmp_path):
