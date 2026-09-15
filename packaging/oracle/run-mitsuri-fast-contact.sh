@@ -12,7 +12,7 @@ trap 'fail unexpected_rc_$?' ERR
 REPO=/opt/technocore-safe-agent
 REF=refs/remotes/origin/mitsuri-fast-contact-helper
 PROD_HEAD=362dddadb669d4e126fe00c37da4a3f57cecbdbc
-LANE_BLOB=5abdc71904a31cea79c9e06032f5841a5e89cf2d
+LANE_BLOB=e4bb73ed338144034f768cdd9257359f27d09fdb
 FAST_BLOB=6bdc191a594c10df120a9bb9cd5313f03a37dbd0
 
 LANE=/run/sonnet_mitsuri_contact.py
