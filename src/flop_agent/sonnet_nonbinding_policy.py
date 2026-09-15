@@ -11,7 +11,10 @@ from datetime import UTC, datetime
 from . import sonnet_registration as registration
 
 PROTECTED_CORE = (117, 5_083_155)
-MAX_SAFETY_AGE_SECONDS = 900
+# Keep the same freshness budget as the strict registration gate.  The only
+# deliberate relaxation for non-binding discovery is accepting fresh `degraded`
+# in addition to fresh `ok`; freshness and protected-core invariants are not widened.
+MAX_SAFETY_AGE_SECONDS = 300
 ALLOWED_GLOBAL_HEALTH = frozenset({"ok", "degraded"})
 
 
