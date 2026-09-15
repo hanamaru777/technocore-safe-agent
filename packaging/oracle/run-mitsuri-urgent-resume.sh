@@ -10,15 +10,15 @@ fail() {
 trap 'fail unexpected_rc_$?' ERR
 
 REPO=/opt/technocore-safe-agent
-REF=refs/remotes/origin/mitsuri-urgent-resume-helper
+REF=refs/remotes/origin/mitsuri-vault-retry-helper
 PROD_HEAD=11c527796d468beb268a1da1538be3a03cb88c33
 BASE_BLOB=8f4ebcebba3caed449dad6ec5091145746914ceb
-RESUME_BLOB=ac86869ccd29ed2af8b1862d202e40e30a89e3c9
+RESUME_BLOB=d5e5fc5defae7180523385ccb4de18552fec4deb
 BASE_MODULE=/run/sonnet_mitsuri_urgent_contact.py
 RESUME_MODULE=/run/sonnet_mitsuri_urgent_resume.py
 LAUNCHER=/run/sonnet_mitsuri_urgent_resume_launcher.py
-UNIT=/run/systemd/system/technocore-safe-agent-sonnet-mitsuri-resume.service
-UNIT_NAME=technocore-safe-agent-sonnet-mitsuri-resume.service
+UNIT=/run/systemd/system/technocore-safe-agent-sonnet-mitsuri-vault-retry.service
+UNIT_NAME=technocore-safe-agent-sonnet-mitsuri-vault-retry.service
 STATE=/var/lib/technocore-safe-agent/signer/sonnet-2-mitsuri-live-contact.json
 SAFETY=/var/lib/technocore-safe-agent/observer-safety.json
 
@@ -38,7 +38,7 @@ GIT=(sudo -u "$OWNER" git -C "$REPO")
 [[ "$("${GIT[@]}" rev-parse "$REF:src/flop_agent/sonnet_mitsuri_urgent_contact.py")" == "$BASE_BLOB" ]] || fail base_blob_mismatch
 [[ "$("${GIT[@]}" rev-parse "$REF:src/flop_agent/sonnet_mitsuri_urgent_resume.py")" == "$RESUME_BLOB" ]] || fail resume_blob_mismatch
 
-# Exact durable boundary from the failed pre-POST attempt. No blind write retry.
+# Exact durable boundary from the failed pre-POST attempts. No Technocore write has been attempted.
 timeout 5s python3 - "$STATE" <<'PY' || fail prepared_state_not_exact
 import json, sys
 with open(sys.argv[1], encoding='utf-8') as f:
@@ -119,7 +119,7 @@ chmod 0444 "$LAUNCHER"
 
 cat > "$UNIT" <<'UNIT'
 [Unit]
-Description=Resume exact prepared non-binding Mitsuri Agent contact
+Description=Resume prepared Mitsuri contact with bounded pre-POST Vault retry
 After=network-online.target
 Wants=network-online.target
 
@@ -134,7 +134,7 @@ Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
 Environment=UV_CACHE_DIR=/var/lib/technocore-safe-agent/signer/uv-cache
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python /run/sonnet_mitsuri_urgent_resume_launcher.py
-TimeoutStartSec=130s
+TimeoutStartSec=150s
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -153,7 +153,7 @@ UNIT
 
 systemctl daemon-reload
 systemctl reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true
-if ! timeout 140s systemctl start "$UNIT_NAME"; then
+if ! timeout 160s systemctl start "$UNIT_NAME"; then
   echo 'MITSURI_RESUME=FAIL:oneshot'
   timeout 5s python3 - "$STATE" <<'PY' || true
 import json, sys
@@ -166,7 +166,7 @@ try:
 except Exception as e:
     print('FAIL_STATE_READ=' + type(e).__name__)
 PY
-  journalctl -u "$UNIT_NAME" -n 14 --no-pager -o cat || true
+  journalctl -u "$UNIT_NAME" -n 16 --no-pager -o cat || true
   echo 'DO_NOT_RERUN=YES'
   exit 1
 fi
