@@ -2,13 +2,13 @@
 set -euo pipefail
 
 REPO=/opt/technocore-safe-agent
-STATE=/var/lib/technocore-safe-agent
 REF=refs/remotes/origin/kura1-application-helper
 PROD_HEAD=362dddadb669d4e126fe00c37da4a3f57cecbdbc
 MODULE_BLOB=62eb85f9f96b6148c0b6303dea7ebdaca7547280
 MODULE=/run/sonnet-kura1-application.py
 UNIT=/run/systemd/system/technocore-safe-agent-sonnet-kura1-application.service
 UNIT_NAME=technocore-safe-agent-sonnet-kura1-application.service
+APP_STATE=/var/lib/technocore-safe-agent/signer/sonnet-2-kura1-application.json
 
 cleanup() {
   rm -f "$UNIT" "$MODULE"
@@ -86,15 +86,20 @@ if ! systemctl start "$UNIT_NAME"; then
   exit 1
 fi
 
-python3 - <<'PY'
-import json
-p='/var/lib/technocore-safe-agent/signer/sonnet-2-kura1-application.json'
-d=json.load(open(p))
-print('APPLICATION_STATE='+str(d.get('state')))
-print('REQUEST_ID='+str(d.get('request_id')))
-print('SEQ='+str(d.get('seq')))
-print('TS='+str(d.get('ts')))
+read -r APPLICATION_STATE REQUEST_ID SEQ TS < <(python3 - "$APP_STATE" <<'PY'
+import json, sys
+d=json.load(open(sys.argv[1]))
+print(d.get('state'), d.get('request_id'), d.get('seq'), d.get('ts'))
 PY
+)
+echo "APPLICATION_STATE=$APPLICATION_STATE"
+echo "REQUEST_ID=$REQUEST_ID"
+echo "SEQ=$SEQ"
+echo "TS=$TS"
+[[ "$APPLICATION_STATE" == posted ]] || { echo 'KURA1=STOP:application_not_posted'; echo 'DO_NOT_RERUN=YES'; exit 1; }
+[[ "$REQUEST_ID" == maru-kura1-apply-20260915-1 ]] || { echo 'KURA1=STOP:request_id_mismatch'; echo 'DO_NOT_RERUN=YES'; exit 1; }
+[[ "$SEQ" =~ ^[0-9]+$ ]] || { echo 'KURA1=STOP:missing_seq'; echo 'DO_NOT_RERUN=YES'; exit 1; }
+[[ "$TS" != None && -n "$TS" ]] || { echo 'KURA1=STOP:missing_ts'; echo 'DO_NOT_RERUN=YES'; exit 1; }
 
 read -r HEALTH CORE_EVENTS CORE_MESSAGES < <(python3 - <<'PY'
 import json
