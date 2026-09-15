@@ -98,15 +98,20 @@ def environment(monkeypatch, tmp_path):
     monkeypatch.setattr(lane, "DID", original_did)
 
 
-def test_fixed_payload_is_nonbinding_and_targeted():
+def test_fixed_payload_is_nonbinding_targeted_and_personal():
     assert lane.ROOM == "mb-sonnet-2-discovery"
     assert lane.REQUEST_ID == "maru-mitsuri-contact-20260915-1"
     assert lane.TARGET_DID == "did:key:z6MkrjMTaN3kDvff5kdE6BhNxgErLdpz58kmsipP3PuHwoct"
     assert lane.PAYLOAD["type"] == "sonnet.application.v1"
     assert lane.PAYLOAD["target_did"] == lane.TARGET_DID
     assert lane.PAYLOAD["no_live_roster_consent"] is True
-    assert "not claiming accepted writer status" in lane.PAYLOAD["text"]
-    assert "not roster consent or a word proposal" in lane.PAYLOAD["text"]
+    text = lane.PAYLOAD["text"]
+    assert "if there's still room" in text
+    assert "0 accepted words and no live roster consent" in text
+    assert "not binding roster consent yet" in text
+    assert "MARU likes Mitsuri quite a lot" in text
+    assert "reject him clearly and decisively" in text
+    assert "He needs a proper chance to move on 😂" in text
     assert "registration_receipt_seq" not in lane.PAYLOAD
     assert "game_id" not in lane.PAYLOAD
 
