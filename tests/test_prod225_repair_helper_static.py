@@ -16,7 +16,8 @@ def test_prod225_repair_is_exact_and_bounded():
     assert "timeout 8s python3" in text
     assert "timeout 30s sudo -u" in text
     assert "lobby-capture-service.sqlite3" not in text
-    assert "health=ok before" not in text
+    assert '[[ "$PRE_HEALTH" == ok ]]' not in text
+    assert '[[ "$POST_HEALTH" == ok ]]' not in text
     assert "PROD225_REPAIR=PASS" in text
     assert "DO_NOT_RERUN=YES" in text
 
