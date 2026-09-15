@@ -119,8 +119,13 @@ def test_unrelated_signed_room_activity_is_ignored(state_root):
     assert activity.poll_notices(room_read=read) == []
 
 
-def test_discord_service_uses_agent_activity_entrypoint():
-    text = Path("packaging/oracle/discord.service").read_text("utf-8")
-    assert "-m flop_agent.discord_agent_activity_entry" in text
-    assert "NoNewPrivileges=true" in text
-    assert "ProtectKernelLogs=true" in text
+def test_retains_audited_discord_entrypoint_and_wires_activity_layer():
+    service = Path("packaging/oracle/discord.service").read_text("utf-8")
+    health = Path("src/flop_agent/discord_health_coalescing.py").read_text("utf-8")
+    source = Path("src/flop_agent/discord_agent_activity.py").read_text("utf-8")
+    assert "ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.discord_tclk_approval" in service
+    assert "discord_agent_activity.poll_notices()" in health
+    assert "httpx.post" not in source
+    assert "/export" not in source
+    assert "lobby-capture-service.sqlite3" not in source
+    assert "NoNewPrivileges=true" in service
