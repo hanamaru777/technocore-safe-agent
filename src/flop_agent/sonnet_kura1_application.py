@@ -224,8 +224,9 @@ def run_once() -> dict:
         require_health()
         if not OPEN <= datetime.now(UTC) < CLOSE:
             raise ApplicationError("application_window_closed")
-        state = load() or new_state()
-        if load() is None:
+        state = load()
+        if state is None:
+            state = new_state()
             save(state)
         existing = reconcile_existing(state)
         if existing is not None:
@@ -290,8 +291,8 @@ def main() -> None:
         raise SystemExit("kura1 application accepts no arguments")
     try:
         print(json.dumps(run_once(), sort_keys=True))
-    except Exception as error:
-        print(json.dumps({"ok": False, "error": str(error)}))
+    except Exception:
+        print(json.dumps({"ok": False, "error": "application_failed_closed"}))
         raise SystemExit(1) from None
 
 
