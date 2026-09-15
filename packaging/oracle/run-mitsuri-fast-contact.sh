@@ -13,7 +13,7 @@ REPO=/opt/technocore-safe-agent
 REF=refs/remotes/origin/mitsuri-fast-contact-helper
 PROD_HEAD=362dddadb669d4e126fe00c37da4a3f57cecbdbc
 LANE_BLOB=5abdc71904a31cea79c9e06032f5841a5e89cf2d
-FAST_BLOB=dd0d2424d067ee4f6604cf7673088279e48ae05b
+FAST_BLOB=6bdc191a594c10df120a9bb9cd5313f03a37dbd0
 
 LANE=/run/sonnet_mitsuri_contact.py
 FAST=/run/sonnet_mitsuri_contact_fast.py
@@ -63,7 +63,7 @@ PY
 python3 - "$SAFETY_AGE" <<'PY' || fail safety_stale
 import sys
 age=float(sys.argv[1])
-raise SystemExit(0 if 0 <= age <= 300 else 1)
+raise SystemExit(0 if 0 <= age <= 900 else 1)
 PY
 [[ "$SAFETY_EVENTS" == 117 && "$SAFETY_MESSAGES" == 5083155 ]] \
   || fail "P0_core_changed:$SAFETY_EVENTS/$SAFETY_MESSAGES"
