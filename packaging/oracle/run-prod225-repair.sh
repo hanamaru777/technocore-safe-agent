@@ -19,7 +19,7 @@ CAP=technocore-safe-agent-lobby-capture.service
 SIG=technocore-safe-agent-signer.service
 DIS=technocore-safe-agent-discord.service
 OBS="$STATE/observer/observer-state.json"
-RESHB="$STATE/resident-heartbeat.json"
+RESHB="$STATE/observer/resident-heartbeat.json"
 
 cd "$REPO"
 OWNER=$(stat -c %U .git) || fail git_owner_unreadable
@@ -76,8 +76,8 @@ for svc in "$RES" "$CAP" "$SIG" "$DIS"; do
   systemctl is-active --quiet "$svc" || fail "service_not_active:$svc"
 done
 
-read -r PRE_HEALTH PRE_CE PRE_CM PRE_LOBBY PRE_EVENTS PRE_OBS_AGE PRE_RES_STATUS PRE_RES_AGE < <(snapshot) \
-  || fail pre_snapshot_unavailable
+PRE_VALUES=$(snapshot) || fail pre_snapshot_unavailable
+read -r PRE_HEALTH PRE_CE PRE_CM PRE_LOBBY PRE_EVENTS PRE_OBS_AGE PRE_RES_STATUS PRE_RES_AGE <<< "$PRE_VALUES"
 [[ "$PRE_CE" == 117 && "$PRE_CM" == 5083155 ]] \
   || fail "P0_pre_core_changed:$PRE_CE/$PRE_CM"
 
