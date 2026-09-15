@@ -26,7 +26,7 @@ except ImportError:  # normal package/test import
     from flop_agent import sonnet_mitsuri_contact as lane
 
 PROTECTED_CORE = (117, 5_083_155)
-MAX_AGE_SECONDS = 300
+MAX_AGE_SECONDS = 900
 ALLOWED_HEALTH = frozenset({"ok", "degraded"})
 
 
