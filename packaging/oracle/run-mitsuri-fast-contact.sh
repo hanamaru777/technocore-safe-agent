@@ -13,11 +13,9 @@ REPO=/opt/technocore-safe-agent
 REF=refs/remotes/origin/mitsuri-fast-contact-helper
 PROD_HEAD=362dddadb669d4e126fe00c37da4a3f57cecbdbc
 LANE_BLOB=5abdc71904a31cea79c9e06032f5841a5e89cf2d
-BOOTSTRAP_BLOB=869c23970d5e55a012795e5c0e54890fa910259d
-FAST_BLOB=fe7877c9c96fc13f169599d72f34abbbe1632990
+FAST_BLOB=dd0d2424d067ee4f6604cf7673088279e48ae05b
 
 LANE=/run/sonnet_mitsuri_contact.py
-BOOTSTRAP=/run/sonnet_mitsuri_contact_v2.py
 FAST=/run/sonnet_mitsuri_contact_fast.py
 UNIT=/run/systemd/system/technocore-safe-agent-sonnet-mitsuri-fast.service
 UNIT_NAME=technocore-safe-agent-sonnet-mitsuri-fast.service
@@ -25,7 +23,7 @@ STATE=/var/lib/technocore-safe-agent/signer/sonnet-2-mitsuri-contact.json
 SAFETY=/var/lib/technocore-safe-agent/observer-safety.json
 
 cleanup() {
-  rm -f "$UNIT" "$LANE" "$BOOTSTRAP" "$FAST"
+  rm -f "$UNIT" "$LANE" "$FAST"
   systemctl daemon-reload >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -37,13 +35,15 @@ GIT=(sudo -u "$OWNER" git -C "$REPO")
 [[ "$("${GIT[@]}" rev-parse HEAD)" == "$PROD_HEAD" ]] || fail unexpected_head
 [[ -z "$("${GIT[@]}" status --porcelain=v1 --untracked-files=all)" ]] || fail dirty_tree
 [[ "$("${GIT[@]}" rev-parse "$REF:src/flop_agent/sonnet_mitsuri_contact.py")" == "$LANE_BLOB" ]] || fail lane_blob_mismatch
-[[ "$("${GIT[@]}" rev-parse "$REF:src/flop_agent/sonnet_mitsuri_contact_v2.py")" == "$BOOTSTRAP_BLOB" ]] || fail bootstrap_blob_mismatch
 [[ "$("${GIT[@]}" rev-parse "$REF:src/flop_agent/sonnet_mitsuri_contact_fast.py")" == "$FAST_BLOB" ]] || fail fast_blob_mismatch
 
 systemctl is-active --quiet technocore-safe-agent-resident.service || fail resident_inactive
 systemctl is-active --quiet technocore-safe-agent-lobby-capture.service || fail capture_inactive
 systemctl is-active --quiet technocore-safe-agent-signer.service || fail signer_inactive
 
+# This exact successor is permitted only because the prior timed-out export
+# bootstrap left no durable contact state at all. If a state exists now, stop:
+# it may represent a later sign/POST attempt and must be reconciled separately.
 [[ ! -e "$STATE" ]] || fail state_already_exists
 
 read -r SAFETY_HEALTH SAFETY_AGE SAFETY_EVENTS SAFETY_MESSAGES < <(
@@ -76,13 +76,12 @@ RES_PID_BEFORE=$(systemctl show technocore-safe-agent-resident.service -p MainPI
 CAP_PID_BEFORE=$(systemctl show technocore-safe-agent-lobby-capture.service -p MainPID --value)
 
 "${GIT[@]}" show "$REF:src/flop_agent/sonnet_mitsuri_contact.py" > "$LANE"
-"${GIT[@]}" show "$REF:src/flop_agent/sonnet_mitsuri_contact_v2.py" > "$BOOTSTRAP"
 "${GIT[@]}" show "$REF:src/flop_agent/sonnet_mitsuri_contact_fast.py" > "$FAST"
-chmod 0444 "$LANE" "$BOOTSTRAP" "$FAST"
+chmod 0444 "$LANE" "$FAST"
 
 cat > "$UNIT" <<'UNIT'
 [Unit]
-Description=Approved fixed non-binding Mitsuri Sonnet contact fast path
+Description=Approved fixed non-binding Mitsuri Sonnet contact fast path v2
 After=network-online.target
 Wants=network-online.target
 
@@ -109,7 +108,7 @@ ProtectKernelTunables=true
 ProtectKernelLogs=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadOnlyPaths=/run/sonnet_mitsuri_contact.py /run/sonnet_mitsuri_contact_v2.py /run/sonnet_mitsuri_contact_fast.py
+ReadOnlyPaths=/run/sonnet_mitsuri_contact.py /run/sonnet_mitsuri_contact_fast.py
 ReadWritePaths=/var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json
 UNIT
 
@@ -117,7 +116,22 @@ systemctl daemon-reload
 systemctl reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true
 if ! systemctl start "$UNIT_NAME"; then
   echo 'MITSURI_FAST=FAIL:oneshot'
-  journalctl -u "$UNIT_NAME" -n 8 --no-pager -o cat || true
+  journalctl -u "$UNIT_NAME" -n 12 --no-pager -o cat || true
+  if [[ -f "$STATE" ]]; then
+    python3 - "$STATE" <<'PY' || true
+import json, sys
+try:
+    d=json.load(open(sys.argv[1], encoding='utf-8'))
+    print('FAIL_STATE=' + str(d.get('state')))
+    print('FAIL_REQUEST_ID=' + str(d.get('request_id')))
+    print('FAIL_SEQ=' + str(d.get('seq')))
+    print('FAIL_TS=' + str(d.get('ts')))
+except Exception as e:
+    print('FAIL_STATE_READ=' + type(e).__name__)
+PY
+  else
+    echo 'FAIL_STATE=ABSENT'
+  fi
   echo 'DO_NOT_RERUN=YES'
   exit 1
 fi
