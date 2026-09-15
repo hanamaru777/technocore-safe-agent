@@ -97,6 +97,7 @@ Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/run:/opt/technocore-safe-agent/src
 Environment=UV_CACHE_DIR=/var/lib/technocore-safe-agent/signer/uv-cache
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python /run/sonnet_mitsuri_contact_fast.py
+TimeoutStartSec=75s
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -114,7 +115,7 @@ UNIT
 
 systemctl daemon-reload
 systemctl reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true
-if ! timeout 35s systemctl start "$UNIT_NAME"; then
+if ! systemctl start "$UNIT_NAME"; then
   echo 'MITSURI_FAST=FAIL:oneshot'
   journalctl -u "$UNIT_NAME" -n 8 --no-pager -o cat || true
   echo 'DO_NOT_RERUN=YES'
