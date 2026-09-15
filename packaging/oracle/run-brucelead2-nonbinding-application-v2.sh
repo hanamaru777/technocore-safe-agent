@@ -13,7 +13,7 @@ REPO=/opt/technocore-safe-agent
 REF=refs/remotes/origin/brucelead2-application-v2-helper
 PROD_HEAD=11c527796d468beb268a1da1538be3a03cb88c33
 LANE_BLOB=e3292675bb6b952cdd2ec6fc963a29479c8dbc7f
-V2_BLOB=19f43bf75f7a0ef4d6c912d4bdae6be99ed78ede
+V2_BLOB=f4840c1d8d90a4d2c4716066d75cb08b34da7bc1
 LANE=/run/sonnet_brucelead2_application.py
 V2=/run/sonnet_brucelead2_application_v2.py
 LAUNCHER=/run/sonnet_brucelead2_v2_launcher.py
@@ -47,8 +47,8 @@ for svc in \
 done
 
 # The failed #235 attempt is proven to have stopped before nonce allocation,
-# signing and POST.  Reuse is allowed only if its durable state is exactly that
-# pre-sign `new` state.  Anything else is terminal for this helper.
+# signing and POST. Reuse is allowed only if its durable state is exactly that
+# pre-sign `new` state. Anything else is terminal for this helper.
 [[ -f "$STATE" ]] || fail prior_state_missing
 read -r APP_STATE REQUEST_ID NONCE ATTEMPTED SEQ TS POSTED < <(
   timeout 5s python3 - "$STATE" <<'PY'
@@ -105,6 +105,7 @@ chmod 0444 "$LANE" "$V2"
 cat > "$LAUNCHER" <<'PY'
 import importlib.util
 import sys
+import flop_agent
 
 
 def load(name, path):
