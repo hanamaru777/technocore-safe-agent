@@ -10,9 +10,10 @@ WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
-# Final public-only tclk approval-notice overlay delegates through retained review,
-# source-backed knowledge, and collaboration layers. It has no signer/Vault access.
-ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.discord_tclk_approval
+# Final read-only Discord cockpit: retained tclk/review/knowledge/collaboration/health
+# layers plus durable Agent SEND / RECEIVE / OFFICIAL Sonnet activity notices.
+# This process has no signer/Vault access and never posts to Technocore.
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.discord_agent_activity_entry
 Restart=on-failure
 RestartSec=30
 NoNewPrivileges=true
@@ -23,6 +24,7 @@ ProtectHome=true
 ProtectControlGroups=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
+ProtectKernelLogs=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=169.254.169.254
