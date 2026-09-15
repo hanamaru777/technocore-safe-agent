@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 
 from . import (
     observer_core_local_continuity as local,
@@ -70,6 +71,20 @@ def _startup_capture_fresh(status: dict) -> bool:
         return False
     age = (datetime.now(UTC) - stamp.astimezone(UTC)).total_seconds()
     return 0 <= age <= STARTUP_CAPTURE_FRESH_SECONDS
+
+
+def _capture_liveness_status(path: Path | None = None) -> dict:
+    """Read only continuity metadata; never scan the 300k-row spool for a count."""
+    connection = capture._connect(path)
+    try:
+        return {
+            "capture_cursor": int(capture._meta_get(connection, "capture_cursor") or 0),
+            "last_success_at": capture._meta_get(connection, "last_success_at"),
+            "last_error": capture._meta_get(connection, "last_error"),
+            "last_capture_hole": capture._meta_get(connection, "last_capture_hole"),
+        }
+    finally:
+        connection.close()
 
 
 def _read_bounded_local_prefix(start: int, capture_cursor: int) -> list[dict]:
@@ -126,12 +141,15 @@ async def startup_catchup(
     while not stop.is_set():
         current = int(state.get("cursors", {}).get(room, 0) or 0)
         start = current + 1
-        status = capture.status()
+        # SQLite can fault pages or wait on the capture writer. Keep all capture
+        # filesystem work outside the Observer event loop so events/tclk workers and
+        # the state writer remain schedulable during a large startup backlog.
+        status = await asyncio.to_thread(_capture_liveness_status)
         capture_cursor = int(status.get("capture_cursor", 0) or 0)
 
         # Persisted exact rows are safe evidence even when the capture's latest
         # successful network poll is old or its current transport is timing out.
-        rows = _read_bounded_local_prefix(start, capture_cursor)
+        rows = await asyncio.to_thread(_read_bounded_local_prefix, start, capture_cursor)
         if rows:
             changed, recovered = await resilience._drain_export_snapshot(
                 state,

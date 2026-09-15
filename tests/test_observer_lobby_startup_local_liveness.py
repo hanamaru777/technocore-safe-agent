@@ -77,12 +77,35 @@ def _state(cursor: int) -> dict:
     }
 
 
+def test_capture_liveness_status_avoids_full_spool_count(tmp_path):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.initialize_cursor(connection, 10)
+        capture.store_rows(connection, [msg(11), msg(12)])
+        capture._meta_set(connection, "capture_cursor", 12)
+        capture._meta_set(connection, "last_success_at", "2026-09-15T00:00:00+00:00")
+        capture._meta_set(connection, "last_error", "")
+        connection.commit()
+    finally:
+        connection.close()
+
+    status = liveness._capture_liveness_status(path)
+    assert status == {
+        "capture_cursor": 12,
+        "last_success_at": "2026-09-15T00:00:00+00:00",
+        "last_error": "",
+        "last_capture_hole": None,
+    }
+    assert "rows" not in status
+
+
 def test_startup_uses_exact_local_rows_when_steady_freshness_would_reject(monkeypatch):
     now = datetime.now(UTC)
     monkeypatch.setattr(local, "_BOOT_AT", now - timedelta(seconds=40))
     monkeypatch.setattr(
-        capture,
-        "status",
+        liveness,
+        "_capture_liveness_status",
         lambda: {
             "capture_cursor": 110,
             "last_success_at": (now - timedelta(seconds=30)).isoformat(),
@@ -135,7 +158,7 @@ def test_caught_up_lobby_stays_local_and_consumes_new_capture_rows(monkeypatch):
     }
     present = {101, 102}
 
-    monkeypatch.setattr(capture, "status", lambda: dict(status))
+    monkeypatch.setattr(liveness, "_capture_liveness_status", lambda: dict(status))
 
     def read_range(start: int, end: int):
         if all(seq in present for seq in range(start, end + 1)):
@@ -196,7 +219,7 @@ def test_caught_up_capture_timeout_waits_locally_then_recovers(monkeypatch):
     }
     present: set[int] = set()
 
-    monkeypatch.setattr(capture, "status", lambda: dict(status))
+    monkeypatch.setattr(liveness, "_capture_liveness_status", lambda: dict(status))
 
     def read_range(start: int, end: int):
         if all(seq in present for seq in range(start, end + 1)):
@@ -271,8 +294,8 @@ def test_startup_bridges_only_the_actual_local_hole(monkeypatch):
     now = datetime.now(UTC)
     monkeypatch.setattr(local, "_BOOT_AT", now - timedelta(seconds=10))
     monkeypatch.setattr(
-        capture,
-        "status",
+        liveness,
+        "_capture_liveness_status",
         lambda: {
             "capture_cursor": 105,
             "last_success_at": now.isoformat(),
@@ -330,7 +353,7 @@ def test_startup_streams_when_capture_is_stale_instead_of_full_export(monkeypatc
         "last_success_at": (now - timedelta(seconds=120)).isoformat(),
         "last_error": "ReadTimeout",
     }
-    monkeypatch.setattr(capture, "status", lambda: dict(status))
+    monkeypatch.setattr(liveness, "_capture_liveness_status", lambda: dict(status))
     monkeypatch.setattr(capture, "read_range", lambda start, end: [])
     monkeypatch.setattr(resilience, "set_success", lambda state, room: True)
 
