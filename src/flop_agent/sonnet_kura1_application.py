@@ -113,6 +113,7 @@ def validate(value: dict) -> dict:
         ):
             raise ApplicationError("application_state_invalid")
         verify_signed_record(ROOM, row)
+        datetime.fromisoformat(row["ts"].replace("Z", "+00:00"))
     elif value["posted_record"] is not None:
         raise ApplicationError("application_state_invalid")
     return value
@@ -174,6 +175,11 @@ def require_registration_posted() -> None:
         raise ApplicationError("writer_registration_unavailable") from error
     if value is None or value.get("state") != "posted" or value.get("did") != DID:
         raise ApplicationError("writer_registration_not_posted")
+    reg = value.get("registration")
+    if not isinstance(reg, dict) or any(
+        reg.get(key) != expected for key, expected in registration.FIXED.items()
+    ):
+        raise ApplicationError("writer_registration_invalid")
 
 
 def reconcile_existing(state: dict) -> dict | None:
@@ -194,6 +200,14 @@ def reconcile_existing(state: dict) -> dict | None:
             continue
         if body != PAYLOAD or row.get("text") != render():
             raise ApplicationError("existing_application_conflict")
+        if (
+            type(row.get("seq")) is not int
+            or row["seq"] < 0
+            or not isinstance(row.get("ts"), str)
+            or not isinstance(row.get("sig"), str)
+        ):
+            raise ApplicationError("reconcile_read_failed")
+        datetime.fromisoformat(row["ts"].replace("Z", "+00:00"))
         found.append(row)
     if len({(str(x.get("nonce")), x.get("text")) for x in found}) > 1:
         raise ApplicationError("existing_application_conflict")
@@ -246,10 +260,15 @@ def run_once() -> dict:
         state["state"] = "prepared"
         save(state)
 
-        signed = oracle_signer.with_vault_seed(lambda: core.invoke_signer("say", ROOM, state["nonce"], text))
+        signed = oracle_signer.with_vault_seed(
+            lambda: core.invoke_signer("say", ROOM, state["nonce"], text)
+        )
         if len(signed) != 2 or signed[0] != DID:
             raise ApplicationError("did_mismatch")
-        verify_signed_record(ROOM, {"from": DID, "nonce": state["nonce"], "text": text, "sig": signed[1]})
+        verify_signed_record(
+            ROOM,
+            {"from": DID, "nonce": state["nonce"], "text": text, "sig": signed[1]},
+        )
 
         require_identity()
         require_health()
@@ -277,6 +296,7 @@ def run_once() -> dict:
                 or not isinstance(row.get("ts"), str)
             ):
                 raise ApplicationError("receipt_mismatch")
+            datetime.fromisoformat(row["ts"].replace("Z", "+00:00"))
             verify_signed_record(ROOM, row)
             return mark_posted(state, row)
         except BaseException:
