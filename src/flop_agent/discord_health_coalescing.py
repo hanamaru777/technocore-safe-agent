@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import discord_control, observer, resident
+from . import discord_agent_activity, discord_control, observer, resident
 
 SCHEMA_VERSION = 1
 STATE_FILE = "discord-health-coalescing.json"
@@ -154,6 +154,9 @@ def _coalesced_system_notices(control) -> list[str]:
             state["recovery_since"] = None
 
     _save_state(state)
+    # Agent activity is presentation-only and rides the already-retained Discord
+    # control path. The watcher itself is bounded, read-only, and durably deduped.
+    output.extend(discord_agent_activity.poll_notices())
     return output
 
 
