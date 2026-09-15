@@ -159,6 +159,11 @@ def _coalesced_system_notices(control) -> list[str]:
 
 
 def _system_notices_with_agent_activity(control) -> list[str]:
+    # main() installs the outcome scorecard after this health wrapper. Install the
+    # Sonnet bridge lazily on the first notice poll so it always wraps the final
+    # scorecard functions rather than being overwritten by scorecard.install().
+    from . import discord_sonnet_outcome_overlay
+    discord_sonnet_outcome_overlay.install()
     return [
         *_coalesced_system_notices(control),
         *discord_agent_activity.poll_notices(),
