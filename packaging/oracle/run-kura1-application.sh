@@ -4,7 +4,7 @@ set -euo pipefail
 REPO=/opt/technocore-safe-agent
 REF=refs/remotes/origin/kura1-application-helper
 PROD_HEAD=362dddadb669d4e126fe00c37da4a3f57cecbdbc
-MODULE_BLOB=62eb85f9f96b6148c0b6303dea7ebdaca7547280
+MODULE_BLOB=f2ab714f85bc147aef737dcfb109844bca147916
 MODULE=/run/sonnet-kura1-application.py
 UNIT=/run/systemd/system/technocore-safe-agent-sonnet-kura1-application.service
 UNIT_NAME=technocore-safe-agent-sonnet-kura1-application.service
