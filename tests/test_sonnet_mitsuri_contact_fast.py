@@ -42,22 +42,31 @@ def test_fast_contact_rejects_core_change(monkeypatch):
         fast.require_nonbinding_safety()
 
 
-def test_run_only_replaces_health_predicate(monkeypatch):
+def test_run_replaces_only_health_and_calls_bounded_lane(monkeypatch):
     called = []
-    monkeypatch.setattr(fast.bootstrap, "run_once", lambda: called.append("run") or {"status": "posted"})
+    monkeypatch.setattr(
+        fast.lane,
+        "run_once",
+        lambda: called.append("lane") or {"status": "posted"},
+    )
     marker = lambda: None
     monkeypatch.setattr(fast, "require_nonbinding_safety", marker)
     result = fast.run_once()
     assert fast.lane.require_health is marker
-    assert called == ["run"]
+    assert called == ["lane"]
     assert result == {"status": "posted"}
 
 
 def test_runner_is_bounded_and_does_not_restart_long_lived_services():
-    text = (fast.registration.core.ROOT / "packaging/oracle/run-mitsuri-fast-contact.sh").read_text("utf-8")
+    text = (
+        fast.registration.core.ROOT
+        / "packaging/oracle/run-mitsuri-fast-contact.sh"
+    ).read_text("utf-8")
     assert "TimeoutStartSec=75s" in text
     assert "timeout 5s python3" in text
     assert "lobby-capture-service.sqlite3" not in text
+    assert "sonnet_mitsuri_contact_v2" not in text
+    assert "/export" not in text
     assert "systemctl restart technocore-safe-agent-resident" not in text
     assert "systemctl restart technocore-safe-agent-lobby-capture" not in text
     assert "systemctl restart technocore-safe-agent-signer" not in text
