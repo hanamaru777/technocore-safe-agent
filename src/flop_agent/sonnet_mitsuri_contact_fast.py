@@ -5,6 +5,12 @@ fresh Observer safety may be ``ok`` or ``degraded`` while the protected-core
 baseline remains exact. The underlying lane still enforces fixed payload,
 identity, registration-local-record, exactly-once state, receipt verification,
 and terminal ambiguity handling.
+
+This launcher intentionally bypasses the old retained-export bootstrap. The
+previous Production attempt proved that the full ``/export`` scan can exceed an
+operator-safe wall-clock bound on the busy discovery room. The durable contact
+state remained ABSENT, so no sign/POST had started. The fixed lane's bounded
+``limit=200`` reconciliation is sufficient for this successor attempt.
 """
 from __future__ import annotations
 
@@ -16,10 +22,8 @@ from flop_agent import sonnet_registration as registration
 
 try:
     import sonnet_mitsuri_contact as lane
-    import sonnet_mitsuri_contact_v2 as bootstrap
 except ImportError:  # normal package/test import
     from flop_agent import sonnet_mitsuri_contact as lane
-    from flop_agent import sonnet_mitsuri_contact_v2 as bootstrap
 
 PROTECTED_CORE = (117, 5_083_155)
 MAX_AGE_SECONDS = 300
@@ -56,7 +60,7 @@ def require_nonbinding_safety() -> dict:
 def run_once() -> dict:
     # Replace only the lane's global-health predicate. All other lane gates remain.
     lane.require_health = require_nonbinding_safety
-    return bootstrap.run_once()
+    return lane.run_once()
 
 
 def main() -> None:
