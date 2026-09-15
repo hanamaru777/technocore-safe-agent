@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import discord_control, observer, resident
+from . import discord_agent_activity, discord_control, observer, resident
 
 SCHEMA_VERSION = 1
 STATE_FILE = "discord-health-coalescing.json"
@@ -108,6 +108,7 @@ def _final_recovery_notice() -> str:
 
 
 def _coalesced_system_notices(control) -> list[str]:
+    """Health-only coalescer. Agent polling is added by the installed wrapper."""
     assert _ORIGINAL_SYSTEM_NOTICES is not None
     raw = _ORIGINAL_SYSTEM_NOTICES(control)
     state = _load_state()
@@ -157,11 +158,18 @@ def _coalesced_system_notices(control) -> list[str]:
     return output
 
 
+def _system_notices_with_agent_activity(control) -> list[str]:
+    return [
+        *_coalesced_system_notices(control),
+        *discord_agent_activity.poll_notices(),
+    ]
+
+
 def install() -> None:
     """Patch only Discord presentation, exactly once."""
     global _INSTALLED, _ORIGINAL_SYSTEM_NOTICES
     if _INSTALLED:
         return
     _ORIGINAL_SYSTEM_NOTICES = discord_control.Control.system_notices
-    discord_control.Control.system_notices = _coalesced_system_notices
+    discord_control.Control.system_notices = _system_notices_with_agent_activity
     _INSTALLED = True
