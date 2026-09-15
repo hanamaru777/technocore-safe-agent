@@ -168,9 +168,15 @@ def run_once() -> dict:
         require_not_closed(rows, source)
         return source
 
+    old_reconcile = lane.reconcile_existing
+    old_live_offer = lane.require_live_offer
     lane.reconcile_existing = reconcile
     lane.require_live_offer = live_offer
-    return lane.run_once()
+    try:
+        return lane.run_once()
+    finally:
+        lane.reconcile_existing = old_reconcile
+        lane.require_live_offer = old_live_offer
 
 
 def main() -> None:
