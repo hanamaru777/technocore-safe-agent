@@ -80,16 +80,19 @@ def _stamp(value: object) -> datetime | None:
     return stamp.astimezone(UTC)
 
 
-def _in_scope(value: object) -> bool:
-    stamp = _stamp(value)
-    return stamp is not None and stamp >= STARTED_AT
-
-
 def _time_label(value: object) -> str:
     stamp = _stamp(value)
     if stamp is None:
         return "時刻不明"
     return stamp.astimezone(discord_control.DISPLAY_TZ).strftime("%m/%d %H:%M")
+
+
+def _agent_label(did: object) -> str:
+    if did == MITSURI_DID:
+        return "Mitsuri Agent"
+    if isinstance(did, str) and did:
+        return f"Agent …{did[-8:]}"
+    return "unknown Agent"
 
 
 def _decoded_text(raw: object) -> object:
@@ -107,10 +110,8 @@ def _safe_body(decoded: object, raw: object) -> str:
 
 def _target_label(decoded: object) -> str:
     target = decoded.get("target_did") if isinstance(decoded, dict) else None
-    if target == MITSURI_DID:
-        return "Mitsuri Agent"
     if isinstance(target, str) and target:
-        return discord_control.short_fingerprint(target)
+        return _agent_label(target)
     return "room broadcast"
 
 
@@ -253,11 +254,7 @@ def _room_events(
             continue
         if not _contains_maru(decoded, request_ids | discovered_ids):
             continue
-        sender_label = (
-            "Mitsuri Agent"
-            if sender == MITSURI_DID
-            else discord_control.short_fingerprint(sender)
-        )
+        sender_label = _agent_label(sender)
         excerpt = _safe_body(decoded, raw)
         if room == RESULTS_ROOM and sender == REFEREE_DID:
             kind = (
