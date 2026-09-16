@@ -90,13 +90,15 @@ def validate(value: object) -> dict:
         raise ReplayError("replay_state_invalid")
     if value["state"] in {"attempting", "replay_posted", "ambiguous"} and not isinstance(value["attempted_at"], str):
         raise ReplayError("replay_state_invalid")
-    if value["state"] in {"replay_posted"}:
+    if value["state"] == "replay_posted":
         if type(value["post_seq"]) is not int or not isinstance(value["post_ts"], str):
             raise ReplayError("replay_state_invalid")
     if value["state"] == "resolved":
         receipt = value["receipt"]
         if not isinstance(receipt, dict) or receipt.get("status") not in {"accepted", "rejected"}:
             raise ReplayError("replay_state_invalid")
+    elif value["receipt"] is not None:
+        raise ReplayError("replay_state_invalid")
     return value
 
 
@@ -179,7 +181,7 @@ def _receipt_item(payload: object) -> dict | None:
         if str(item.get("request_id", "")) != REQUEST_ID:
             continue
         participant = item.get("participant_did", item.get("sender_did", item.get("did")))
-        if participant is not None and str(participant) != DID:
+        if str(participant) != DID:
             continue
         status = str(item.get("status", "")).lower()
         if status in {"accepted", "rejected"}:
