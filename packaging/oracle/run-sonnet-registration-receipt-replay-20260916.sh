@@ -12,7 +12,7 @@ trap 'fail unexpected_rc_$?' ERR
 REPO=/opt/technocore-safe-agent
 REF=refs/remotes/origin/registration-receipt-replay-helper
 PROD_HEAD=51d058b45a66259074eb8cb22dda49b4cb26aea8
-MODULE_BLOB=393cc6cedfcad4fe86fb05780afffbc6e4569b75
+MODULE_BLOB=dc70eb9aa01f2c8efca6cfb9db0f9d2c19b6a8cf
 MODULE=/run/sonnet_registration_receipt_replay_20260916.py
 LAUNCHER=/run/sonnet_registration_receipt_replay_20260916_launcher.py
 UNIT=/run/systemd/system/technocore-safe-agent-sonnet-registration-receipt-replay.service
