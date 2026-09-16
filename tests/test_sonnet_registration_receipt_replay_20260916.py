@@ -35,6 +35,8 @@ def test_individual_and_batch_receipt_matching_is_exact():
     assert replay._receipt_item(individual) == individual
     wrong = dict(individual, sender_did="did:key:z6MkWrong")
     assert replay._receipt_item(wrong) is None
+    missing_did = {k: v for k, v in individual.items() if k != "sender_did"}
+    assert replay._receipt_item(missing_did) is None
 
     target = {
         "request_id": replay.REQUEST_ID,
