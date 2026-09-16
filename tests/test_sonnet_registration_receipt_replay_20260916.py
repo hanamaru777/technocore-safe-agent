@@ -161,5 +161,5 @@ def test_transport_failure_is_terminal_ambiguous(monkeypatch, state_root):
 def test_source_has_no_generic_cli_or_new_request_id_generation():
     source = open("src/flop_agent/sonnet_registration_receipt_replay_20260916.py", encoding="utf-8").read()
     assert "secrets.token_hex(16)" not in source
-    assert "request_id": not in []  # keep parser from mistaking this test for payload construction
     assert "registration receipt replay accepts no arguments" in source
+    assert "REQUEST_ID = \"32c15433c6d73af1cea5d6467dece016\"" in source
