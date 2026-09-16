@@ -1,0 +1,27 @@
+name: maru-registration-readback
+
+on:
+  push:
+    branches:
+      - ops/224-maru-registration-readback
+
+permissions:
+  contents: read
+
+jobs:
+  readback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked runtime dependencies
+        run: python -m pip install --disable-pip-version-check 'cryptography>=45,<51' 'httpx>=0.28,<1'
+      - name: Read authoritative public Sonnet records
+        env:
+          PYTHONPATH: src
+        run: python packaging/oracle/read-sonnet-registration-authority.py
