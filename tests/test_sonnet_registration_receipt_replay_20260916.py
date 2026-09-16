@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 
 import pytest
 
@@ -10,6 +11,7 @@ def state_root(monkeypatch, tmp_path):
     (tmp_path / "signer").mkdir()
     monkeypatch.setattr(replay.core, "STATE", tmp_path)
     monkeypatch.setattr(replay, "verify_signed_record", lambda room, row: None)
+    monkeypatch.setattr(replay, "replay_lock", lambda: nullcontext())
     return tmp_path
 
 
