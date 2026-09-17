@@ -218,6 +218,92 @@ def _contains_maru(value: object, request_ids: set[str]) -> bool:
     return False
 
 
+def _roster_summary(decoded: object) -> tuple[str, int, object] | None:
+    if not isinstance(decoded, dict) or decoded.get("type") != "sonnet.roster.v1":
+        return None
+    members = decoded.get("members")
+    if not isinstance(members, list) or MARU_DID not in members:
+        return None
+    game = decoded.get("game_id")
+    if not isinstance(game, str) or not game:
+        return None
+    generation = decoded.get("room_generation")
+    return game, len(members), generation
+
+
+def _open_seat_game(decoded: object, raw: object) -> str | None:
+    body = _safe_body(decoded, raw)
+    match = re.search(r"\bTEAM\s+([A-Za-z0-9._-]+)\s+open\s+seat\b", body, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _inbound_event_id(
+    room: str,
+    sender: str,
+    seq: int,
+    decoded: object,
+    raw: object,
+) -> str:
+    """Coalesce repeated social proposals while keeping authoritative results exact."""
+    if room == DISCOVERY_ROOM:
+        roster = _roster_summary(decoded)
+        if roster is not None:
+            game, _, generation = roster
+            return f"semantic:roster:{sender}:{game}:{generation}"
+        game = _open_seat_game(decoded, raw)
+        if game:
+            return f"semantic:open-seat:{sender}:{game}"
+    return f"msg:{room}:{seq}"
+
+
+def _inbound_notice(
+    sender: str,
+    seq: int,
+    ts: str,
+    decoded: object,
+    raw: object,
+    request_id: str | None,
+) -> str:
+    roster = _roster_summary(decoded)
+    if roster is not None:
+        game, member_count, _ = roster
+        return "\n".join(
+            [
+                "👥 Sonnetチーム候補 — 返信不要",
+                f"チーム: {game}",
+                f"状態: MARUが候補rosterに含まれています（候補 {member_count}名）",
+                "重要: これは候補提示です。refereeの正式承認でもMARUの同意でもありません。",
+                "次: 正式なauthority確認まで待機。自動同意はしていません。",
+            ]
+        )
+
+    game = _open_seat_game(decoded, raw)
+    if game:
+        return "\n".join(
+            [
+                "📨 Sonnetチーム参加募集 — 返信不要",
+                f"チーム: {game}",
+                "状態: 相手から空席ありの募集が届いています。",
+                "重要: 募集通知だけではroster参加・承認にはなりません。",
+                "次: 現在は返信不要。自動同意はしていません。",
+            ]
+        )
+
+    sender_label = _agent_label(sender)
+    excerpt = _safe_body(decoded, raw)
+    lines = [
+        "📥 Agent受信 — 要確認",
+        f"相手: {sender_label}",
+        f"room: {DISCOVERY_ROOM} | seq: {seq} | 時刻: {_time_label(ts)}",
+    ]
+    if request_id:
+        lines.append(f"request_id: {request_id}")
+    if excerpt:
+        lines.append(f"内容: {excerpt}")
+    lines.append("次: 内容を確認し、必要なら返信。自動同意はしていません。")
+    return "\n".join(lines)
+
+
 def _room_events(
     room: str,
     rows: list[dict],
@@ -254,7 +340,6 @@ def _room_events(
             continue
         if not _contains_maru(decoded, request_ids | discovered_ids):
             continue
-        sender_label = _agent_label(sender)
         excerpt = _safe_body(decoded, raw)
         if room == RESULTS_ROOM and sender == REFEREE_DID:
             kind = (
@@ -275,18 +360,12 @@ def _room_events(
             if excerpt:
                 lines.append(f"内容: {excerpt}")
             lines.append("次: roster / accepted word / submission等への影響を確認。")
+            event_id = f"msg:{room}:{seq}"
+            notice = "\n".join(lines)
         else:
-            lines = [
-                "📥 Agent受信 — 要確認",
-                f"相手: {sender_label}",
-                f"room: {room} | seq: {seq} | 時刻: {_time_label(ts)}",
-            ]
-            if request_id:
-                lines.append(f"request_id: {request_id}")
-            if excerpt:
-                lines.append(f"内容: {excerpt}")
-            lines.append("次: 内容を確認し、必要なら返信。自動同意はしていません。")
-        events.append((f"msg:{room}:{seq}", stamp, "\n".join(lines)))
+            event_id = _inbound_event_id(room, sender, seq, decoded, raw)
+            notice = _inbound_notice(sender, seq, str(ts), decoded, raw, request_id)
+        events.append((event_id, stamp, notice))
     return events, discovered_ids
 
 
@@ -309,7 +388,9 @@ def poll_notices(*, room_read=core.read_room) -> list[str]:
         )
         request_ids.update(discovered)
         for event_id, stamp, notice in room_events:
-            events[event_id] = (stamp, notice)
+            previous = events.get(event_id)
+            if previous is None or stamp >= previous[0]:
+                events[event_id] = (stamp, notice)
 
     fresh = [
         (event_id, stamp, notice)
