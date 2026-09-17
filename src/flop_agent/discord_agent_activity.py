@@ -22,6 +22,7 @@ FIXED_ROOMS = (DISCOVERY_ROOM, RESULTS_ROOM)
 MARU_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
 REFEREE_DID = "did:key:z6MkowHQwsx9xr84WbWN3YCnKutyBnBXkT1ChKY4uEAAMzte"
 MITSURI_DID = "did:key:z6MkrjMTaN3kDvff5kdE6BhNxgErLdpz58kmsipP3PuHwoct"
+RISHI_DID = "did:key:z6MkhiRKcJjvdy1s4m6np8GgoLoqgVaRm5PmUVNKKiW9VpEZ"
 MITSURI_REQUEST_ID = "maru-mitsuri-contact-20260915-1"
 STARTED_AT = datetime(2026, 9, 15, 10, 3, 26, tzinfo=UTC)
 STATE_NAME = "discord-agent-activity.json"
@@ -90,6 +91,8 @@ def _time_label(value: object) -> str:
 def _agent_label(did: object) -> str:
     if did == MITSURI_DID:
         return "Mitsuri Agent"
+    if did == RISHI_DID:
+        return "Rishiリーダー"
     if isinstance(did, str) and did:
         return f"Agent …{did[-8:]}"
     return "unknown Agent"
@@ -120,6 +123,109 @@ def _request_id(decoded: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _game_id(decoded: object) -> str | None:
+    value = decoded.get("game_id") if isinstance(decoded, dict) else None
+    return value if isinstance(value, str) and value else None
+
+
+def _outbound_summary(decoded: object) -> tuple[str, str, str, str, bool]:
+    """Return title, action, summary, next-step, and whether exact IDs matter."""
+    if not isinstance(decoded, dict):
+        return (
+            "📤 Agent送信済み",
+            "対応不要（送信済み）",
+            "Technocoreへのメッセージ送信が完了しました。",
+            "返信が必要な場合だけ別途通知します。",
+            False,
+        )
+
+    kind = str(decoded.get("type") or "")
+    game = _game_id(decoded)
+    request_id = str(decoded.get("request_id") or "").lower()
+
+    if kind == "sonnet.roster.v1":
+        return (
+            "🚨 Sonnet正式roster送信済み — 要確認",
+            "今すぐ確認",
+            "正式なroster同意メッセージを送信しました。",
+            "refereeの受理を確認するまで次のword操作をしないでください。",
+            True,
+        )
+
+    if "word" in kind:
+        return (
+            "🚨 Sonnet word送信済み — 要確認",
+            "今すぐ確認",
+            "Sonnetのword操作を送信しました。",
+            "refereeの受理と最新stateを確認してから次へ進んでください。",
+            True,
+        )
+
+    if "submission" in kind:
+        return (
+            "🚨 Sonnet最終提出を送信済み — 要確認",
+            "今すぐ確認",
+            "Sonnetの最終提出メッセージを送信しました。",
+            "accepted submission receiptを確認するまで完了扱いにしません。",
+            True,
+        )
+
+    if kind in {"sonnet.note.v1", "sonnet.application.v1", "sonnet.team-request.v1"}:
+        if game == "rishi-fire-1" and "direct-nudge" in request_id:
+            summary = "Rishiリーダーへ「まだ枠があればMARU入りの正式roster案をください」と再確認しました。"
+        elif game == "rishi-fire-1" and "interest" in request_id:
+            summary = "Rishiチームへ参加希望を送信しました。"
+        elif "open-seat-broadcast" in request_id:
+            summary = "参加できるSonnetチームを探す募集メッセージを送信しました。"
+        elif "nudge" in request_id:
+            summary = "チーム側へ参加状況の再確認メッセージを送信しました。"
+        elif kind == "sonnet.application.v1" or any(
+            token in request_id for token in ("apply", "availability", "interest", "contact")
+        ):
+            summary = "チーム参加希望・参加可否の確認メッセージを送信しました。"
+        else:
+            summary = "Sonnetチーム参加に関する確認メッセージを送信しました。"
+        return (
+            "📨 Sonnet連絡を送信済み",
+            "待機（対応不要）",
+            summary,
+            "相手からの返信またはMARU入りroster候補を待ちます。",
+            False,
+        )
+
+    return (
+        "📤 Agent送信済み",
+        "対応不要（送信済み）",
+        "Technocoreへのメッセージ送信が完了しました。",
+        "必要な返信・公式更新があれば別途通知します。",
+        False,
+    )
+
+
+def _outbound_notice(room: str, seq: int, ts: str, raw: object) -> str:
+    decoded = _decoded_text(raw)
+    request_id = _request_id(decoded)
+    game = _game_id(decoded)
+    title, action, summary, next_step, exact_ids = _outbound_summary(decoded)
+    lines = [title, f"今やること: {action}"]
+    if game:
+        lines.append(f"チーム: {game}")
+    lines.extend(
+        [
+            f"内容: {summary}",
+            "状態: 送信成功。再送不要。" if not exact_ids else "状態: 送信成功。公式受理の確認が必要です。",
+            f"次: {next_step}",
+        ]
+    )
+    if exact_ids:
+        if request_id:
+            lines.append(f"公式確認用request_id: {request_id}")
+        lines.append(f"公式確認用: room={room} / seq={seq} / {_time_label(ts)}")
+    else:
+        lines.append(f"記録: {_time_label(ts)}")
+    return "\n".join(lines)
+
+
 def _read_activity_tail() -> list[dict]:
     """Read only a bounded suffix of the shared, non-secret activity audit."""
     path = activity_path()
@@ -147,23 +253,6 @@ def _read_activity_tail() -> list[dict]:
         if isinstance(value, dict):
             rows.append(value)
     return rows
-
-
-def _outbound_notice(room: str, seq: int, ts: str, raw: object) -> str:
-    decoded = _decoded_text(raw)
-    request_id = _request_id(decoded)
-    lines = [
-        "📤 Agent送信 — posted",
-        f"相手: {_target_label(decoded)}",
-    ]
-    if request_id:
-        lines.append(f"request_id: {request_id}")
-    lines.append(f"room: {room} | seq: {seq} | 時刻: {_time_label(ts)}")
-    body = _safe_body(decoded, raw)
-    if body:
-        lines.append(f"本文: {body}")
-    lines.append("状態: Technocore受理済み。再送不要。")
-    return "\n".join(lines)
 
 
 def _activity_events() -> tuple[list[tuple[str, datetime, str]], set[str]]:
@@ -256,6 +345,17 @@ def _inbound_event_id(
     return f"msg:{room}:{seq}"
 
 
+def _generic_inbound_summary(decoded: object, raw: object) -> str:
+    body = _safe_body(decoded, raw).lower()
+    if "writer" in body and "registration" in body:
+        return "writer登録状況に関する個別メッセージが届いています。"
+    if "roster" in body or "seat" in body:
+        return "チームの空席またはroster参加に関する個別メッセージが届いています。"
+    if "accepted" in body or "rejected" in body:
+        return "承認・拒否などの判定に関する個別メッセージが届いています。"
+    return "MARU宛ての個別メッセージが届いています。"
+
+
 def _inbound_notice(
     sender: str,
     seq: int,
@@ -269,11 +369,12 @@ def _inbound_notice(
         game, member_count, _ = roster
         return "\n".join(
             [
-                "👥 Sonnetチーム候補 — 返信不要",
+                "👥 Sonnetチーム候補",
+                "今やること: 待機（まだ署名しない）",
                 f"チーム: {game}",
-                f"状態: MARUが候補rosterに含まれています（候補 {member_count}名）",
-                "重要: これは候補提示です。refereeの正式承認でもMARUの同意でもありません。",
-                "次: 正式なauthority確認まで待機。自動同意はしていません。",
+                f"内容: MARUが {member_count}名の候補rosterに含まれています。",
+                "状態: まだ候補提示です。refereeの正式承認でもMARUの同意でもありません。",
+                "次: 正式authorityを確認してから、必要ならMARUに承認確認します。",
             ]
         )
 
@@ -281,26 +382,71 @@ def _inbound_notice(
     if game:
         return "\n".join(
             [
-                "📨 Sonnetチーム参加募集 — 返信不要",
+                "📨 Sonnetチーム参加募集",
+                "今やること: 待機（対応不要）",
                 f"チーム: {game}",
-                "状態: 相手から空席ありの募集が届いています。",
-                "重要: 募集通知だけではroster参加・承認にはなりません。",
-                "次: 現在は返信不要。自動同意はしていません。",
+                "内容: MARU宛てに空席ありの募集が届いています。",
+                "状態: 募集だけでは正式参加・roster同意にはなりません。",
+                "次: authorityと空席状態を確認してから必要な場合だけ返信します。",
             ]
         )
 
     sender_label = _agent_label(sender)
-    excerpt = _safe_body(decoded, raw)
     lines = [
-        "📥 Agent受信 — 要確認",
+        "📥 Sonnetメッセージ受信",
+        "今やること: 要確認",
         f"相手: {sender_label}",
-        f"room: {DISCOVERY_ROOM} | seq: {seq} | 時刻: {_time_label(ts)}",
+        f"日本語要約: {_generic_inbound_summary(decoded, raw)}",
+        "状態: 自動同意・自動返信はしていません。",
+        "次: 内容を確認して、返信が必要な場合だけ対応します。",
+        f"記録: {_time_label(ts)}",
     ]
+    return "\n".join(lines)
+
+
+def _official_notice(
+    seq: int,
+    ts: str,
+    decoded: object,
+    request_id: str | None,
+) -> str:
+    kind = str(decoded.get("type") or "official") if isinstance(decoded, dict) else "official"
+    game = _game_id(decoded)
+    status = decoded.get("status") if isinstance(decoded, dict) else None
+    reason = decoded.get("reason") if isinstance(decoded, dict) else None
+
+    if status == "accepted":
+        summary = "refereeから承認の公式更新が届きました。"
+        decision = "承認"
+    elif status == "rejected":
+        summary = "refereeから拒否の公式更新が届きました。"
+        decision = "拒否"
+    elif "roster" in kind:
+        summary = "rosterに関するreferee公式更新が届きました。"
+        decision = "要確認"
+    elif "word" in kind:
+        summary = "accepted word / poem stateに関するreferee公式更新が届きました。"
+        decision = "要確認"
+    elif "submission" in kind:
+        summary = "最終submissionに関するreferee公式更新が届きました。"
+        decision = "要確認"
+    else:
+        summary = "MARUに関係するreferee公式更新が届きました。"
+        decision = "要確認"
+
+    lines = [
+        "🚨 Sonnet公式更新 — 最優先",
+        "今やること: 今すぐ確認",
+    ]
+    if game:
+        lines.append(f"チーム: {game}")
+    lines.extend([f"判定: {decision}", f"内容: {summary}"])
+    if isinstance(reason, str) and reason:
+        lines.append(f"理由（公式原文）: {discord_control.safe_excerpt(reason, 260)}")
+    lines.append("次: ChatGPTでroster / word / submissionへの影響を即確認します。")
+    lines.append(f"公式記録: type={kind} / seq={seq} / {_time_label(ts)}")
     if request_id:
         lines.append(f"request_id: {request_id}")
-    if excerpt:
-        lines.append(f"内容: {excerpt}")
-    lines.append("次: 内容を確認し、必要なら返信。自動同意はしていません。")
     return "\n".join(lines)
 
 
@@ -340,28 +486,9 @@ def _room_events(
             continue
         if not _contains_maru(decoded, request_ids | discovered_ids):
             continue
-        excerpt = _safe_body(decoded, raw)
         if room == RESULTS_ROOM and sender == REFEREE_DID:
-            kind = (
-                str(decoded.get("type") or "official")
-                if isinstance(decoded, dict)
-                else "official"
-            )
-            game = decoded.get("game_id") if isinstance(decoded, dict) else None
-            lines = [
-                "🏛️ Sonnet公式更新 — 要確認",
-                f"type: {kind}",
-                f"seq: {seq} | 時刻: {_time_label(ts)}",
-            ]
-            if game:
-                lines.append(f"game_id: {game}")
-            if request_id:
-                lines.append(f"request_id: {request_id}")
-            if excerpt:
-                lines.append(f"内容: {excerpt}")
-            lines.append("次: roster / accepted word / submission等への影響を確認。")
             event_id = f"msg:{room}:{seq}"
-            notice = "\n".join(lines)
+            notice = _official_notice(seq, str(ts), decoded, request_id)
         else:
             event_id = _inbound_event_id(room, sender, seq, decoded, raw)
             notice = _inbound_notice(sender, seq, str(ts), decoded, raw, request_id)

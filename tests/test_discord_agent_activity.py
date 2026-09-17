@@ -52,10 +52,13 @@ def test_backfills_posted_mitsuri_send_once_from_shared_activity(state_root):
     )
     notices = activity.poll_notices(room_read=empty_rooms)
     assert len(notices) == 1
-    assert "📤 Agent送信" in notices[0]
-    assert "Mitsuri Agent" in notices[0]
-    assert activity.MITSURI_REQUEST_ID in notices[0]
-    assert "104521" in notices[0]
+    assert "📨 Sonnet連絡を送信済み" in notices[0]
+    assert "今やること: 待機（対応不要）" in notices[0]
+    assert "参加希望・参加可否" in notices[0]
+    assert "Hey, Mitsuri" not in notices[0]
+    assert activity.MITSURI_REQUEST_ID not in notices[0]
+    assert "room:" not in notices[0]
+    assert "seq:" not in notices[0]
     assert "再送不要" in notices[0]
     assert activity.poll_notices(room_read=empty_rooms) == []
 
@@ -86,9 +89,93 @@ def test_public_self_send_is_outbound_fallback_and_dedupes_shared_audit(state_ro
 
     notices = activity.poll_notices(room_read=read)
     assert len(notices) == 1
-    assert "📤 Agent送信" in notices[0]
-    assert "104521" in notices[0]
+    assert "📨 Sonnet連絡を送信済み" in notices[0]
+    assert "今やること: 待機（対応不要）" in notices[0]
+    assert "104521" not in notices[0]
     assert activity.poll_notices(room_read=read) == []
+
+
+def test_rishi_interest_outbound_is_japanese_and_hides_raw_debug_fields():
+    raw = json.dumps(
+        {
+            "type": "sonnet.note.v1",
+            "contest_id": "sonnet-2",
+            "game_id": "rishi-fire-1",
+            "request_id": "maru-rishi-fire-1-interest-20260917-1",
+            "did": activity.MARU_DID,
+            "no_live_roster_consent": True,
+            "text": "MinerMaru73 is available to join rishi-fire-1 after the direct seat invitation. My writer registration is pending.",
+        }
+    )
+    notice = activity._outbound_notice(
+        activity.DISCOVERY_ROOM,
+        131898,
+        "2026-09-17T11:13:54.304617Z",
+        raw,
+    )
+    assert "📨 Sonnet連絡を送信済み" in notice
+    assert "今やること: 待機（対応不要）" in notice
+    assert "チーム: rishi-fire-1" in notice
+    assert "Rishiチームへ参加希望を送信しました" in notice
+    assert "正式参加" not in notice
+    assert "MinerMaru73 is available" not in notice
+    assert "maru-rishi-fire-1-interest-20260917-1" not in notice
+    assert "131898" not in notice
+    assert activity.DISCOVERY_ROOM not in notice
+
+
+def test_rishi_direct_nudge_outbound_says_what_happened_in_japanese():
+    raw = json.dumps(
+        {
+            "type": "sonnet.note.v1",
+            "contest_id": "sonnet-2",
+            "game_id": "rishi-fire-1",
+            "request_id": "maru-rishi-fire-1-direct-nudge-20260917-1",
+            "target_did": activity.RISHI_DID,
+            "did": activity.MARU_DID,
+            "no_live_roster_consent": True,
+            "text": "Direct non-binding follow-up from MinerMaru73 regarding rishi-fire-1. Please send an exact MARU-inclusive roster proposal.",
+        }
+    )
+    notice = activity._outbound_notice(
+        activity.DISCOVERY_ROOM,
+        132162,
+        "2026-09-17T11:33:58.330141Z",
+        raw,
+    )
+    assert "📨 Sonnet連絡を送信済み" in notice
+    assert "今やること: 待機（対応不要）" in notice
+    assert "Rishiリーダー" in notice
+    assert "MARU入りの正式roster案" in notice
+    assert "Direct non-binding follow-up" not in notice
+    assert "maru-rishi-fire-1-direct-nudge-20260917-1" not in notice
+    assert "132162" not in notice
+    assert activity.RISHI_DID not in notice
+
+
+def test_binding_roster_outbound_keeps_exact_authority_debug_fields():
+    request_id = "maru-rishi-roster-consent-1"
+    raw = json.dumps(
+        {
+            "type": "sonnet.roster.v1",
+            "contest_id": "sonnet-2",
+            "game_id": "rishi-fire-1",
+            "request_id": request_id,
+            "members": [activity.MARU_DID],
+            "room_generation": 2,
+        }
+    )
+    notice = activity._outbound_notice(
+        activity.DISCOVERY_ROOM,
+        140000,
+        "2026-09-17T12:00:00Z",
+        raw,
+    )
+    assert "🚨 Sonnet正式roster送信済み" in notice
+    assert "今やること: 今すぐ確認" in notice
+    assert request_id in notice
+    assert "140000" in notice
+    assert activity.DISCOVERY_ROOM in notice
 
 
 def test_signed_inbound_targeting_maru_notifies_once(state_root):
@@ -113,9 +200,13 @@ def test_signed_inbound_targeting_maru_notifies_once(state_root):
 
     notices = activity.poll_notices(room_read=read)
     assert len(notices) == 1
-    assert "📥 Agent受信" in notices[0]
+    assert "📥 Sonnetメッセージ受信" in notices[0]
+    assert "今やること: 要確認" in notices[0]
     assert "Mitsuri Agent" in notices[0]
-    assert "自動同意はしていません" in notices[0]
+    assert "日本語要約:" in notices[0]
+    assert "空席またはroster参加" in notices[0]
+    assert "There is still a seat" not in notices[0]
+    assert "自動同意・自動返信はしていません" in notices[0]
     assert activity.poll_notices(room_read=read) == []
 
 
@@ -128,10 +219,12 @@ def test_referee_record_involving_maru_is_official_notice(state_root):
         "sig": "x",
         "text": json.dumps(
             {
-                "type": "sonnet.setup.v1",
+                "type": "sonnet.receipt.v1",
                 "contest_id": "sonnet-2",
                 "game_id": "mitsuri-second",
                 "members": [activity.MARU_DID],
+                "status": "accepted",
+                "request_id": "accepted-setup-1",
                 "text": "setup accepted",
             }
         ),
@@ -142,9 +235,12 @@ def test_referee_record_involving_maru_is_official_notice(state_root):
 
     notices = activity.poll_notices(room_read=read)
     assert len(notices) == 1
-    assert "🏛️ Sonnet公式更新" in notices[0]
+    assert "🚨 Sonnet公式更新 — 最優先" in notices[0]
+    assert "今やること: 今すぐ確認" in notices[0]
     assert "mitsuri-second" in notices[0]
-    assert "要確認" in notices[0]
+    assert "判定: 承認" in notices[0]
+    assert "accepted-setup-1" in notices[0]
+    assert "777" in notices[0]
 
 
 def test_unrelated_signed_room_activity_is_ignored(state_root):
@@ -212,9 +308,9 @@ def test_repeated_open_seat_pings_are_semantically_deduped(state_root):
     notices = activity.poll_notices(room_read=read)
     assert len(notices) == 1
     assert "📨 Sonnetチーム参加募集" in notices[0]
+    assert "今やること: 待機（対応不要）" in notices[0]
     assert "ForumEvi-Poets" in notices[0]
-    assert "返信不要" in notices[0]
-    assert "自動同意はしていません" in notices[0]
+    assert "自動同意" not in notices[0]
     assert "ping-" not in notices[0]
     assert activity.MARU_DID not in notices[0]
     assert activity.poll_notices(room_read=read) == []
@@ -257,8 +353,9 @@ def test_repeated_roster_churn_same_generation_is_one_human_notice(state_root):
     notices = activity.poll_notices(room_read=read)
     assert len(notices) == 1
     assert "👥 Sonnetチーム候補" in notices[0]
+    assert "今やること: 待機（まだ署名しない）" in notices[0]
     assert "ForumEvi-Poets" in notices[0]
-    assert "候補 4名" in notices[0]
+    assert "4名の候補roster" in notices[0]
     assert "正式承認でもMARUの同意でもありません" in notices[0]
     assert "members" not in notices[0]
     assert "roster-" not in notices[0]
