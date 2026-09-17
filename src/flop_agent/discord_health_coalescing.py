@@ -137,6 +137,13 @@ def _humanize_notice(notice: str) -> str:
             lines.append("必要なら: `/status` で詳細確認")
         return "\n".join(lines)
 
+    if _is_green_health(notice):
+        return (
+            "🟢 監視復旧\n\n"
+            "今やること: なし\n"
+            "意味: 監視と自動対応が通常状態に戻りました。"
+        )
+
     if notice.startswith("🟡 FLOP Agent 通信欠落を複数検出"):
         count = _notice_value(notice, "未通知gap:")
         last_seen = _notice_value(notice, "最終監視:")
@@ -148,7 +155,7 @@ def _humanize_notice(notice: str) -> str:
         ]
         details = []
         if count:
-            details.append(f"今回 {count.replace('+', '+')}件" if count.startswith("+") else f"今回 {count}件")
+            details.append(f"今回 {count.lstrip('+')}件")
         if last_seen:
             details.append(f"最終監視 {last_seen}")
         if details:
