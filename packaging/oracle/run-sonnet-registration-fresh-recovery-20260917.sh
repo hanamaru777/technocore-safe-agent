@@ -34,13 +34,28 @@ GIT=(sudo -u "$OWNER" git -C "$REPO")
 [[ "$("${GIT[@]}" rev-parse HEAD)" == "$PROD_HEAD" ]] || fail unexpected_head
 [[ -z "$("${GIT[@]}" status --porcelain=v1 --untracked-files=all)" ]] || fail dirty_tree
 [[ "$("${GIT[@]}" rev-parse "$REF:src/flop_agent/sonnet_registration_fresh_recovery_20260917.py")" == "$MODULE_BLOB" ]] || fail module_blob_mismatch
-[[ ! -e "$STATE" ]] || fail fresh_state_already_exists
+
+# A prior invocation is resumable only if it never crossed the durable POST-attempt
+# boundary. Once attempted_at is set, this runner will never start the write again.
+if [[ -e "$STATE" ]]; then
+  timeout 5s python3 - "$STATE" <<'PY' || fail fresh_state_not_safe_to_resume
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    d = json.load(f)
+assert d.get("state") in {"new", "prepared"}
+assert d.get("attempted_at") is None
+assert d.get("post_seq") is None
+assert d.get("receipt") is None
+print("FRESH_STATE_RESUME=PRE_ATTEMPT_ONLY state=" + str(d.get("state")))
+PY
+fi
 
 for svc in \
   technocore-safe-agent-resident.service \
   technocore-safe-agent-lobby-capture.service \
   technocore-safe-agent-signer.service \
-  technocore-safe-agent-discord.service; do
+  technocore-safe-agent-discord.service \
+  technocore-safe-agent-metadata-block.service; do
   systemctl is-active --quiet "$svc" || fail "service_not_active:$svc"
 done
 
@@ -73,6 +88,8 @@ SIG_PID=$(systemctl show technocore-safe-agent-signer.service -p MainPID --value
 SIG_NR=$(systemctl show technocore-safe-agent-signer.service -p NRestarts --value)
 DIS_PID=$(systemctl show technocore-safe-agent-discord.service -p MainPID --value)
 DIS_NR=$(systemctl show technocore-safe-agent-discord.service -p NRestarts --value)
+META_PID=$(systemctl show technocore-safe-agent-metadata-block.service -p MainPID --value)
+META_NR=$(systemctl show technocore-safe-agent-metadata-block.service -p NRestarts --value)
 
 "${GIT[@]}" show "$REF:src/flop_agent/sonnet_registration_fresh_recovery_20260917.py" > "$MODULE"
 chmod 0444 "$MODULE"
@@ -180,6 +197,8 @@ PY
 [[ "$(systemctl show technocore-safe-agent-signer.service -p NRestarts --value)" == "$SIG_NR" ]] || fail signer_restarts_changed
 [[ "$(systemctl show technocore-safe-agent-discord.service -p MainPID --value)" == "$DIS_PID" ]] || fail discord_pid_changed
 [[ "$(systemctl show technocore-safe-agent-discord.service -p NRestarts --value)" == "$DIS_NR" ]] || fail discord_restarts_changed
+[[ "$(systemctl show technocore-safe-agent-metadata-block.service -p MainPID --value)" == "$META_PID" ]] || fail metadata_pid_changed
+[[ "$(systemctl show technocore-safe-agent-metadata-block.service -p NRestarts --value)" == "$META_NR" ]] || fail metadata_restarts_changed
 [[ "$("${GIT[@]}" rev-parse HEAD)" == "$PROD_HEAD" ]] || fail repo_head_changed
 [[ -z "$("${GIT[@]}" status --porcelain=v1 --untracked-files=all)" ]] || fail final_dirty_tree
 
@@ -200,4 +219,5 @@ echo "RESIDENT_PRESERVED=$RES_PID/NRestarts=$RES_NR"
 echo "CAPTURE_PRESERVED=$CAP_PID/NRestarts=$CAP_NR"
 echo "SIGNER_PRESERVED=$SIG_PID/NRestarts=$SIG_NR"
 echo "DISCORD_PRESERVED=$DIS_PID/NRestarts=$DIS_NR"
+echo "METADATA_PRESERVED=$META_PID/NRestarts=$META_NR"
 echo 'NO_BLIND_RERUN=YES'
