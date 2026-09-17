@@ -184,6 +184,126 @@ def test_pre_cockpit_history_is_not_replayed(state_root):
     assert activity.poll_notices(room_read=empty_rooms) == []
 
 
+def test_repeated_open_seat_pings_are_semantically_deduped(state_root):
+    sender = "did:key:z6MkForumLeader"
+    rows = []
+    for seq, request_id in ((129435, "ping-1"), (129444, "ping-2"), (129451, "ping-3")):
+        rows.append(
+            {
+                "from": sender,
+                "seq": seq,
+                "ts": "2026-09-17T08:27:00Z",
+                "nonce": str(seq),
+                "sig": "x",
+                "text": json.dumps(
+                    {
+                        "type": "sonnet.reply.v1",
+                        "target_did": activity.MARU_DID,
+                        "request_id": request_id,
+                        "text": "TEAM ForumEvi-Poets open seat! Equal split. Reply yes-ForumEvi-Poets with your DID to join.",
+                    }
+                ),
+            }
+        )
+
+    def read(room, **kwargs):
+        return {"messages": rows} if room == activity.DISCOVERY_ROOM else {"messages": []}
+
+    notices = activity.poll_notices(room_read=read)
+    assert len(notices) == 1
+    assert "📨 Sonnetチーム参加募集" in notices[0]
+    assert "ForumEvi-Poets" in notices[0]
+    assert "返信不要" in notices[0]
+    assert "自動同意はしていません" in notices[0]
+    assert "ping-" not in notices[0]
+    assert activity.MARU_DID not in notices[0]
+    assert activity.poll_notices(room_read=read) == []
+
+
+def test_repeated_roster_churn_same_generation_is_one_human_notice(state_root):
+    sender = "did:key:z6MkForumLeader"
+    other_a = "did:key:z6MkOtherA"
+    other_b = "did:key:z6MkOtherB"
+    rows = []
+    for seq, request_id, fourth in (
+        (129440, "roster-1", other_a),
+        (129454, "roster-2", other_b),
+        (129477, "roster-3", other_a),
+    ):
+        rows.append(
+            {
+                "from": sender,
+                "seq": seq,
+                "ts": "2026-09-17T08:28:00Z",
+                "nonce": str(seq),
+                "sig": "x",
+                "text": json.dumps(
+                    {
+                        "type": "sonnet.roster.v1",
+                        "contest_id": "sonnet-2",
+                        "game_id": "ForumEvi-Poets",
+                        "poem_room": "d-sonnet-2-team-forumevi-poets",
+                        "room_generation": 1,
+                        "members": [sender, activity.MARU_DID, "did:key:z6MkOtherC", fourth],
+                        "request_id": request_id,
+                    }
+                ),
+            }
+        )
+
+    def read(room, **kwargs):
+        return {"messages": rows} if room == activity.DISCOVERY_ROOM else {"messages": []}
+
+    notices = activity.poll_notices(room_read=read)
+    assert len(notices) == 1
+    assert "👥 Sonnetチーム候補" in notices[0]
+    assert "ForumEvi-Poets" in notices[0]
+    assert "候補 4名" in notices[0]
+    assert "正式承認でもMARUの同意でもありません" in notices[0]
+    assert "members" not in notices[0]
+    assert "roster-" not in notices[0]
+    assert activity.MARU_DID not in notices[0]
+    assert other_a not in notices[0]
+    assert other_b not in notices[0]
+    assert activity.poll_notices(room_read=read) == []
+
+
+def test_roster_new_generation_can_notify_again(state_root):
+    sender = "did:key:z6MkForumLeader"
+
+    def row(seq, generation):
+        return {
+            "from": sender,
+            "seq": seq,
+            "ts": "2026-09-17T08:30:00Z",
+            "nonce": str(seq),
+            "sig": "x",
+            "text": json.dumps(
+                {
+                    "type": "sonnet.roster.v1",
+                    "contest_id": "sonnet-2",
+                    "game_id": "ForumEvi-Poets",
+                    "poem_room": "d-sonnet-2-team-forumevi-poets",
+                    "room_generation": generation,
+                    "members": [sender, activity.MARU_DID, "did:key:z6MkOtherC", "did:key:z6MkOtherD"],
+                    "request_id": f"roster-generation-{generation}",
+                }
+            ),
+        }
+
+    current = [row(129500, 1)]
+
+    def read(room, **kwargs):
+        return {"messages": current} if room == activity.DISCOVERY_ROOM else {"messages": []}
+
+    first = activity.poll_notices(room_read=read)
+    assert len(first) == 1
+    current[:] = [row(129700, 2)]
+    second = activity.poll_notices(room_read=read)
+    assert len(second) == 1
+    assert "ForumEvi-Poets" in second[0]
+
+
 def test_retains_audited_discord_entrypoint_and_wires_activity_layer():
     service = Path("packaging/oracle/discord.service").read_text("utf-8")
     health = Path("src/flop_agent/discord_health_coalescing.py").read_text("utf-8")
