@@ -114,6 +114,17 @@ def test_first_green_is_suppressed_until_five_minutes_stable(monkeypatch, tmp_pa
     assert coalescing._load_state()["incident_open"] is False
 
 
+def test_green_without_wrapper_incident_state_is_still_humanized(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    raw(monkeypatch, [GREEN])
+    notices = coalescing._coalesced_system_notices(object())
+    assert len(notices) == 1
+    assert notices[0].startswith("🟢 監視復旧")
+    assert "今やること: なし" in notices[0]
+    assert "通常状態に戻りました" in notices[0]
+    assert "Observer" not in notices[0]
+
+
 def test_redegrade_during_recovery_grace_keeps_one_incident_open(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     raw(monkeypatch, [RED_DEGRADED])
@@ -139,7 +150,7 @@ def test_gap_notice_is_humanized_without_changing_gap_logic(monkeypatch, tmp_pat
     assert len(notices) == 1
     assert notices[0].startswith("🟡 通信抜けを複数検出")
     assert "今やること: 基本は待機" in notices[0]
-    assert "今回 +3件" in notices[0]
+    assert "今回 3件" in notices[0]
     assert "最終監視 1分前" in notices[0]
     assert "必要なら: `/status` で詳細確認" in notices[0]
     assert "gap" not in notices[0]
