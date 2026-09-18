@@ -57,6 +57,20 @@ REVENUE = """
 HOME = """
 <html><body>
 <p>Follow @flop_labs for airdrop eligibility</p>
+<a href="/apply/kol">KOLs & creators</a>
+</body></html>
+"""
+
+KOL = """
+<html><body>
+<h1>FLOP KOL Survey</h1>
+<p>Interested in contributing to the FLOP ecosystem?</p>
+<p>I understand that submitting this form does not constitute an offer, agreement, or guarantee
+of selection or participation and does not entitle me to any compensation, payment, token,
+token allocation, reward, benefit, or anything else of monetary value. Any future program,
+if offered, may be subject to separate eligibility requirements and terms.</p>
+<p>FLOP may use this form to evaluate potential participation in future programs. Any future program,
+if offered, may be subject to separate eligibility requirements and terms.</p>
 </body></html>
 """
 
@@ -97,6 +111,7 @@ def pages() -> dict[str, str]:
         "agent": AGENT,
         "revenue": REVENUE,
         "home": HOME,
+        "kol_application": KOL,
         "github_org": GITHUB,
     }
 
@@ -146,6 +161,9 @@ def test_current_fact_model_preserves_authority_and_conflicts() -> None:
     assert report["resolved_facts"]["testnet_window"]["value"] == "Q4 2026"
     assert report["resolved_facts"]["mainnet_window"]["value"] == "Q1 2027"
     assert report["resolved_facts"]["official_airdrop_x_handle"]["value"] == "@flop_labs"
+    assert report["resolved_facts"]["kol_application_status"]["value"] == "form_available"
+    assert report["resolved_facts"]["kol_compensation_guaranteed"]["value"] is False
+    assert report["resolved_facts"]["kol_program_terms_status"]["value"] == "future_programs_separate_terms"
 
 
 def test_hidden_script_and_style_text_never_becomes_fact() -> None:
@@ -519,6 +537,17 @@ def test_interest_link_parser_ignores_external_and_irrelevant_links() -> None:
         "https://flop.finance/claim/",
         "https://flop.finance/testnet/",
     ]
+
+
+def test_kol_program_disclaimer_change_is_high_not_auto_action() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    after["resolved_facts"]["kol_compensation_guaranteed"]["value"] = True
+    after["snapshot_id"] = "kol-terms-changed"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["key"] == "kol_compensation_guaranteed")
+    assert event["severity"] == "HIGH"
+    assert event["severity"] != "ACTION_NOW"
 
 
 def test_radar_module_has_no_external_write_client_calls() -> None:
