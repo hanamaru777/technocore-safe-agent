@@ -26,7 +26,7 @@ SIGNER_BLOB_SHA = "81202baa03bff62204fa9ac34ce1f9fd969ddf67"
 INVISIBLE_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Zl", "Zp"}
 CONTRIBUTION_NOTICE = "Community convention only; not a FLOP official airdrop registry."
 SECRET_PATTERN = re.compile(r"(?i)(?:\b[0-9a-f]{64}\b|SIGN_SEED\s*=\s*[^\s'\"]+|(?:api[_-]?key|secret|private[_-]?key)\s*[:=]\s*[^\s'\"]+)")
-PUBLIC_HASH_ASSIGNMENT_RE = re.compile(r"\b[A-Z][A-Z0-9_]*(?:SHA(?:256)?|HASH)\s*=\s*['\"][0-9a-fA-F]{64}['\"]")
+PUBLIC_HASH_ASSIGNMENT_RE = re.compile(r"\b(?:EXPECTED_(?:POEM_)?SHA(?:256)?|POEM_SHA(?:256)?)\s*=\s*['\"][0-9a-fA-F]{64}['\"]")
 
 
 class SubmissionAmbiguityError(RuntimeError):
