@@ -64,3 +64,8 @@ def test_expected_sha_and_poem_sha_are_explicitly_supported():
     value = "d" * 64
     assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(f'EXPECTED_SHA="{value}"')
     assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(f'POEM_SHA="{value}"')
+
+
+def test_reachable_history_blob_map_covers_current_core_file():
+    mapping = core._reachable_history_blob_paths()
+    assert any("src/flop_agent/core.py" in paths for paths in mapping.values())
