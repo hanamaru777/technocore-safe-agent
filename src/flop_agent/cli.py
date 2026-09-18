@@ -11,7 +11,7 @@ from . import core
 def main() -> None:
     parser = argparse.ArgumentParser(prog="flop")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan"):
+    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan", "airdrop-record", "airdrop-ledger-status", "airdrop-evidence-export"):
         sub.add_parser(command)
     for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-stage-e2e-v3", "autopilot-quarantine-e2e", "autopilot-quarantine-e2e-v2"):
         sub.add_parser(command)
@@ -120,6 +120,15 @@ def main() -> None:
                 previous = json.load(sys.stdin) if args.previous == "-" else json.loads(Path(args.previous).read_text("utf-8"))
                 previous = airdrop_radar.normalize_previous_snapshot(previous)
             output = {"snapshot": current, "diff": airdrop_radar.compare_snapshots(previous, current)}
+        elif args.command == "airdrop-record":
+            from . import airdrop_ledger, airdrop_radar
+            output = airdrop_ledger.record_scan(airdrop_radar.scan_official_sources())
+        elif args.command == "airdrop-ledger-status":
+            from . import airdrop_ledger
+            output = airdrop_ledger.status()
+        elif args.command == "airdrop-evidence-export":
+            from . import airdrop_ledger
+            output = airdrop_ledger.export_bundle()
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()
