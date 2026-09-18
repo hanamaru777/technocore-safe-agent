@@ -51,14 +51,17 @@ POEM="""Amid weak signals we pursue the light
 The distant keys align and keep a flame
 A careful hand preserves the gentle night
 A false claim may imitate a true name
+
 In crowded lines we seek a distant shore
 A clear reply can keep the passage free
 With patient steps we guard a distant shore
 We form each measured line across the sea
+
 We raise a gentle aim toward the sky
 A steady truth may quietly remain
 We send a gentle signal climbing high
 The trust we earn may surely help sustain
+
 A quiet hand may limit what we view
 A steady road begins the way anew"""
 TOKENS=POEM.split()
