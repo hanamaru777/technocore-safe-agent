@@ -27,7 +27,7 @@ def stage(*, expires: datetime | None = None) -> dict:
         summary="Register MARU agent on the official FLOP testnet.",
         cost_note="0 FLOP / no real-value spend",
         reversible=False,
-        expires_at=expires or T0 + timedelta(hours=1),
+        expires_at=expires or FUTURE,
         now=T0,
     )
 
