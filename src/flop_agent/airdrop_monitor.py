@@ -492,7 +492,7 @@ def run_once(
         repaired_approvals = len(staging.get("repaired", []))
     except Exception as error:
         # Approval staging is fail-closed but isolated from Radar evidence and
-        # ordinary alert delivery. Discord health reporting exposes the error.
+        # ordinary alert delivery. Operator health reporting exposes the error.
         staging_outcome = "failed"
         staging_error_type = error.__class__.__name__
 
