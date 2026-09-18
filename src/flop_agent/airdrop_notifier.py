@@ -231,6 +231,9 @@ def _render_health_problem(status: dict) -> str:
     reasons: list[str] = []
     if status.get("outcome") in PROBLEM_OUTCOMES:
         reasons.append(str(status.get("outcome")))
+    if status.get("staging_outcome") == "failed":
+        detail = status.get("staging_error_type") or "unknown"
+        reasons.append(f"action_staging_failed:{detail}")
     if status.get("heartbeat_stale") and status.get("last_completed_at"):
         reasons.append(
             f"heartbeat stale {status.get('heartbeat_age_seconds')}s"
@@ -262,6 +265,8 @@ def _health_class(status: dict) -> str:
     if outcome == "never_run" or status.get("last_attempt_at") is None:
         return "unknown"
     if outcome in PROBLEM_OUTCOMES:
+        return "problem"
+    if status.get("staging_outcome") == "failed":
         return "problem"
     if status.get("heartbeat_stale") and status.get("last_completed_at"):
         return "problem"
