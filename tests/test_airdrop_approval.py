@@ -8,7 +8,8 @@ import pytest
 from flop_agent import airdrop_approval, core, discord_control, discord_tclk_approval
 
 
-T0 = datetime(2020, 1, 1, 0, 0, tzinfo=UTC)\nFUTURE = datetime(2099, 1, 1, 0, 0, tzinfo=UTC)
+T0 = datetime(2020, 1, 1, 0, 0, tzinfo=UTC)
+FUTURE = datetime(2099, 1, 1, 0, 0, tzinfo=UTC)
 PAYLOAD = "a" * 64
 
 
