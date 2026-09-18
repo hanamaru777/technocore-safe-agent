@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from . import core
 
@@ -14,6 +15,7 @@ def main() -> None:
         sub.add_parser(command)
     for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-stage-e2e-v3", "autopilot-quarantine-e2e", "autopilot-quarantine-e2e-v2"):
         sub.add_parser(command)
+    radar = sub.add_parser("airdrop-radar"); radar.add_argument("--previous")
     compact = sub.add_parser("compact-observer-state"); compact.add_argument("--apply", action="store_true")
     agent = sub.add_parser("agent"); agent.add_argument("identifier")
     resident_candidate = sub.add_parser("candidate"); resident_candidate.add_argument("candidate_id")
@@ -110,6 +112,14 @@ def main() -> None:
             elif args.command == "autopilot-session-once": output = autopilot_transport.session_once(args.dry_run)
             elif args.command == "autopilot-session-verify": output = autopilot_transport.verify_session_did()
             else: output = autopilot_transport.publish_one(args.intent_id, args.did)
+        elif args.command == "airdrop-radar":
+            from . import airdrop_radar
+            current = airdrop_radar.scan_official_sources()
+            previous = None
+            if args.previous:
+                previous = json.load(sys.stdin) if args.previous == "-" else json.loads(Path(args.previous).read_text("utf-8"))
+                previous = airdrop_radar.normalize_previous_snapshot(previous)
+            output = {"snapshot": current, "diff": airdrop_radar.compare_snapshots(previous, current)}
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()
