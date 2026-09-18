@@ -566,6 +566,52 @@ def pending_alerts() -> dict:
     }
 
 
+def mark_alerts_delivered(
+    event_ids: list[str],
+    *,
+    transport: str,
+    receipt: str,
+    now: datetime | None = None,
+) -> list[dict]:
+    if (
+        not isinstance(event_ids, list)
+        or not event_ids
+        or len(event_ids) > 100
+        or not all(isinstance(event_id, str) and event_id for event_id in event_ids)
+        or len(set(event_ids)) != len(event_ids)
+    ):
+        raise ValueError("airdrop_monitor_event_ids_invalid")
+    if not isinstance(transport, str) or not 1 <= len(transport) <= 40:
+        raise ValueError("airdrop_monitor_delivery_transport_invalid")
+    if not isinstance(receipt, str) or not 1 <= len(receipt) <= 200:
+        raise ValueError("airdrop_monitor_delivery_receipt_invalid")
+    delivered_at = _utc(now)
+
+    with _alert_lock():
+        state = _load_alerts()
+        selected: list[dict] = []
+        for event_id in event_ids:
+            item = state.get("events", {}).get(event_id)
+            if not isinstance(item, dict):
+                raise RuntimeError("airdrop_monitor_alert_not_found")
+            if item.get("delivery_state") not in {"pending", "delivered"}:
+                raise RuntimeError("airdrop_monitor_alert_delivery_state_invalid")
+            selected.append(item)
+
+        for item in selected:
+            if item.get("delivery_state") == "delivered":
+                continue
+            item["delivery_state"] = "delivered"
+            item["delivered_at"] = delivered_at
+            item["delivery_transport"] = transport
+            item["delivery_receipt"] = receipt
+
+        state["updated_at"] = delivered_at
+        _enforce_alert_capacity(state, load_config()["max_alerts"])
+        _atomic_json_write(_path(ALERTS_NAME), state)
+        return [dict(item) for item in selected]
+
+
 def mark_alert_delivered(
     event_id: str,
     *,
@@ -573,30 +619,13 @@ def mark_alert_delivered(
     receipt: str,
     now: datetime | None = None,
 ) -> dict:
-    if not isinstance(event_id, str) or not event_id:
-        raise ValueError("airdrop_monitor_event_id_invalid")
-    if not isinstance(transport, str) or not 1 <= len(transport) <= 40:
-        raise ValueError("airdrop_monitor_delivery_transport_invalid")
-    if not isinstance(receipt, str) or not 1 <= len(receipt) <= 200:
-        raise ValueError("airdrop_monitor_delivery_receipt_invalid")
-    delivered_at = _utc(now)
-    with _alert_lock():
-        state = _load_alerts()
-        item = state.get("events", {}).get(event_id)
-        if not isinstance(item, dict):
-            raise RuntimeError("airdrop_monitor_alert_not_found")
-        if item.get("delivery_state") == "delivered":
-            return dict(item)
-        if item.get("delivery_state") != "pending":
-            raise RuntimeError("airdrop_monitor_alert_delivery_state_invalid")
-        item["delivery_state"] = "delivered"
-        item["delivered_at"] = delivered_at
-        item["delivery_transport"] = transport
-        item["delivery_receipt"] = receipt
-        state["updated_at"] = delivered_at
-        _enforce_alert_capacity(state, load_config()["max_alerts"])
-        _atomic_json_write(_path(ALERTS_NAME), state)
-        return dict(item)
+    rows = mark_alerts_delivered(
+        [event_id],
+        transport=transport,
+        receipt=receipt,
+        now=now,
+    )
+    return rows[0]
 
 
 def alert_delivery_status(event_id: str) -> dict:
