@@ -374,7 +374,7 @@ def _numeric_param_fact(
     )
     if not match:
         return None
-    return _fact(
+    row = _fact(
         key=param,
         value=_parse_int(match.group(1)),
         unit=unit,
@@ -382,6 +382,8 @@ def _numeric_param_fact(
         status=status,
         evidence=_context(text, *match.span()),
     )
+    row["_match_start"] = match.start()
+    return row
 
 
 def _status_fact(text: str, source: SourceSpec, item: str, key: str) -> dict | None:
@@ -473,7 +475,7 @@ def _extract_yellowpaper(text: str, source: SourceSpec) -> list[dict]:
     for param, unit in operational_params:
         row = _numeric_param_fact(text, source, param, unit)
         if row:
-            match_pos = text.lower().find(param.lower())
+            match_pos = int(row.pop("_match_start"))
             if reference_marker >= 0 and match_pos > reference_marker:
                 row["status"] = "reference_only_unenforced"
             facts.append(row)
