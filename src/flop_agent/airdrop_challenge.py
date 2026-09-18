@@ -639,15 +639,17 @@ def _collaboration_status(spec: dict, progress: dict, gate: str) -> dict:
         alternates_ready = len([row for row in alternate_rows if row])
 
     failures: list[str] = []
-    if not primary:
-        failures.append("primary_route_missing")
-    elif binding_required and not _binding_ready(primary_row):
-        failures.append("primary_not_binding_ready")
-    elif responsive_required and not _responsive_ready(primary_row):
-        failures.append("primary_not_proven_responsive")
+    routes_enforced = gate in {"T-12h", "T-6h", "T-2h", "T-30m", "T-10m"}
+    if routes_enforced:
+        if not primary:
+            failures.append("primary_route_missing")
+        elif binding_required and not _binding_ready(primary_row):
+            failures.append("primary_not_binding_ready")
+        elif responsive_required and not _responsive_ready(primary_row):
+            failures.append("primary_not_proven_responsive")
 
-    if gate in {"T-12h", "T-6h", "T-2h", "T-30m", "T-10m"} and alternates_ready < 2:
-        failures.append("fewer_than_two_ready_alternates")
+        if alternates_ready < 2:
+            failures.append("fewer_than_two_ready_alternates")
 
     return {
         "required": True,
