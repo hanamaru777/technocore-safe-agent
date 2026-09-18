@@ -382,6 +382,54 @@ def test_repeated_same_event_is_not_requeued(isolated_state: Path) -> None:
     assert sum(item["event_id"] == forward_id for item in outbox) == 1
 
 
+def test_alert_capacity_failure_is_visible_and_does_not_evict_pending(
+    isolated_state: Path,
+) -> None:
+    base = isolated_state / "airdrop-radar"
+    base.mkdir(parents=True, exist_ok=True)
+    config = {
+        **airdrop_monitor.DEFAULT_CONFIG,
+        "max_alerts": 10,
+    }
+    (base / "monitor-config.json").write_text(json.dumps(config), "utf-8")
+
+    existing = {
+        "schema_version": airdrop_monitor.SCHEMA_VERSION,
+        "updated_at": T0.isoformat(),
+        "events": {
+            f"existing-{i}": {
+                "event_id": f"existing-{i}",
+                "first_queued_at": T0.isoformat(),
+                "last_seen": T0.isoformat(),
+                "route": "immediate",
+                "delivery_state": "pending",
+                "payload": {"event_id": f"existing-{i}"},
+            }
+            for i in range(10)
+        },
+    }
+    (base / "alert-outbox.json").write_text(json.dumps(existing), "utf-8")
+
+    first = high_snapshot("s1", 1, T0, "a")
+    second = high_snapshot("s2", 2, T0 + timedelta(minutes=15), "b")
+    airdrop_monitor.run_once(scanner=lambda: first, now=T0)
+
+    with pytest.raises(RuntimeError, match="alert_capacity_exceeded"):
+        airdrop_monitor.run_once(
+            scanner=lambda: second,
+            now=T0 + timedelta(minutes=15),
+        )
+
+    persisted = json.loads((base / "alert-outbox.json").read_text("utf-8"))
+    assert len(persisted["events"]) == 10
+    assert all(
+        item["delivery_state"] == "pending"
+        for item in persisted["events"].values()
+    )
+    heartbeat = json.loads((base / "monitor-heartbeat.json").read_text("utf-8"))
+    assert heartbeat["outcome"] == "alert_routing_failed"
+
+
 def test_status_exposes_heartbeat_age_and_staleness(isolated_state: Path) -> None:
     snap = high_snapshot("s1", 1, T0, "a")
     airdrop_monitor.run_once(scanner=lambda: snap, now=T0)
