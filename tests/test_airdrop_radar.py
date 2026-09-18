@@ -550,6 +550,34 @@ def test_kol_program_disclaimer_change_is_high_not_auto_action() -> None:
     assert event["severity"] != "ACTION_NOW"
 
 
+def test_official_opportunity_link_removal_is_visible() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    home_before = next(row for row in before["sources"] if row["name"] == "home")
+    home_after = next(row for row in after["sources"] if row["name"] == "home")
+    home_before["interest_links"] = ["https://flop.finance/apply/kol"]
+    home_after["interest_links"] = []
+    home_after["content_sha256"] = "home-link-removed"
+    after["snapshot_id"] = "link-removed"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["type"] == "OFFICIAL_LINK_REMOVED")
+    assert event["severity"] == "MEDIUM"
+
+
+def test_kol_form_redirect_target_change_is_high() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    kol_before = next(row for row in before["sources"] if row["name"] == "kol_application")
+    kol_after = next(row for row in after["sources"] if row["name"] == "kol_application")
+    kol_before["final_url"] = "https://docs.google.com/forms/d/e/old/viewform"
+    kol_after["final_url"] = "https://docs.google.com/forms/d/e/new/viewform"
+    after["snapshot_id"] = "kol-target-changed"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["type"] == "SOURCE_TARGET_CHANGED")
+    assert event["key"] == "source:kol_application:target"
+    assert event["severity"] == "HIGH"
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
