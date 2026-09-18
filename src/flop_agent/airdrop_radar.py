@@ -833,6 +833,21 @@ def scan_official_sources(
     }
 
 
+def normalize_previous_snapshot(value: object) -> dict:
+    """Accept a raw snapshot or the prior CLI wrapper; reject everything else."""
+    if isinstance(value, dict) and isinstance(value.get("snapshot"), dict):
+        value = value["snapshot"]
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(value.get("snapshot_id"), str)
+        or not isinstance(value.get("resolved_facts"), dict)
+        or not isinstance(value.get("sources"), list)
+    ):
+        raise RuntimeError("airdrop_radar_previous_snapshot_invalid")
+    return value
+
+
 def deadline_gate(timestamp: str, now: datetime | None = None) -> dict:
     parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
