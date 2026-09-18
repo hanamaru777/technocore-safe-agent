@@ -493,10 +493,20 @@ def stage_durable_event(durable: dict, *, now: datetime | None = None) -> dict |
     event = durable.get("event")
     if not isinstance(event, dict):
         raise StagingBridgeError("airdrop_stager_event_missing")
+    event_id = event.get("event_id")
+    if not isinstance(event_id, str):
+        raise StagingBridgeError("airdrop_stager_event_id_invalid")
+    canonical = _ledger_records_by_id().get(event_id)
+    if (
+        not isinstance(canonical, dict)
+        or canonical.get("hash") != durable.get("hash")
+        or canonical.get("event") != event
+    ):
+        raise StagingBridgeError("airdrop_stager_event_not_canonical_ledger_record")
     raw = event.get("action_candidate")
     if raw is None:
         return None
-    candidate = _validate_candidate(durable, raw, current)
+    candidate = _validate_candidate(canonical, raw, current)
     stored = _persist_candidate(candidate, current)
     return _bind_approval(stored["candidate_id"], current)
 
