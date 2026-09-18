@@ -710,19 +710,18 @@ def _extract_kol_application(text: str, source: SourceSpec) -> list[dict]:
                 evidence=_context(text, *disclaimer.span()),
             )
         )
-    future = re.search(
-        r"potential participation in future programs.{0,180}?separate eligibility requirements and terms",
-        text,
-        re.IGNORECASE,
-    )
-    if future:
+    future_start = re.search(r"potential participation in future programs", text, re.IGNORECASE)
+    separate_terms = re.search(r"separate eligibility requirements and terms", text, re.IGNORECASE)
+    if future_start and separate_terms:
+        evidence_start = min(future_start.start(), separate_terms.start())
+        evidence_end = max(future_start.end(), separate_terms.end())
         facts.append(
             _fact(
                 key="kol_program_terms_status",
                 value="future_programs_separate_terms",
                 source=source,
                 status="official",
-                evidence=_context(text, *future.span()),
+                evidence=_context(text, evidence_start, evidence_end, radius=40),
             )
         )
     return facts
