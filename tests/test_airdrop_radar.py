@@ -17,6 +17,18 @@ YELLOW = """
 <p>genesis_supply = 4,400,000,000 FLOP</p>
 <p>genesis_agent_airdrop = 1,200,000,000 FLOP</p>
 <p>genesis_reserve = 800,000,000 FLOP</p>
+<p>The session-key lifetime MUST be ≤ 864,000 blocks (SessionKeysMaxDuration).</p>
+<p>Agent wallet / session keys</p>
+<p>agent_identity_min_stake | 10 FLOP</p>
+<p>circuit_breaker_tx_count | 100 count</p>
+<p>circuit_breaker_flop_cap | 250 FLOP</p>
+<p>Sessions / capacity reservations</p>
+<p>max_active_reservations_base | 4 count</p>
+<p>escrow_per_reservation_slot | 50 FLOP</p>
+<p>Reference-only — canonical documented values, single-site or not yet wired for cross-language enforcement (enforce: false).</p>
+<p>agent_daily_cap_autonomous | 500 FLOP</p>
+<p>agent_per_tx_limit | 100 FLOP</p>
+<p>circuit_breaker_window | 60 blocks</p>
 <p>airdrop_vesting_duration_blocks | 7_776_000 blocks</p>
 <p>E.38 — Genesis allocation & airdrop vesting [TBD]. The claim path is unspecified.
 Still open: cap levels and the sublinear form on the conversion score, activity minimums,
@@ -156,6 +168,17 @@ def test_current_fact_model_preserves_authority_and_conflicts() -> None:
     assert report["resolved_facts"]["spend_to_unlock_ratio"]["value"] == "3:1"
     assert report["resolved_facts"]["activity_minimums_status"]["value"] == "open"
     assert report["resolved_facts"]["balance_is_scoring_term"]["value"] is False
+    assert report["resolved_facts"]["agent_identity_min_stake"]["value"] == 10
+    assert report["resolved_facts"]["agent_identity_min_stake"]["status"] == "normative"
+    assert report["resolved_facts"]["circuit_breaker_tx_count"]["value"] == 100
+    assert report["resolved_facts"]["circuit_breaker_flop_cap"]["value"] == 250
+    assert report["resolved_facts"]["max_active_reservations_base"]["value"] == 4
+    assert report["resolved_facts"]["escrow_per_reservation_slot"]["value"] == 50
+    assert report["resolved_facts"]["agent_daily_cap_autonomous"]["value"] == 500
+    assert report["resolved_facts"]["agent_daily_cap_autonomous"]["status"] == "reference_only_unenforced"
+    assert report["resolved_facts"]["agent_per_tx_limit"]["status"] == "reference_only_unenforced"
+    assert report["resolved_facts"]["circuit_breaker_window"]["status"] == "reference_only_unenforced"
+    assert report["resolved_facts"]["session_key_max_duration_blocks"]["value"] == 864_000
     assert report["resolved_facts"]["testnet_status"]["value"] == "planned"
     assert report["resolved_facts"]["faucet_status"]["value"] == "planned"
     assert report["resolved_facts"]["testnet_window"]["value"] == "Q4 2026"
@@ -575,6 +598,16 @@ def test_kol_form_redirect_target_change_is_high() -> None:
     events = airdrop_radar.compare_snapshots(before, after)["events"]
     event = next(row for row in events if row["type"] == "SOURCE_TARGET_CHANGED")
     assert event["key"] == "source:kol_application:target"
+    assert event["severity"] == "HIGH"
+
+
+def test_agent_operating_cap_change_is_high() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    after["resolved_facts"]["agent_identity_min_stake"]["value"] = 25
+    after["snapshot_id"] = "agent-stake-changed"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["key"] == "agent_identity_min_stake")
     assert event["severity"] == "HIGH"
 
 
