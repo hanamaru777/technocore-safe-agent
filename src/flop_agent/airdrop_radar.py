@@ -150,6 +150,10 @@ INTERESTING_REPO_RE = re.compile(
     r"(?:airdrop|testnet|challenge|yellowpaper|technocore|tclk|flop-core)",
     re.IGNORECASE,
 )
+CRITICAL_REPO_RE = re.compile(
+    r"(?:airdrop|testnet|challenge|yellowpaper)",
+    re.IGNORECASE,
+)
 EXACT_DEADLINE_RE = re.compile(
     r"(?i)\b(deadline|cutoff|closes?|ends?)\b.{0,100}?"
     r"(20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2}))"
@@ -390,7 +394,6 @@ def _numeric_param_fact(
         status=status,
         evidence=_context(text, *match.span()),
     )
-    row["_match_start"] = match.start()
     return row
 
 
@@ -469,7 +472,11 @@ def _extract_yellowpaper(text: str, source: SourceSpec) -> list[dict]:
         if row:
             facts.append(row)
 
-    reference_marker = text.lower().find("reference-only")
+    reference_only_params = {
+        "agent_daily_cap_autonomous",
+        "agent_per_tx_limit",
+        "circuit_breaker_window",
+    }
     operational_params = (
         ("agent_identity_min_stake", "FLOP"),
         ("circuit_breaker_tx_count", "count"),
@@ -483,8 +490,7 @@ def _extract_yellowpaper(text: str, source: SourceSpec) -> list[dict]:
     for param, unit in operational_params:
         row = _numeric_param_fact(text, source, param, unit)
         if row:
-            match_pos = int(row.pop("_match_start"))
-            if reference_marker >= 0 and match_pos > reference_marker:
+            if param in reference_only_params:
                 row["status"] = "reference_only_unenforced"
             facts.append(row)
 
@@ -863,6 +869,7 @@ def _extract_github_org(body: str, source: SourceSpec) -> list[dict]:
         )
     interest.sort(key=lambda row: row["name"])
     names = [row["name"] for row in interest]
+    critical = [row for row in interest if CRITICAL_REPO_RE.search(row["name"])]
     return [
         _fact(
             key="github_interest_repo_names",
@@ -870,6 +877,13 @@ def _extract_github_org(body: str, source: SourceSpec) -> list[dict]:
             source=source,
             status="engineering",
             evidence=_canonical(names),
+        ),
+        _fact(
+            key="github_critical_repo_activity",
+            value=critical,
+            source=source,
+            status="engineering",
+            evidence=_canonical(critical),
         ),
         _fact(
             key="github_interest_repo_activity",
@@ -1094,6 +1108,8 @@ def _severity(key: str, after: dict | None, event_type: str) -> str:
     if key in HIGH_KEYS:
         return "HIGH"
     if key == "github_interest_repo_names":
+        return "MEDIUM"
+    if key == "github_critical_repo_activity":
         return "MEDIUM"
     if key == "github_interest_repo_activity":
         return "INFO"
