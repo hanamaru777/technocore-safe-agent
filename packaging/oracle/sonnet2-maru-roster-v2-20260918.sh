@@ -107,7 +107,7 @@ def get_room(room,since=0):
     try:
         r=core.httpx.get(
           f"{core.BASE_URL}/r/{room}",
-          params={"format":"json","since":since,"wait":0},
+          params={"format":"json","since":since,"limit":250,"wait":0},
           timeout=20,
         )
         r.raise_for_status()
