@@ -13,7 +13,7 @@ import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -21,6 +21,7 @@ from . import airdrop_ledger
 
 SCHEMA_VERSION = 1
 MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+MAX_REDIRECTS = 5
 CHALLENGE_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 ROUTE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
@@ -561,27 +562,37 @@ def pin_artifact_bytes(
 
 
 def _read_official_bytes(url: str) -> bytes:
-    _validate_public_url(url)
-    with httpx.stream(
-        "GET",
-        url,
-        follow_redirects=True,
-        timeout=20,
-        headers={"User-Agent": "technocore-safe-agent-challenge-runner/1"},
-    ) as response:
-        response.raise_for_status()
-        _validate_public_url(str(response.url))
-        length = response.headers.get("content-length")
-        if length and length.isdigit() and int(length) > MAX_ARTIFACT_BYTES:
-            raise RuntimeError("challenge_artifact_too_large")
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in response.iter_bytes():
-            total += len(chunk)
-            if total > MAX_ARTIFACT_BYTES:
-                raise RuntimeError("challenge_artifact_too_large")
-            chunks.append(chunk)
-        return b"".join(chunks)
+    current = _validate_public_url(url)
+    headers = {"User-Agent": "technocore-safe-agent-challenge-runner/1"}
+    with httpx.Client(timeout=20, headers=headers, follow_redirects=False) as client:
+        for redirect_count in range(MAX_REDIRECTS + 1):
+            _validate_public_url(current)
+            with client.stream("GET", current) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise RuntimeError("challenge_redirect_missing_location")
+                    if redirect_count >= MAX_REDIRECTS:
+                        raise RuntimeError("challenge_redirect_limit")
+                    # Validate the next hop before any request is made to it.
+                    current = _validate_public_url(urljoin(current, location))
+                    continue
+
+                response.raise_for_status()
+                _validate_public_url(str(response.url))
+                length = response.headers.get("content-length")
+                if length and length.isdigit() and int(length) > MAX_ARTIFACT_BYTES:
+                    raise RuntimeError("challenge_artifact_too_large")
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > MAX_ARTIFACT_BYTES:
+                        raise RuntimeError("challenge_artifact_too_large")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+
+    raise RuntimeError("challenge_redirect_limit")
 
 
 def fetch_and_pin_artifact(
