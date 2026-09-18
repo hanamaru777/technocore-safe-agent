@@ -412,6 +412,85 @@ def test_previous_snapshot_accepts_raw_or_cli_wrapper_and_rejects_invalid() -> N
         airdrop_radar.normalize_previous_snapshot({"schema_version": 999})
 
 
+def test_tier1_outage_does_not_masquerade_as_rule_change() -> None:
+    before = snapshot()
+    mapping = pages()
+
+    def fetch(spec: airdrop_radar.SourceSpec) -> airdrop_radar.FetchResult:
+        if spec.name == "yellowpaper":
+            raise httpx.ReadTimeout("temporary")
+        return airdrop_radar.FetchResult(mapping[spec.name], spec.url, 5)
+
+    after = airdrop_radar.scan_official_sources(
+        fetcher=fetch,
+        sleeper=lambda _seconds: None,
+    )
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    unavailable = next(
+        row for row in events
+        if row["key"] == "source:yellowpaper:availability"
+    )
+    assert unavailable["type"] == "SOURCE_UNAVAILABLE"
+    assert unavailable["severity"] == "HIGH"
+    assert not any(
+        row["key"] in {
+            "genesis_supply",
+            "genesis_agent_airdrop",
+            "agent_scoring_basis",
+            "e38_status",
+            "e40_status",
+        }
+        and row["type"] in {"CHANGED", "REMOVED", "RESOLVED", "CONFLICT"}
+        for row in events
+    )
+
+
+def test_recovered_source_does_not_reannounce_old_deadline_as_new() -> None:
+    base = snapshot()
+    down = copy.deepcopy(base)
+    yellow = next(row for row in down["sources"] if row["name"] == "yellowpaper")
+    yellow.update({"status": "error", "error_type": "ReadTimeout"})
+    yellow.pop("content_sha256", None)
+    down["deadlines"] = []
+    down["snapshot_id"] = "yellowpaper-down"
+
+    recovered = copy.deepcopy(base)
+    recovered["deadlines"] = [
+        {
+            "label": "deadline",
+            "timestamp": "2026-09-19T00:00:00+00:00",
+            "exact": True,
+            "source": "yellowpaper",
+            "tier": 1,
+            "evidence_sha256": "same-old-deadline",
+        }
+    ]
+    recovered["snapshot_id"] = "yellowpaper-recovered"
+    events = airdrop_radar.compare_snapshots(
+        down,
+        recovered,
+        now=datetime(2026, 9, 18, 12, 0, tzinfo=UTC),
+    )["events"]
+    assert any(
+        row["type"] == "SOURCE_RECOVERED"
+        and row["key"] == "source:yellowpaper:availability"
+        for row in events
+    )
+    assert not any(row["type"] == "NEW_DEADLINE" for row in events)
+
+
+def test_healthy_source_fact_removal_is_still_detected() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    fact = after["resolved_facts"]["official_airdrop_x_handle"]
+    fact["variants"] = []
+    del after["resolved_facts"]["official_airdrop_x_handle"]
+    after["snapshot_id"] = "home-fact-removed"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["key"] == "official_airdrop_x_handle")
+    assert event["type"] == "REMOVED"
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
