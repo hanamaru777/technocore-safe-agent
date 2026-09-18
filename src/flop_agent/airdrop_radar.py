@@ -241,6 +241,11 @@ def _deadline_identity(row: dict) -> str:
     return _sha(basis)
 
 
+def _stable_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed._replace(query="", fragment="").geturl()
+
+
 def _validate_url(url: str, allowed_hosts: tuple[str, ...]) -> None:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
@@ -911,7 +916,7 @@ def _source_report(
         return {
             "name": spec.name,
             "url": spec.url,
-            "final_url": result.final_url,
+            "final_url": _stable_url(result.final_url),
             "tier": spec.tier,
             "authority": spec.authority,
             "critical": spec.critical,
