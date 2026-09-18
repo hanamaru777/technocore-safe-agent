@@ -392,7 +392,11 @@ def _load_current() -> dict | None:
     path = _path(CURRENT_NAME)
     if not path.exists():
         return None
-    return _read_json(path, kind="current_snapshot")
+    wrapper = _read_json(path, kind="current_snapshot")
+    snapshot = wrapper.get("snapshot")
+    if not isinstance(snapshot, dict):
+        raise LedgerIntegrityError("airdrop_ledger_current_snapshot_invalid")
+    return airdrop_radar.normalize_previous_snapshot(snapshot)
 
 
 def _empty_last_success() -> dict:
@@ -775,7 +779,7 @@ def record_scan(snapshot: dict, *, now: datetime | None = None) -> dict:
     _atomic_json_write(_path(LAST_SUCCESS_NAME), updated_last_success)
     _atomic_json_write(
         _path(CURRENT_NAME),
-        {"schema_version": SCHEMA_VERSION, **current},
+        {"schema_version": SCHEMA_VERSION, "snapshot": current},
     )
     _atomic_json_write(_path(STATE_NAME), updated_state)
 
