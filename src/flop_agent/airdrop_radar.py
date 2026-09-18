@@ -116,6 +116,9 @@ HIGH_KEYS = {
     "agent_scoring_accounting_unit",
     "activity_minimums_status",
     "sublinear_conversion_status",
+    "conversion_cap_status",
+    "testnet_to_mainnet_conversion_status",
+    "agent_vesting_status",
     "spend_to_unlock_status",
     "spend_to_unlock_ratio",
     "airdrop_vesting_duration_blocks",
@@ -560,6 +563,39 @@ def _extract_yellowpaper(text: str, source: SourceSpec) -> list[dict]:
                 source=source,
                 status="TBD",
                 evidence=_context(text, start, start + len("sublinear form on the conversion score")),
+            )
+        )
+    if "testnet→mainnet conversion" in text.lower():
+        start = text.lower().index("testnet→mainnet conversion")
+        facts.append(
+            _fact(
+                key="testnet_to_mainnet_conversion_status",
+                value="unspecified",
+                source=source,
+                status="TBD",
+                evidence=_context(text, start, start + len("testnet→mainnet conversion")),
+            )
+        )
+    if "cap levels" in text.lower():
+        start = text.lower().index("cap levels")
+        facts.append(
+            _fact(
+                key="conversion_cap_status",
+                value="open",
+                source=source,
+                status="TBD",
+                evidence=_context(text, start, start + len("cap levels")),
+            )
+        )
+    if "agent vesting horizon" in text.lower():
+        start = text.lower().index("agent vesting horizon")
+        facts.append(
+            _fact(
+                key="agent_vesting_status",
+                value="open",
+                source=source,
+                status="TBD",
+                evidence=_context(text, start, start + len("agent vesting horizon")),
             )
         )
     verified = re.search(r"agents:\s*verified inference spend,\s*unconfirmed", text, re.IGNORECASE)
