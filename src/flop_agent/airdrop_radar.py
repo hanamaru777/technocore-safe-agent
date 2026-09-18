@@ -119,7 +119,6 @@ HIGH_KEYS = {
     "sublinear_conversion_status",
     "conversion_cap_status",
     "testnet_to_mainnet_conversion_status",
-    "agent_vesting_status",
     "spend_to_unlock_status",
     "spend_to_unlock_ratio",
     "airdrop_vesting_duration_blocks",
@@ -942,7 +941,9 @@ def _extract_github_org(body: str, source: SourceSpec) -> list[dict]:
 def _extract_facts(spec: SourceSpec, body: str) -> tuple[str, list[dict], list[dict], dict]:
     if spec.kind == "github_json":
         facts = _extract_github_org(body, spec)
-        normalized = _canonical(json.loads(body))
+        normalized = _canonical(
+            [{"key": fact["key"], "value": fact["value"]} for fact in facts]
+        )
         return normalized, facts, [], {}
     text = _plain_text(body)
     if spec.name == "yellowpaper":
