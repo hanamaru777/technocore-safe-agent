@@ -621,6 +621,18 @@ def test_agent_operating_cap_change_is_high() -> None:
     assert event["severity"] == "HIGH"
 
 
+def test_yellowpaper_repo_push_is_medium_early_signal() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    critical = after["resolved_facts"]["github_critical_repo_activity"]["value"]
+    target = next(row for row in critical if row["name"] == "yellowpaper")
+    target["pushed_at"] = "2026-09-18T05:00:00Z"
+    after["snapshot_id"] = "yellowpaper-push"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["key"] == "github_critical_repo_activity")
+    assert event["severity"] == "MEDIUM"
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
