@@ -90,6 +90,15 @@ SOURCES = (
         ("flop.finance", "www.flop.finance"),
     ),
     SourceSpec(
+        "kol_application",
+        "https://flop.finance/apply/kol",
+        2,
+        "official",
+        "html",
+        False,
+        ("flop.finance", "www.flop.finance", "docs.google.com"),
+    ),
+    SourceSpec(
         "github_org",
         "https://api.github.com/orgs/flop-labs/repos?per_page=100&sort=pushed",
         3,
@@ -119,6 +128,9 @@ HIGH_KEYS = {
     "mainnet_window",
     "e38_status",
     "e40_status",
+    "kol_application_status",
+    "kol_compensation_guaranteed",
+    "kol_program_terms_status",
 }
 ACTION_OPEN_KEYS = {"testnet_status", "faucet_status", "claim_status", "registration_status"}
 ACTION_OPEN_VALUES = {"open", "live", "enabled"}
@@ -136,7 +148,7 @@ DATE_ONLY_DEADLINE_RE = re.compile(
 
 
 INTERESTING_SITE_LINK_RE = re.compile(
-    r"(?:airdrop|testnet|claim|faucet|challenge|campaign|genesis|agent)",
+    r"(?:airdrop|testnet|claim|faucet|challenge|campaign|genesis|agent|kol|creator|ambassador|referral|growth)",
     re.IGNORECASE,
 )
 
@@ -669,6 +681,53 @@ def _extract_home(text: str, source: SourceSpec) -> list[dict]:
     return facts
 
 
+def _extract_kol_application(text: str, source: SourceSpec) -> list[dict]:
+    facts: list[dict] = []
+    title = re.search(r"FLOP KOL Survey", text, re.IGNORECASE)
+    contributing = re.search(r"Interested in contributing to the FLOP ecosystem", text, re.IGNORECASE)
+    if title and contributing:
+        facts.append(
+            _fact(
+                key="kol_application_status",
+                value="form_available",
+                source=source,
+                status="official",
+                evidence=_context(text, *title.span()),
+            )
+        )
+    disclaimer = re.search(
+        r"does not entitle me to any compensation, payment, token, token allocation, reward, benefit",
+        text,
+        re.IGNORECASE,
+    )
+    if disclaimer:
+        facts.append(
+            _fact(
+                key="kol_compensation_guaranteed",
+                value=False,
+                source=source,
+                status="official",
+                evidence=_context(text, *disclaimer.span()),
+            )
+        )
+    future = re.search(
+        r"potential participation in future programs.{0,180}?separate eligibility requirements and terms",
+        text,
+        re.IGNORECASE,
+    )
+    if future:
+        facts.append(
+            _fact(
+                key="kol_program_terms_status",
+                value="future_programs_separate_terms",
+                source=source,
+                status="official",
+                evidence=_context(text, *future.span()),
+            )
+        )
+    return facts
+
+
 def _extract_github_org(body: str, source: SourceSpec) -> list[dict]:
     payload = json.loads(body)
     if not isinstance(payload, list):
@@ -724,6 +783,8 @@ def _extract_facts(spec: SourceSpec, body: str) -> tuple[str, list[dict], list[d
         facts = _extract_revenue(text, spec)
     elif spec.name == "home":
         facts = _extract_home(text, spec)
+    elif spec.name == "kol_application":
+        facts = _extract_kol_application(text, spec)
     else:
         facts = []
     return text, facts, _extract_deadlines(text, spec), _page_meta(text)
