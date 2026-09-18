@@ -633,6 +633,62 @@ def test_yellowpaper_repo_push_is_medium_early_signal() -> None:
     assert event["severity"] == "MEDIUM"
 
 
+def test_github_org_discovery_reads_second_page_when_first_is_full(monkeypatch) -> None:
+    source = next(spec for spec in airdrop_radar.SOURCES if spec.name == "github_org")
+    calls: list[str] = []
+    page1 = [
+        {
+            "name": f"repo-{i}",
+            "pushed_at": "2026-09-18T00:00:00Z",
+            "default_branch": "main",
+            "archived": False,
+        }
+        for i in range(100)
+    ]
+    page2 = [
+        {
+            "name": "new-airdrop-challenge",
+            "pushed_at": "2026-09-18T01:00:00Z",
+            "default_branch": "main",
+            "archived": False,
+        }
+    ]
+
+    def fake_read(url: str, **_kwargs):
+        calls.append(url)
+        return (
+            json.dumps(page1 if "page=1" in url else page2),
+            url,
+        )
+
+    monkeypatch.setattr(airdrop_radar, "_stream_read", fake_read)
+    result = airdrop_radar._network_fetch(source)
+    payload = json.loads(result.body)
+    assert len(payload) == 101
+    assert payload[-1]["name"] == "new-airdrop-challenge"
+    assert len(calls) == 2
+
+
+def test_github_org_discovery_fails_visible_at_pagination_bound(monkeypatch) -> None:
+    source = next(spec for spec in airdrop_radar.SOURCES if spec.name == "github_org")
+    full_page = [
+        {
+            "name": f"challenge-{i}",
+            "pushed_at": "2026-09-18T00:00:00Z",
+            "default_branch": "main",
+            "archived": False,
+        }
+        for i in range(100)
+    ]
+
+    def fake_read(url: str, **_kwargs):
+        return json.dumps(full_page), url
+
+    monkeypatch.setattr(airdrop_radar, "_stream_read", fake_read)
+    with pytest.raises(RuntimeError, match="github_org_pagination_limit"):
+        airdrop_radar._network_fetch(source)
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
