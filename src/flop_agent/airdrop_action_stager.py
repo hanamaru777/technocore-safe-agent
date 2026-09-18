@@ -37,6 +37,10 @@ FORBIDDEN_KEY_RE = re.compile(
     r"signing[_-]?key|bearer|signature|signed[_-]?tx|raw[_-]?transaction)",
     re.IGNORECASE,
 )
+FORBIDDEN_VALUE_RE = re.compile(
+    r"(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,})",
+    re.IGNORECASE,
+)
 HEX24 = re.compile(r"^[0-9a-f]{24}$")
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -108,6 +112,15 @@ def _validate_payload_node(value: object, *, depth: int = 0) -> None:
     if isinstance(value, str):
         if len(value) > 4_000:
             raise StagingBridgeError("airdrop_stager_payload_string_too_long")
+        if FORBIDDEN_VALUE_RE.search(value):
+            raise StagingBridgeError("airdrop_stager_payload_secret_like_value")
+        if value.startswith(("https://", "http://")):
+            parsed = urlparse(value)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or not (
+                host == "flop.finance" or host.endswith(".flop.finance")
+            ):
+                raise StagingBridgeError("airdrop_stager_payload_url_not_allowlisted")
         return
     if isinstance(value, list):
         if len(value) > 128:
@@ -123,13 +136,6 @@ def _validate_payload_node(value: object, *, depth: int = 0) -> None:
                 raise StagingBridgeError("airdrop_stager_payload_key_invalid")
             if FORBIDDEN_KEY_RE.search(key):
                 raise StagingBridgeError("airdrop_stager_payload_secret_like_key")
-            if key.lower() in {"url", "endpoint", "action_url"} and isinstance(item, str):
-                parsed = urlparse(item)
-                host = (parsed.hostname or "").lower()
-                if parsed.scheme != "https" or not (
-                    host == "flop.finance" or host.endswith(".flop.finance")
-                ):
-                    raise StagingBridgeError("airdrop_stager_payload_url_not_allowlisted")
             _validate_payload_node(item, depth=depth + 1)
         return
     raise StagingBridgeError("airdrop_stager_payload_type_invalid")
@@ -314,7 +320,7 @@ def _trusted_evidence(rows: object) -> bool:
             continue
         tier = row.get("tier")
         if (
-            row.get("observation") in {"current", "last_success"}
+            row.get("observation") == "current"
             and row.get("status") == "ok"
             and isinstance(tier, int)
             and tier <= 2
