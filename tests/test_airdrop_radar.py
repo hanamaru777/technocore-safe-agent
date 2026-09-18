@@ -689,6 +689,25 @@ def test_github_org_discovery_fails_visible_at_pagination_bound(monkeypatch) -> 
         airdrop_radar._network_fetch(source)
 
 
+def test_unrelated_github_repo_push_creates_no_radar_event() -> None:
+    before = snapshot()
+    changed = pages()
+    payload = json.loads(changed["github_org"])
+    unrelated = next(row for row in payload if row["name"] == "unrelated-repo")
+    unrelated["pushed_at"] = "2026-09-18T09:00:00Z"
+    changed["github_org"] = json.dumps(payload)
+    after = airdrop_radar.scan_official_sources(
+        fetcher=fetch_from(changed),
+        sleeper=lambda _seconds: None,
+    )
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    assert not any(
+        row["key"].startswith("source:github_org")
+        or row["key"].startswith("github_")
+        for row in events
+    )
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
