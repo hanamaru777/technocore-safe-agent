@@ -563,6 +563,112 @@ def test_challenge_state_is_isolated_under_airdrop_radar(
     assert (expected / "requests.json").is_file()
 
 
+def test_interrupted_create_is_completed_idempotently(
+    isolated_state: Path,
+) -> None:
+    spec = make_spec()
+    airdrop_challenge.create_challenge(spec, now=OPEN)
+    base = (
+        isolated_state
+        / "airdrop-radar"
+        / "challenges"
+        / "future-challenge"
+    )
+    (base / "progress.json").unlink()
+    (base / "requests.json").unlink()
+
+    restored = airdrop_challenge.create_challenge(
+        spec,
+        now=OPEN + timedelta(seconds=1),
+    )
+    assert restored["challenge_id"] == "future-challenge"
+    assert (base / "progress.json").is_file()
+    assert (base / "requests.json").is_file()
+
+
+def test_persisted_artifact_path_is_never_trusted(
+    isolated_state: Path,
+) -> None:
+    create_ready_base(collaboration_required=False)
+    base = (
+        isolated_state
+        / "airdrop-radar"
+        / "challenges"
+        / "future-challenge"
+    )
+    index_path = base / "artifacts.json"
+    index = json.loads(index_path.read_text("utf-8"))
+    index["artifacts"]["validator.py"]["relative_path"] = "../../../../etc/passwd"
+    index_path.write_text(json.dumps(index), "utf-8")
+
+    status = airdrop_challenge.verify_artifacts("future-challenge")
+    assert status["all_required_ok"] is True
+    assert status["artifacts"][0]["reason"] == "ok"
+
+
+def test_ambiguous_same_request_id_cannot_be_replanned(
+    isolated_state: Path,
+) -> None:
+    create_ready_base(collaboration_required=False)
+    payload = {"role": "writer"}
+    airdrop_challenge.plan_request(
+        "future-challenge",
+        action="register",
+        request_id="register-1",
+        payload=payload,
+        now=OPEN,
+    )
+    airdrop_challenge.mark_request(
+        "future-challenge",
+        request_id="register-1",
+        status="ambiguous",
+        now=OPEN + timedelta(seconds=1),
+    )
+    with pytest.raises(RuntimeError, match="ambiguous_request_reconcile_first"):
+        airdrop_challenge.plan_request(
+            "future-challenge",
+            action="register",
+            request_id="register-1",
+            payload=payload,
+            now=OPEN + timedelta(seconds=2),
+        )
+
+
+def test_accepted_state_requires_receipt_hash(
+    isolated_state: Path,
+) -> None:
+    create_ready_base(collaboration_required=False)
+    airdrop_challenge.plan_request(
+        "future-challenge",
+        action="submit",
+        request_id="submit-no-receipt",
+        payload={"entry": "x"},
+        now=OPEN,
+    )
+    with pytest.raises(ValueError, match="receipt_hash_required"):
+        airdrop_challenge.mark_request(
+            "future-challenge",
+            request_id="submit-no-receipt",
+            status="accepted",
+            now=OPEN + timedelta(seconds=1),
+        )
+
+
+def test_primary_cannot_also_be_an_alternate(
+    isolated_state: Path,
+) -> None:
+    create_ready_base()
+    with pytest.raises(ValueError, match="primary_also_alternate"):
+        airdrop_challenge.update_progress(
+            "future-challenge",
+            {
+                "primary_route": "same",
+                "alternate_routes": ["same", "other"],
+            },
+            now=OPEN,
+        )
+
+
 def test_runner_has_get_only_network_and_no_binding_transport() -> None:
     source = inspect.getsource(airdrop_challenge)
     lowered = source.lower()
