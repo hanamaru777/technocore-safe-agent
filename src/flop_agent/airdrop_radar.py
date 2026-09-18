@@ -10,7 +10,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Callable
@@ -639,15 +639,22 @@ def _extract_github_org(body: str, source: SourceSpec) -> list[dict]:
             }
         )
     interest.sort(key=lambda row: row["name"])
-    evidence = _canonical(interest)
+    names = [row["name"] for row in interest]
     return [
         _fact(
-            key="github_interest_repos",
+            key="github_interest_repo_names",
+            value=names,
+            source=source,
+            status="engineering",
+            evidence=_canonical(names),
+        ),
+        _fact(
+            key="github_interest_repo_activity",
             value=interest,
             source=source,
             status="engineering",
-            evidence=evidence,
-        )
+            evidence=_canonical(interest),
+        ),
     ]
 
 
@@ -845,8 +852,10 @@ def _severity(key: str, after: dict | None, event_type: str) -> str:
         return "ACTION_NOW"
     if key in HIGH_KEYS:
         return "HIGH"
-    if key == "github_interest_repos":
+    if key == "github_interest_repo_names":
         return "MEDIUM"
+    if key == "github_interest_repo_activity":
+        return "INFO"
     if event_type == "CONFLICT":
         return "MEDIUM"
     return "INFO"
