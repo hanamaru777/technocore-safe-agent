@@ -342,19 +342,27 @@ def test_new_exact_deadline_within_24h_is_action_now() -> None:
 def test_github_interest_repo_change_is_medium_not_binding_action() -> None:
     before = snapshot()
     after = copy.deepcopy(before)
-    repos = after["resolved_facts"]["github_interest_repos"]["value"]
+    repos = after["resolved_facts"]["github_interest_repo_names"]["value"]
     repos.append(
         {
-            "name": "technocore-new-airdrop-challenge",
-            "pushed_at": "2026-09-18T03:00:00Z",
-            "default_branch": "main",
-            "archived": False,
-        }
+"technocore-new-airdrop-challenge"
     )
     after["snapshot_id"] = "github-repo-added"
     events = airdrop_radar.compare_snapshots(before, after)["events"]
-    event = next(row for row in events if row["key"] == "github_interest_repos")
+    event = next(row for row in events if row["key"] == "github_interest_repo_names")
     assert event["severity"] == "MEDIUM"
+
+
+def test_existing_github_repo_push_is_info_not_medium() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    activity = after["resolved_facts"]["github_interest_repo_activity"]["value"]
+    target = next(row for row in activity if row["name"] == "technocore-chat")
+    target["pushed_at"] = "2026-09-18T04:00:00Z"
+    after["snapshot_id"] = "github-push"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["key"] == "github_interest_repo_activity")
+    assert event["severity"] == "INFO"
 
 
 def test_radar_module_has_no_external_write_client_calls() -> None:
