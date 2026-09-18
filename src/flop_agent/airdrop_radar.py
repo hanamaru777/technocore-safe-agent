@@ -443,7 +443,7 @@ def _numeric_param_fact(
 
 def _status_fact(text: str, source: SourceSpec, item: str, key: str) -> dict | None:
     match = re.search(
-        rf"\b{re.escape(item)}\b.{0,140}?\[(TBD|RATIFY|PARTIAL|PLANNED)\]",
+        rf"\b{re.escape(item)}\b.{{0,140}}?\[(TBD|RATIFY|PARTIAL|PLANNED)\]",
         text,
         flags=re.IGNORECASE,
     )
