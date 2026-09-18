@@ -169,6 +169,17 @@ def _sha(value: object) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
+def _deadline_identity(row: dict) -> str:
+    """Stable identity independent of wording/evidence hash."""
+    basis = {
+        "label": row.get("label"),
+        "timestamp": row.get("timestamp"),
+        "date": row.get("date"),
+        "source": row.get("source"),
+    }
+    return _sha(basis)
+
+
 def _validate_url(url: str, allowed_hosts: tuple[str, ...]) -> None:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
@@ -350,7 +361,7 @@ def _extract_deadlines(text: str, source: SourceSpec) -> list[dict]:
         )
     deduped: dict[str, dict] = {}
     for row in rows:
-        deduped[_sha(row)] = row
+        deduped[_deadline_identity(row)] = row
     return list(deduped.values())
 
 
@@ -937,8 +948,49 @@ def compare_snapshots(
             )
         )
 
-    previous_deadlines = {_sha(row): row for row in previous.get("deadlines", [])}
-    current_deadlines = {_sha(row): row for row in current.get("deadlines", [])}
+    # A lower-tier official source can change while the higher-tier resolved winner
+    # remains stable (for example a teaser changes while E.38 is still TBD).
+    # Preserve that as a material source-variant event instead of hiding it behind
+    # a generic content hash alert.
+    for key in sorted(set(before_facts) & set(after_facts)):
+        before = before_facts[key]
+        after = after_facts[key]
+        if any(row["key"] == key for row in events):
+            continue
+        before_variants = [
+            {
+                "source": row.get("source"),
+                "tier": row.get("tier"),
+                "status": row.get("status"),
+                "value": row.get("value"),
+            }
+            for row in before.get("variants", [])
+        ]
+        after_variants = [
+            {
+                "source": row.get("source"),
+                "tier": row.get("tier"),
+                "status": row.get("status"),
+                "value": row.get("value"),
+            }
+            for row in after.get("variants", [])
+        ]
+        if _canonical(before_variants) == _canonical(after_variants):
+            continue
+        changed_sources.update(str(row.get("source")) for row in before.get("variants", []))
+        changed_sources.update(str(row.get("source")) for row in after.get("variants", []))
+        events.append(
+            _event(
+                event_type="SOURCE_VARIANT_CHANGED",
+                key=key,
+                before=before_variants,
+                after=after_variants,
+                severity="HIGH" if key in HIGH_KEYS else "MEDIUM",
+            )
+        )
+
+    previous_deadlines = {_deadline_identity(row): row for row in previous.get("deadlines", [])}
+    current_deadlines = {_deadline_identity(row): row for row in current.get("deadlines", [])}
     for deadline_id, row in current_deadlines.items():
         if deadline_id in previous_deadlines:
             continue
