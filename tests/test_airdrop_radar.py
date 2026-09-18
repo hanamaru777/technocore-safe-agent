@@ -491,6 +491,36 @@ def test_healthy_source_fact_removal_is_still_detected() -> None:
     assert event["type"] == "REMOVED"
 
 
+def test_new_official_testnet_link_is_high_review_signal_not_action() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    home_before = next(row for row in before["sources"] if row["name"] == "home")
+    home_after = next(row for row in after["sources"] if row["name"] == "home")
+    home_before["interest_links"] = []
+    home_after["interest_links"] = ["https://flop.finance/testnet/claim/"]
+    home_after["content_sha256"] = "home-with-new-link"
+    after["snapshot_id"] = "new-official-link"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["type"] == "OFFICIAL_LINK_DISCOVERED")
+    assert event["severity"] == "HIGH"
+    assert event["severity"] != "ACTION_NOW"
+    assert event["after"]["url"] == "https://flop.finance/testnet/claim/"
+
+
+def test_interest_link_parser_ignores_external_and_irrelevant_links() -> None:
+    source = next(spec for spec in airdrop_radar.SOURCES if spec.name == "home")
+    html = """
+    <a href="/testnet/">Testnet</a>
+    <a href="https://evil.example/claim/">Fake claim</a>
+    <a href="/about/">About</a>
+    <a href="/claim/?utm_source=x#top">Claim</a>
+    """
+    assert airdrop_radar._official_interest_links(html, source) == [
+        "https://flop.finance/claim/",
+        "https://flop.finance/testnet/",
+    ]
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
