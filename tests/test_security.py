@@ -37,3 +37,17 @@ def test_oracle_signer_has_private_writable_uv_cache():
     assert f"Environment=UV_CACHE_DIR={cache}" in unit
     assert "/var/lib/technocore-safe-agent/signer" in unit.split("ReadWritePaths=", 1)[1]
     assert 'install -d -o technocore-signer -g technocore-signer -m 0700 "$state/signer/uv-cache"' in prepare
+
+
+def test_public_hash_assignment_is_not_treated_as_secret():
+    public_hash = "a" * 64
+    line = f'EXPECTED_POEM_SHA="{public_hash}"'
+    assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(line)
+    assert core.SECRET_PATTERN.search(line)
+
+
+def test_secret_named_hex_assignment_is_not_whitelisted_as_public_hash():
+    secret = "b" * 64
+    line = f'SIGN_SEED="{secret}"'
+    assert core.SECRET_PATTERN.search(line)
+    assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(line) is None

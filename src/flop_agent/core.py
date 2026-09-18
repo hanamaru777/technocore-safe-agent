@@ -26,6 +26,7 @@ SIGNER_BLOB_SHA = "81202baa03bff62204fa9ac34ce1f9fd969ddf67"
 INVISIBLE_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Zl", "Zp"}
 CONTRIBUTION_NOTICE = "Community convention only; not a FLOP official airdrop registry."
 SECRET_PATTERN = re.compile(r"(?i)(?:\b[0-9a-f]{64}\b|SIGN_SEED\s*=\s*[^\s'\"]+|(?:api[_-]?key|secret|private[_-]?key)\s*[:=]\s*[^\s'\"]+)")
+PUBLIC_HASH_ASSIGNMENT_RE = re.compile(r"\b[A-Z][A-Z0-9_]*(?:SHA(?:256)?|HASH)\s*=\s*['\"][0-9a-fA-F]{64}['\"]")
 
 
 class SubmissionAmbiguityError(RuntimeError):
@@ -586,7 +587,11 @@ def secret_scan() -> list[str]:
             continue  # dependency integrity hashes are not credential material
         if path.is_file() and path.suffix not in {".pyc", ".png", ".jpg"}:
             for number, line in enumerate(path.read_text("utf-8", errors="replace").splitlines(), 1):
-                is_documented_hash = (name == "SOURCES.md" and "SHA" in line) or "SIGNER_SHA256 =" in line
+                is_documented_hash = (
+                    (name == "SOURCES.md" and "SHA" in line)
+                    or "SIGNER_SHA256 =" in line
+                    or bool(PUBLIC_HASH_ASSIGNMENT_RE.search(line))
+                )
                 is_required_seed_handling = "SIGN_SEED" in line and (
                     "os.environ" in line or "env:SIGN_SEED" in line or "Remove-Item Env:SIGN_SEED" in line
                 )
@@ -606,7 +611,11 @@ def history_secret_scan() -> list[str]:
                 continue
             content = subprocess.run(["git", "show", f"{commit}:{name}"], cwd=ROOT, capture_output=True, check=False).stdout.decode("utf-8", errors="replace")
             for number, line in enumerate(content.splitlines(), 1):
-                is_documented_hash = (name == "SOURCES.md" and "SHA" in line) or "SIGNER_SHA256 =" in line
+                is_documented_hash = (
+                    (name == "SOURCES.md" and "SHA" in line)
+                    or "SIGNER_SHA256 =" in line
+                    or bool(PUBLIC_HASH_ASSIGNMENT_RE.search(line))
+                )
                 is_required_seed_handling = "SIGN_SEED" in line and ("os.environ" in line or "env:SIGN_SEED" in line or "Remove-Item Env:SIGN_SEED" in line)
                 if SECRET_PATTERN.search(line) and not is_documented_hash and not is_required_seed_handling:
                     hits.append(f"{commit[:12]}:{name}:{number}")
