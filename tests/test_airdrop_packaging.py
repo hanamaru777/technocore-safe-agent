@@ -98,7 +98,7 @@ def test_airdrop_production_deploy_is_exact_head_and_core_guarded() -> None:
     assert "CORE_EVENTS_EXPECTED=117" in helper
     assert "CORE_MESSAGES_EXPECTED=5083155" in helper
     assert '[[ $REMOTE == "$TARGET" ]]' in helper
-    assert 'git merge-base --is-ancestor "$PRE" "$TARGET"' in helper
+    assert 'git_owner merge-base --is-ancestor "$PRE" "$TARGET"' in helper
     assert "changed_file_allowlist_mismatch" in helper
     assert "P0_core_changed_before" in helper
     assert "P0_core_changed_after" in helper
