@@ -1,0 +1,27 @@
+[Unit]
+Description=technocore-safe-agent FLOP airdrop Discord notifier
+After=network-online.target technocore-safe-agent-metadata-block.service
+Requires=technocore-safe-agent-metadata-block.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=technocore
+WorkingDirectory=/opt/technocore-safe-agent
+EnvironmentFile=/etc/technocore-safe-agent/env
+Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
+Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.cli airdrop-notifier-once
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=169.254.169.254
+ReadWritePaths=/var/lib/technocore-safe-agent
+UMask=0027
