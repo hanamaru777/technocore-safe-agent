@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import autopilot, observer, resident, tclk_watch
+from . import airdrop_approval, autopilot, observer, resident, tclk_watch
 
 LOG = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -538,6 +538,24 @@ class Control:
         parts = text.strip().split()
         if not parts: return {"ok": False, "error": "empty", "message": "Use /help for local control commands."}
         action, args = parts[0], parts[1:]
+        if action == "/airdrop-approvals" and not args:
+            try: message = airdrop_approval.pending_message()
+            except airdrop_approval.ApprovalInboxError as error: return {"ok": False, "error": str(error), "message": "Airdrop approval inbox is fail-closed. No external action was executed."}
+            return {"ok": True, "data": {}, "message": message}
+        if action == "/airdrop-approval" and len(args) == 1:
+            try: data = airdrop_approval.get_request(args[0])
+            except airdrop_approval.ApprovalInboxError as error: return {"ok": False, "error": str(error), "message": "Airdrop approval request is unavailable. No external action was executed."}
+            return {"ok": True, "data": data, "message": airdrop_approval.render_request(data)}
+        if action == "/airdrop-approve" and len(args) == 3:
+            if args[2] != "APPROVE": return {"ok": False, "error": "confirmation_required", "message": "No approval recorded. Use exact uppercase APPROVE only after reviewing the exact request and digest."}
+            try: data = airdrop_approval.decide(args[0], args[1], decision="approved", actor_id=user_id)
+            except airdrop_approval.ApprovalInboxError as error: return {"ok": False, "error": str(error), "message": "Airdrop approval was not recorded. No external action was executed."}
+            return {"ok": True, "data": data, "message": f"APPROVED locally: {data['request_id']}. 外部実行はまだ行っていません。この承認はexact payload digestにのみ有効です。"}
+        if action == "/airdrop-reject" and len(args) == 3:
+            if args[2] != "REJECT": return {"ok": False, "error": "confirmation_required", "message": "No rejection recorded. Use exact uppercase REJECT only for the exact request and digest."}
+            try: data = airdrop_approval.decide(args[0], args[1], decision="rejected", actor_id=user_id)
+            except airdrop_approval.ApprovalInboxError as error: return {"ok": False, "error": str(error), "message": "Airdrop rejection was not recorded. No external action was executed."}
+            return {"ok": True, "data": data, "message": f"REJECTED locally: {data['request_id']}. 外部実行はありません。"}
         if action == "/status": return {"ok": True, "data": {}, "message": status_message()}
         if action == "/mission" and not args: return {"ok": True, "data": {}, "message": mission_message()}
         if action == "/activity" and not args: return {"ok": True, "data": {}, "message": activity_message()}
@@ -564,7 +582,7 @@ class Control:
         if action == "/autopilot-queue": data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
         if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
         if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot outbox generation resumed locally; Discord cannot publish."}
-        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /mission /status /activity /trust-candidates /trusted /history [相手ID] /candidate <id> /tclk-opportunities /tclk <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
+        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /mission /status /activity /airdrop-approvals /airdrop-approval <id> /trust-candidates /trusted /history [相手ID] /candidate <id> /tclk-opportunities /tclk <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
         if action == "/help-debug": return {"ok": True, "data": {}, "message": "Debug: /resident-status /intel /opportunities /agents /agent <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
     def notifications(self) -> list[dict]:
