@@ -6,11 +6,13 @@ separately consume one exact approved request with the same payload digest.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from . import core
 
 SCHEMA_VERSION = 1
 STATE_NAME = "action-inbox.json"
+LOCK_NAME = "action-inbox.lock"
 MAX_REQUESTS = 256
 NOTICE_LIMIT = 3
 ACTION_CLASSES = frozenset(
@@ -40,6 +43,23 @@ def inbox_dir() -> Path:
 
 def state_path() -> Path:
     return inbox_dir() / STATE_NAME
+
+
+@contextmanager
+def _state_lock():
+    directory = inbox_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / LOCK_NAME
+        with path.open("a+", encoding="utf-8") as handle:
+            os.chmod(path, 0o640)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError as error:
+        raise ApprovalInboxError("airdrop_approval_lock_failed") from error
 
 
 def _utc(value: datetime | None = None) -> str:
@@ -208,6 +228,36 @@ def _validate_record(request_id: str, record: object) -> dict:
     ):
         raise ApprovalInboxError("airdrop_approval_record_invalid")
 
+    created = _parse_utc(record["created_at"])
+    expires = _parse_utc(record["expires_at"])
+    if created >= expires:
+        raise ApprovalInboxError("airdrop_approval_record_invalid")
+    decision_pair = (record.get("decision_at"), record.get("decision_actor"))
+    consumed_pair = (record.get("consumed_at"), record.get("consumption_receipt"))
+    status = record["status"]
+    if status == "pending" and (
+        decision_pair != (None, None) or consumed_pair != (None, None)
+    ):
+        raise ApprovalInboxError("airdrop_approval_record_invalid")
+    if status in {"approved", "rejected"} and (
+        decision_pair[0] is None
+        or decision_pair[1] is None
+        or consumed_pair != (None, None)
+    ):
+        raise ApprovalInboxError("airdrop_approval_record_invalid")
+    if status == "consumed" and (
+        decision_pair[0] is None
+        or decision_pair[1] is None
+        or consumed_pair[0] is None
+        or consumed_pair[1] is None
+    ):
+        raise ApprovalInboxError("airdrop_approval_record_invalid")
+    if status == "expired" and (
+        consumed_pair != (None, None)
+        or ((decision_pair[0] is None) != (decision_pair[1] is None))
+    ):
+        raise ApprovalInboxError("airdrop_approval_record_invalid")
+
     binding = _binding_from_record(record)
     if _request_id(binding) != request_id:
         raise ApprovalInboxError("airdrop_approval_request_id_mismatch")
@@ -288,46 +338,48 @@ def stage_request(
     request_id = _request_id(binding)
     digest = _approval_digest(request_id, binding)
 
-    state = _load_state()
-    changed = _refresh_expired(state, current)
-    known = state["requests"].get(request_id)
-    if known is not None:
-        if known["approval_digest"] != digest:
-            raise ApprovalInboxError("airdrop_approval_existing_binding_mismatch")
-        if changed:
-            _atomic_write(state)
-        return json.loads(json.dumps(known))
+    with _state_lock():
+        state = _load_state()
+        changed = _refresh_expired(state, current)
+        known = state["requests"].get(request_id)
+        if known is not None:
+            if known["approval_digest"] != digest:
+                raise ApprovalInboxError("airdrop_approval_existing_binding_mismatch")
+            if changed:
+                _atomic_write(state)
+            return json.loads(json.dumps(known))
 
-    if len(state["requests"]) >= MAX_REQUESTS:
-        raise ApprovalInboxError("airdrop_approval_capacity_exceeded")
-    record = {
-        "request_id": request_id,
-        **binding,
-        "created_at": current.isoformat(),
-        "approval_digest": digest,
-        "status": "pending",
-        "notified_at": None,
-        "decision_at": None,
-        "decision_actor": None,
-        "consumed_at": None,
-        "consumption_receipt": None,
-    }
-    _validate_record(request_id, record)
-    state["requests"][request_id] = record
-    _atomic_write(state)
-    return json.loads(json.dumps(record))
+        if len(state["requests"]) >= MAX_REQUESTS:
+            raise ApprovalInboxError("airdrop_approval_capacity_exceeded")
+        record = {
+            "request_id": request_id,
+            **binding,
+            "created_at": current.isoformat(),
+            "approval_digest": digest,
+            "status": "pending",
+            "notified_at": None,
+            "decision_at": None,
+            "decision_actor": None,
+            "consumed_at": None,
+            "consumption_receipt": None,
+        }
+        _validate_record(request_id, record)
+        state["requests"][request_id] = record
+        _atomic_write(state)
+        return json.loads(json.dumps(record))
 
 
 def list_requests(*, now: datetime | None = None, pending_only: bool = False) -> list[dict]:
     current = (now or datetime.now(UTC)).astimezone(UTC)
-    state = _load_state()
-    if _refresh_expired(state, current):
-        _atomic_write(state)
-    rows = [
-        json.loads(json.dumps(record))
-        for record in state["requests"].values()
-        if not pending_only or record["status"] == "pending"
-    ]
+    with _state_lock():
+        state = _load_state()
+        if _refresh_expired(state, current):
+            _atomic_write(state)
+        rows = [
+            json.loads(json.dumps(record))
+            for record in state["requests"].values()
+            if not pending_only or record["status"] == "pending"
+        ]
     rows.sort(key=lambda row: (row["expires_at"], row["request_id"]))
     return rows
 
@@ -336,14 +388,15 @@ def get_request(request_id: str, *, now: datetime | None = None) -> dict:
     if not isinstance(request_id, str) or not HEX32.fullmatch(request_id):
         raise ApprovalInboxError("airdrop_approval_request_id_invalid")
     current = (now or datetime.now(UTC)).astimezone(UTC)
-    state = _load_state()
-    changed = _refresh_expired(state, current)
-    record = state["requests"].get(request_id)
-    if changed:
-        _atomic_write(state)
-    if record is None:
-        raise ApprovalInboxError("airdrop_approval_request_not_found")
-    return json.loads(json.dumps(record))
+    with _state_lock():
+        state = _load_state()
+        changed = _refresh_expired(state, current)
+        record = state["requests"].get(request_id)
+        if changed:
+            _atomic_write(state)
+        if record is None:
+            raise ApprovalInboxError("airdrop_approval_request_not_found")
+        return json.loads(json.dumps(record))
 
 
 def decide(
@@ -362,25 +415,27 @@ def decide(
         raise ApprovalInboxError("airdrop_approval_digest_invalid")
 
     current = (now or datetime.now(UTC)).astimezone(UTC)
-    state = _load_state()
-    changed = _refresh_expired(state, current)
-    record = state["requests"].get(request_id)
-    if record is None:
-        if changed:
-            _atomic_write(state)
-        raise ApprovalInboxError("airdrop_approval_request_not_found")
-    if record["status"] != "pending":
-        if changed:
-            _atomic_write(state)
-        raise ApprovalInboxError(f"airdrop_approval_not_pending:{record['status']}")
-    if record["approval_digest"] != approval_digest:
-        raise ApprovalInboxError("airdrop_approval_digest_mismatch")
+    with _state_lock():
+        state = _load_state()
+        changed = _refresh_expired(state, current)
+        record = state["requests"].get(request_id)
+        if record is None:
+            if changed:
+                _atomic_write(state)
+            raise ApprovalInboxError("airdrop_approval_request_not_found")
+        if record["status"] != "pending":
+            if changed:
+                _atomic_write(state)
+            raise ApprovalInboxError(f"airdrop_approval_not_pending:{record['status']}")
+        if record["approval_digest"] != approval_digest:
+            raise ApprovalInboxError("airdrop_approval_digest_mismatch")
 
-    record["status"] = decision
-    record["decision_at"] = current.isoformat()
-    record["decision_actor"] = actor_id
-    _atomic_write(state)
-    return json.loads(json.dumps(record))
+        record["status"] = decision
+        record["decision_at"] = current.isoformat()
+        record["decision_actor"] = actor_id
+        _validate_record(request_id, record)
+        _atomic_write(state)
+        return json.loads(json.dumps(record))
 
 
 def consume(
@@ -397,25 +452,27 @@ def consume(
         raise ApprovalInboxError("airdrop_approval_receipt_invalid")
 
     current = (now or datetime.now(UTC)).astimezone(UTC)
-    state = _load_state()
-    changed = _refresh_expired(state, current)
-    record = state["requests"].get(request_id)
-    if record is None:
-        if changed:
-            _atomic_write(state)
-        raise ApprovalInboxError("airdrop_approval_request_not_found")
-    if record["approval_digest"] != approval_digest:
-        raise ApprovalInboxError("airdrop_approval_digest_mismatch")
-    if record["status"] != "approved":
-        if changed:
-            _atomic_write(state)
-        raise ApprovalInboxError(f"airdrop_approval_not_approved:{record['status']}")
+    with _state_lock():
+        state = _load_state()
+        changed = _refresh_expired(state, current)
+        record = state["requests"].get(request_id)
+        if record is None:
+            if changed:
+                _atomic_write(state)
+            raise ApprovalInboxError("airdrop_approval_request_not_found")
+        if record["approval_digest"] != approval_digest:
+            raise ApprovalInboxError("airdrop_approval_digest_mismatch")
+        if record["status"] != "approved":
+            if changed:
+                _atomic_write(state)
+            raise ApprovalInboxError(f"airdrop_approval_not_approved:{record['status']}")
 
-    record["status"] = "consumed"
-    record["consumed_at"] = current.isoformat()
-    record["consumption_receipt"] = rendered_receipt
-    _atomic_write(state)
-    return json.loads(json.dumps(record))
+        record["status"] = "consumed"
+        record["consumed_at"] = current.isoformat()
+        record["consumption_receipt"] = rendered_receipt
+        _validate_record(request_id, record)
+        _atomic_write(state)
+        return json.loads(json.dumps(record))
 
 
 def render_request(record: dict) -> str:
@@ -472,21 +529,22 @@ def poll_notices(*, now: datetime | None = None) -> list[str]:
     global _FAILURE_NOTIFIED
     current = (now or datetime.now(UTC)).astimezone(UTC)
     try:
-        state = _load_state()
-        changed = _refresh_expired(state, current)
-        rows = [
-            record
-            for record in state["requests"].values()
-            if record["status"] == "pending" and record["notified_at"] is None
-        ]
-        rows.sort(key=lambda row: (row["expires_at"], row["request_id"]))
-        notices = []
-        for record in rows[:NOTICE_LIMIT]:
-            notices.append(render_request(record))
-            record["notified_at"] = current.isoformat()
-            changed = True
-        if changed:
-            _atomic_write(state)
+        with _state_lock():
+            state = _load_state()
+            changed = _refresh_expired(state, current)
+            rows = [
+                record
+                for record in state["requests"].values()
+                if record["status"] == "pending" and record["notified_at"] is None
+            ]
+            rows.sort(key=lambda row: (row["expires_at"], row["request_id"]))
+            notices = []
+            for record in rows[:NOTICE_LIMIT]:
+                notices.append(render_request(record))
+                record["notified_at"] = current.isoformat()
+                changed = True
+            if changed:
+                _atomic_write(state)
     except ApprovalInboxError:
         if _FAILURE_NOTIFIED:
             return []
