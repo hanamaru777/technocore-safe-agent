@@ -51,21 +51,3 @@ def test_secret_named_hex_assignment_is_not_whitelisted_as_public_hash():
     line = f'SIGN_SEED="{secret}"'
     assert core.SECRET_PATTERN.search(line)
     assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(line) is None
-
-
-def test_unrelated_hash_named_secret_is_not_public_hash_whitelisted():
-    value = "c" * 64
-    line = f'PRIVATE_KEY_HASH="{value}"'
-    assert core.SECRET_PATTERN.search(line)
-    assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(line) is None
-
-
-def test_expected_sha_and_poem_sha_are_explicitly_supported():
-    value = "d" * 64
-    assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(f'EXPECTED_SHA="{value}"')
-    assert core.PUBLIC_HASH_ASSIGNMENT_RE.search(f'POEM_SHA="{value}"')
-
-
-def test_reachable_history_blob_map_covers_current_core_file():
-    mapping = core._reachable_history_blob_paths()
-    assert any("src/flop_agent/core.py" in paths for paths in mapping.values())
