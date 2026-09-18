@@ -358,13 +358,19 @@ def create_challenge(spec: dict, *, now: datetime | None = None) -> dict:
         existing = _read_json(_spec_path(challenge_id))
         if _canonical(existing) != _canonical(cleaned):
             raise RuntimeError("challenge_spec_already_exists_with_different_content")
-        return existing
-    _atomic_json_write(_spec_path(challenge_id), cleaned)
-    progress = _default_progress()
-    progress["updated_at"] = _utc(now)
-    _atomic_json_write(_progress_path(challenge_id), progress)
-    _atomic_json_write(_request_path(challenge_id), _default_requests())
-    _atomic_json_write(_artifact_index_path(challenge_id), _default_artifacts())
+    else:
+        _atomic_json_write(_spec_path(challenge_id), cleaned)
+
+    # Cross-file setup is restart-safe: an interrupted first creation is
+    # completed on the next identical call without changing the immutable spec.
+    if not _progress_path(challenge_id).exists():
+        progress = _default_progress()
+        progress["updated_at"] = _utc(now)
+        _atomic_json_write(_progress_path(challenge_id), progress)
+    if not _request_path(challenge_id).exists():
+        _atomic_json_write(_request_path(challenge_id), _default_requests())
+    if not _artifact_index_path(challenge_id).exists():
+        _atomic_json_write(_artifact_index_path(challenge_id), _default_artifacts())
     return cleaned
 
 
@@ -459,9 +465,9 @@ def pin_artifact_bytes(
         if digest != expected_sha256:
             raise RuntimeError("challenge_artifact_hash_mismatch")
 
+    index = _artifact_index(challenge_id)
     target = _challenge_dir(challenge_id) / "artifacts" / name
     _atomic_bytes_write(target, data)
-    index = _artifact_index(challenge_id)
     index["artifacts"][name] = {
         "name": name,
         "source_url": source_url,
@@ -529,7 +535,9 @@ def verify_artifacts(challenge_id: str) -> dict:
         ok = False
         reason = "missing"
         if isinstance(pinned, dict):
-            path = _challenge_dir(challenge_id) / pinned["relative_path"]
+            # Never trust a persisted path when reading evidence. Re-derive it
+            # from the validated required artifact name.
+            path = _challenge_dir(challenge_id) / "artifacts" / _validate_artifact_name(name)
             if path.is_file():
                 actual = hashlib.sha256(path.read_bytes()).hexdigest()
                 declared = required.get("sha256")
@@ -870,6 +878,8 @@ def plan_request(
             existing.get("action") == action
             and existing.get("payload_sha256") == payload_sha
         ):
+            if existing.get("status") == "ambiguous":
+                raise RuntimeError("challenge_ambiguous_request_reconcile_first")
             return existing
         raise RuntimeError("challenge_request_id_reuse_with_different_payload")
 
@@ -925,6 +935,8 @@ def mark_request(
         raise RuntimeError("challenge_request_transition_invalid")
     if receipt_hash is not None and not re.fullmatch(r"[0-9a-f]{64}", receipt_hash):
         raise ValueError("challenge_receipt_hash_invalid")
+    if status in {"accepted", "reconciled_accepted"} and receipt_hash is None:
+        raise ValueError("challenge_receipt_hash_required")
     row["status"] = status
     row["updated_at"] = _utc(now)
     if receipt_hash is not None:
@@ -949,5 +961,6 @@ def request_status(challenge_id: str) -> dict:
         "challenge_id": challenge_id,
         "requests": requests,
         "ambiguous_request_ids": ambiguous,
-        "blind_retry_allowed": False if ambiguous else None,
+        "blind_retry_allowed": False,
+        "new_request_allowed": not bool(ambiguous),
     }
