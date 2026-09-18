@@ -708,6 +708,19 @@ def test_unrelated_github_repo_push_creates_no_radar_event() -> None:
     )
 
 
+def test_yellowpaper_version_change_is_high_even_without_known_fact_change() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    yellow_after = next(row for row in after["sources"] if row["name"] == "yellowpaper")
+    yellow_after["meta"]["version"] = "0.6.0 (draft)"
+    yellow_after["content_sha256"] = "yellowpaper-v060"
+    after["snapshot_id"] = "yellowpaper-version-change"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["type"] == "SOURCE_VERSION_CHANGED")
+    assert event["key"] == "source:yellowpaper:version"
+    assert event["severity"] == "HIGH"
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
