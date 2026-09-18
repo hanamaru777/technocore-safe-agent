@@ -123,6 +123,18 @@ def test_expired_request_cannot_be_approved(isolated_state: Path) -> None:
     )["status"] == "expired"
 
 
+def test_corrupt_status_invariants_fail_closed(
+    isolated_state: Path,
+) -> None:
+    row = stage()
+    state = airdrop_approval._load_state()
+    state["requests"][row["request_id"]]["status"] = "approved"
+    airdrop_approval._atomic_write(state)
+
+    with pytest.raises(airdrop_approval.ApprovalInboxError, match="record_invalid"):
+        airdrop_approval.list_requests(now=T0)
+
+
 def test_notice_is_durable_and_not_repeated(isolated_state: Path) -> None:
     row = stage()
 
