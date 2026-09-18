@@ -343,10 +343,7 @@ def test_github_interest_repo_change_is_medium_not_binding_action() -> None:
     before = snapshot()
     after = copy.deepcopy(before)
     repos = after["resolved_facts"]["github_interest_repo_names"]["value"]
-    repos.append(
-        {
-"technocore-new-airdrop-challenge"
-    )
+    repos.append("technocore-new-airdrop-challenge")
     after["snapshot_id"] = "github-repo-added"
     events = airdrop_radar.compare_snapshots(before, after)["events"]
     event = next(row for row in events if row["key"] == "github_interest_repo_names")
