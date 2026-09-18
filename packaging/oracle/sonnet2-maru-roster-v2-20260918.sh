@@ -77,8 +77,11 @@ PAYLOAD={
   "request_id":RID,
 }
 STATE=core.STATE/"signer"/(RID+".json")
+SIGNED_PHASE=False
 
 def stop_pre(reason):
+    if SIGNED_PHASE:
+        raise RuntimeError("post_sign_gate:"+reason)
     print("MARU_ROSTER_V2=STOP_PRE_SIGN:"+reason)
     print("REQUEST_CONSUMED=NO")
     raise SystemExit(1)
@@ -237,14 +240,15 @@ if len(signed)!=2 or signed[0]!=MARU:
     stop_terminal("signer_output_invalid","sign_output_invalid")
 verify_signed_record(DISC,{"from":MARU,"nonce":nonce,"text":text,"sig":signed[1]})
 persist("signed",nonce=nonce,signed_at=datetime.now(UTC).isoformat())
+SIGNED_PHASE=True
 
 # Binding payload is signed but not yet posted. Any state change now abandons RID.
 try:
     require_team_pristine()
     require_candidates_unchanged()
     require_no_maru_roster()
-except SystemExit:
-    stop_terminal("state_changed_after_sign")
+except Exception as e:
+    stop_terminal("state_changed_after_sign:"+type(e).__name__)
 
 persist("attempting",nonce=nonce,attempted_at=datetime.now(UTC).isoformat())
 try:
@@ -324,6 +328,9 @@ else:
 PY
 
 chmod 0644 "$TMP"
+
+# Inner Python owns terminal/pre-sign classification from this point.
+trap - ERR
 
 sudo bash -c '
 set -Eeuo pipefail
