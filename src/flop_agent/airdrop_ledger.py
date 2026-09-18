@@ -302,6 +302,36 @@ def verify_ledger() -> dict:
         recorded_hash = row.get("hash")
         if not isinstance(recorded_hash, str) or len(recorded_hash) != 64:
             raise LedgerIntegrityError("airdrop_ledger_hash_invalid")
+        event = row.get("event")
+        if row.get("record_type") != "material_event" or not isinstance(event, dict):
+            raise LedgerIntegrityError("airdrop_ledger_event_record_invalid")
+        expected_event_id = hashlib.sha256(
+            _canonical(
+                {
+                    "type": event.get("type"),
+                    "key": event.get("key"),
+                    "before": event.get("before"),
+                    "after": event.get("after"),
+                }
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        if (
+            row.get("event_id") != event.get("event_id")
+            or row.get("event_id") != expected_event_id
+        ):
+            raise LedgerIntegrityError("airdrop_ledger_event_id_mismatch")
+        for timestamp_key in ("first_seen", "last_seen", "observed_at"):
+            raw_timestamp = row.get(timestamp_key)
+            if not isinstance(raw_timestamp, str):
+                raise LedgerIntegrityError("airdrop_ledger_timestamp_invalid")
+            try:
+                parsed = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+            except ValueError as error:
+                raise LedgerIntegrityError("airdrop_ledger_timestamp_invalid") from error
+            if parsed.tzinfo is None:
+                raise LedgerIntegrityError("airdrop_ledger_timestamp_invalid")
+        if not isinstance(row.get("source_evidence"), list):
+            raise LedgerIntegrityError("airdrop_ledger_source_evidence_invalid")
         payload = {key: value for key, value in row.items() if key != "hash"}
         computed = _sha(payload)
         if computed != recorded_hash:
@@ -859,6 +889,11 @@ def export_bundle(*, now: datetime | None = None) -> dict:
         for key in sorted(ELIGIBILITY_KEYS)
         if key in current.get("resolved_facts", {})
     }
+    ledger_by_event = {
+        row["event_id"]: row
+        for row in verified["records"]
+        if isinstance(row.get("event_id"), str)
+    }
     events = [
         row
         for row in index.get("events", {}).values()
@@ -871,6 +906,28 @@ def export_bundle(*, now: datetime | None = None) -> dict:
         ),
         reverse=True,
     )
+    recent_events: list[dict] = []
+    for item in events[:MAX_EXPORT_EVENTS]:
+        durable = ledger_by_event.get(item.get("event_id"))
+        if not isinstance(durable, dict):
+            raise LedgerIntegrityError("airdrop_ledger_index_event_missing_from_chain")
+        recent_events.append(
+            {
+                "event_id": item.get("event_id"),
+                "type": item.get("type"),
+                "key": item.get("key"),
+                "severity": item.get("severity"),
+                "first_seen": item.get("first_seen"),
+                "last_seen": item.get("last_seen"),
+                "observed_at": item.get("observed_at"),
+                "seen_count": item.get("seen_count"),
+                "acknowledged_at": item.get("acknowledged_at"),
+                "ledger_sequence": item.get("ledger_sequence"),
+                "ledger_hash": item.get("ledger_hash"),
+                "event": durable.get("event"),
+                "source_evidence": durable.get("source_evidence", []),
+            }
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _utc(now),
@@ -892,7 +949,7 @@ def export_bundle(*, now: datetime | None = None) -> dict:
                 if isinstance(row, dict)
             ],
         },
-        "recent_events": events[:MAX_EXPORT_EVENTS],
+        "recent_events": recent_events,
         "warnings": [
             "Evidence does not itself authorize registration, signing, spending, claiming, posting, or submission.",
             "Unratified/TBD FLOP rules remain provisional even when observed repeatedly.",
