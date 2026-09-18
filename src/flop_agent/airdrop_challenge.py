@@ -158,6 +158,30 @@ def _validate_public_url(url: str) -> str:
     return url
 
 
+def _immutable_official_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.hostname != "raw.githubusercontent.com":
+        return False
+    parts = [part for part in parsed.path.split("/") if part]
+    return (
+        len(parts) >= 4
+        and parts[0] == "flop-labs"
+        and bool(re.fullmatch(r"[0-9a-f]{40}", parts[2]))
+    )
+
+
+def _bounded_json_object(value: object, *, label: str, limit: int = 20_000) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"challenge_{label}_invalid")
+    try:
+        encoded = _canonical(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"challenge_{label}_invalid") from error
+    if len(encoded.encode("utf-8")) > limit:
+        raise ValueError(f"challenge_{label}_too_large")
+    return value
+
+
 def _validate_artifact_name(name: str) -> str:
     if (
         not isinstance(name, str)
@@ -238,19 +262,27 @@ def validate_spec(spec: dict) -> dict:
         not isinstance(authority_id, str) or len(authority_id) > 300
     ):
         raise ValueError("challenge_authority_id_invalid")
+    source_sha256 = source.get("source_sha256")
+    if source_sha256 is not None and (
+        not isinstance(source_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", source_sha256)
+    ):
+        raise ValueError("challenge_source_sha_invalid")
 
-    submission = spec.get("submission")
-    if not isinstance(submission, dict):
-        raise ValueError("challenge_submission_missing")
+    submission = _bounded_json_object(
+        spec.get("submission"),
+        label="submission",
+    )
     submission_path = submission.get("path")
     if submission_path is not None and (
         not isinstance(submission_path, str) or len(submission_path) > 1000
     ):
         raise ValueError("challenge_submission_path_invalid")
 
-    eligibility = spec.get("eligibility")
-    if not isinstance(eligibility, dict):
-        raise ValueError("challenge_eligibility_missing")
+    eligibility = _bounded_json_object(
+        spec.get("eligibility"),
+        label="eligibility",
+    )
 
     artifacts = spec.get("required_artifacts", [])
     if not isinstance(artifacts, list):
@@ -305,7 +337,7 @@ def validate_spec(spec: dict) -> dict:
             "authority_type": authority_type,
             "authority_id": authority_id,
             "pinned_commit": pinned_commit,
-            "source_sha256": source.get("source_sha256"),
+            "source_sha256": source_sha256,
         },
         "required_artifacts": cleaned_artifacts,
         "notes": [
@@ -500,11 +532,19 @@ def verify_artifacts(challenge_id: str) -> dict:
             path = _challenge_dir(challenge_id) / pinned["relative_path"]
             if path.is_file():
                 actual = hashlib.sha256(path.read_bytes()).hexdigest()
-                expected = required.get("sha256") or pinned.get("sha256")
-                ok = actual == pinned.get("sha256") and (
-                    expected is None or actual == expected
+                declared = required.get("sha256")
+                anchored = bool(declared) or _immutable_official_url(
+                    str(required.get("url", ""))
                 )
-                reason = "ok" if ok else "hash_mismatch"
+                ok = (
+                    anchored
+                    and actual == pinned.get("sha256")
+                    and (declared is None or actual == declared)
+                )
+                if not anchored:
+                    reason = "unanchored_expected_hash_missing"
+                else:
+                    reason = "ok" if ok else "hash_mismatch"
         if required.get("required", True) and not ok:
             all_required_ok = False
         rows.append(
