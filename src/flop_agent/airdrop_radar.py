@@ -22,6 +22,7 @@ SCHEMA_VERSION = 2
 MAX_PAGE_BYTES = 2_000_000
 DEFAULT_ATTEMPTS = 3
 DEFAULT_TIMEOUT_SECONDS = 12.0
+MAX_GITHUB_ORG_PAGES = 3
 SEVERITY_ORDER = {"ACTION_NOW": 0, "HIGH": 1, "MEDIUM": 2, "INFO": 3}
 
 
@@ -256,36 +257,79 @@ def _validate_url(url: str, allowed_hosts: tuple[str, ...]) -> None:
         raise RuntimeError("airdrop_radar_non_official_url")
 
 
+def _stream_read(
+    url: str,
+    *,
+    allowed_hosts: tuple[str, ...],
+    headers: dict[str, str],
+    byte_budget: int,
+) -> tuple[str, str]:
+    _validate_url(url, allowed_hosts)
+    with httpx.stream(
+        "GET",
+        url,
+        follow_redirects=True,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+        headers=headers,
+    ) as response:
+        response.raise_for_status()
+        _validate_url(str(response.url), allowed_hosts)
+        length = response.headers.get("content-length")
+        if length and length.isdigit() and int(length) > byte_budget:
+            raise RuntimeError("airdrop_radar_page_too_large")
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_bytes():
+            total += len(chunk)
+            if total > byte_budget:
+                raise RuntimeError("airdrop_radar_page_too_large")
+            chunks.append(chunk)
+        encoding = response.encoding or "utf-8"
+        return b"".join(chunks).decode(encoding, errors="replace"), str(response.url)
+
+
 def _network_fetch(spec: SourceSpec) -> FetchResult:
     _validate_url(spec.url, spec.allowed_hosts)
     headers = {"User-Agent": "technocore-safe-agent-airdrop-radar/2"}
     if spec.kind == "github_json":
         headers["Accept"] = "application/vnd.github+json"
     started = time.monotonic()
-    with httpx.stream(
-        "GET",
-        spec.url,
-        follow_redirects=True,
-        timeout=DEFAULT_TIMEOUT_SECONDS,
-        headers=headers,
-    ) as response:
-        response.raise_for_status()
-        _validate_url(str(response.url), spec.allowed_hosts)
-        length = response.headers.get("content-length")
-        if length and length.isdigit() and int(length) > MAX_PAGE_BYTES:
+
+    if spec.name == "github_org":
+        all_rows: list[dict] = []
+        used_bytes = 0
+        for page in range(1, MAX_GITHUB_ORG_PAGES + 1):
+            page_url = f"{spec.url}&page={page}"
+            body, _final_url = _stream_read(
+                page_url,
+                allowed_hosts=spec.allowed_hosts,
+                headers=headers,
+                byte_budget=MAX_PAGE_BYTES - used_bytes,
+            )
+            used_bytes += len(body.encode("utf-8"))
+            payload = json.loads(body)
+            if not isinstance(payload, list):
+                raise RuntimeError("airdrop_radar_github_org_shape_invalid")
+            all_rows.extend(row for row in payload if isinstance(row, dict))
+            if len(payload) < 100:
+                break
+        else:
+            raise RuntimeError("airdrop_radar_github_org_pagination_limit")
+        body = json.dumps(all_rows, sort_keys=True, separators=(",", ":"))
+        if len(body.encode("utf-8")) > MAX_PAGE_BYTES:
             raise RuntimeError("airdrop_radar_page_too_large")
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in response.iter_bytes():
-            total += len(chunk)
-            if total > MAX_PAGE_BYTES:
-                raise RuntimeError("airdrop_radar_page_too_large")
-            chunks.append(chunk)
-        encoding = response.encoding or "utf-8"
-        body = b"".join(chunks).decode(encoding, errors="replace")
+        final_url = spec.url
+    else:
+        body, final_url = _stream_read(
+            spec.url,
+            allowed_hosts=spec.allowed_hosts,
+            headers=headers,
+            byte_budget=MAX_PAGE_BYTES,
+        )
+
     return FetchResult(
         body=body,
-        final_url=str(response.url),
+        final_url=final_url,
         latency_ms=max(0, int((time.monotonic() - started) * 1000)),
     )
 
