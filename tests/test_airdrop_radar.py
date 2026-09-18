@@ -362,6 +362,56 @@ def test_existing_github_repo_push_is_info_not_medium() -> None:
     assert event["severity"] == "INFO"
 
 
+def test_lower_tier_scoring_change_is_high_even_if_resolved_winner_stays_same() -> None:
+    before = snapshot()
+    changed = pages()
+    changed["teaser"] = changed["teaser"].replace(
+        "based largely on what they spend on inference over the testnet,\nalong with various prizes",
+        "based largely on what they spend on inference over the testnet",
+    )
+    after = airdrop_radar.scan_official_sources(
+        fetcher=fetch_from(changed),
+        sleeper=lambda _seconds: None,
+    )
+    assert before["resolved_facts"]["agent_scoring_basis"]["value"] == "settled_inference_spend"
+    assert after["resolved_facts"]["agent_scoring_basis"]["value"] == "settled_inference_spend"
+    events = airdrop_radar.compare_snapshots(before, after)["events"]
+    event = next(row for row in events if row["key"] == "agent_scoring_basis")
+    assert event["type"] == "SOURCE_VARIANT_CHANGED"
+    assert event["severity"] == "HIGH"
+
+
+def test_deadline_evidence_wording_change_does_not_create_duplicate_deadline() -> None:
+    before = snapshot()
+    after = copy.deepcopy(before)
+    common = {
+        "label": "deadline",
+        "timestamp": "2026-09-19T00:00:00+00:00",
+        "exact": True,
+        "source": "teaser",
+        "tier": 2,
+    }
+    before["deadlines"] = [{**common, "evidence_sha256": "old-wording"}]
+    after["deadlines"] = [{**common, "evidence_sha256": "new-wording"}]
+    before["snapshot_id"] = "before-deadline-wording"
+    after["snapshot_id"] = "after-deadline-wording"
+    events = airdrop_radar.compare_snapshots(
+        before,
+        after,
+        now=datetime(2026, 9, 18, 12, 0, tzinfo=UTC),
+    )["events"]
+    assert not any(row["type"] == "NEW_DEADLINE" for row in events)
+
+
+def test_previous_snapshot_accepts_raw_or_cli_wrapper_and_rejects_invalid() -> None:
+    current = snapshot()
+    assert airdrop_radar.normalize_previous_snapshot(current) is current
+    wrapped = {"snapshot": current, "diff": {"events": []}}
+    assert airdrop_radar.normalize_previous_snapshot(wrapped) is current
+    with pytest.raises(RuntimeError, match="previous_snapshot_invalid"):
+        airdrop_radar.normalize_previous_snapshot({"schema_version": 999})
+
+
 def test_radar_module_has_no_external_write_client_calls() -> None:
     source = inspect.getsource(airdrop_radar)
     assert "httpx.post" not in source
