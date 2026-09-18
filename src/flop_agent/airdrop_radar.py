@@ -439,15 +439,17 @@ def _extract_yellowpaper(text: str, source: SourceSpec) -> list[dict]:
                 evidence=_context(text, start, start + len("sublinear form on the conversion score")),
             )
         )
+    verified = re.search(r"agents:\s*verified inference spend,\s*unconfirmed", text, re.IGNORECASE)
     settled = re.search(r"pro-rata by settled inference spend for the agent leg", text, re.IGNORECASE)
-    if settled:
+    scoring = verified or settled
+    if scoring:
         facts.append(
             _fact(
                 key="agent_scoring_basis",
-                value="settled_inference_spend",
+                value="verified_inference_spend" if verified else "settled_inference_spend",
                 source=source,
                 status="unconfirmed",
-                evidence=_context(text, *settled.span()),
+                evidence=_context(text, *scoring.span()),
             )
         )
     if "balance is never a scoring term" in text.lower():
