@@ -23,6 +23,7 @@ SCHEMA_VERSION = 1
 MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
 CHALLENGE_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+ROUTE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 SAFE_ARTIFACT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}")
 ALLOWED_HOSTS = {
     "flop.finance",
@@ -223,6 +224,84 @@ def _default_progress() -> dict:
         "alternate_routes": [],
         "collaborators": {},
     }
+
+
+def _validate_route_id(value: object) -> str:
+    if not isinstance(value, str) or not ROUTE_ID_RE.fullmatch(value):
+        raise ValueError("challenge_route_id_invalid")
+    return value
+
+
+def _sanitize_collaborator(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("challenge_collaborator_invalid")
+    allowed = {
+        "target_authored_binding",
+        "responsive_proof",
+        "current_conflict",
+        "availability",
+        "last_response_at",
+        "evidence_refs",
+        "capabilities",
+    }
+    if any(key not in allowed for key in value):
+        raise ValueError("challenge_collaborator_field_invalid")
+    result: dict = {}
+    for key in (
+        "target_authored_binding",
+        "responsive_proof",
+        "current_conflict",
+        "availability",
+    ):
+        if key in value:
+            if not isinstance(value[key], bool):
+                raise ValueError("challenge_collaborator_boolean_invalid")
+            result[key] = value[key]
+    if value.get("last_response_at") is not None:
+        parsed = _parse_time(value["last_response_at"])
+        assert parsed is not None
+        result["last_response_at"] = parsed.isoformat()
+    for key in ("evidence_refs", "capabilities"):
+        if key in value:
+            rows = value[key]
+            if (
+                not isinstance(rows, list)
+                or len(rows) > 50
+                or not all(isinstance(item, str) and len(item) <= 500 for item in rows)
+            ):
+                raise ValueError("challenge_collaborator_list_invalid")
+            result[key] = rows
+    return result
+
+
+def _validate_progress(progress: dict) -> dict:
+    primary = progress.get("primary_route")
+    if primary is not None:
+        primary = _validate_route_id(primary)
+        progress["primary_route"] = primary
+
+    alternates = progress.get("alternate_routes", [])
+    if (
+        not isinstance(alternates, list)
+        or len(alternates) > 20
+    ):
+        raise ValueError("challenge_alternate_routes_invalid")
+    cleaned_alternates = [_validate_route_id(item) for item in alternates]
+    if len(set(cleaned_alternates)) != len(cleaned_alternates):
+        raise ValueError("challenge_alternate_routes_duplicate")
+    if primary is not None and primary in cleaned_alternates:
+        raise ValueError("challenge_primary_also_alternate")
+    progress["alternate_routes"] = cleaned_alternates
+
+    collaborators = progress.get("collaborators", {})
+    if not isinstance(collaborators, dict) or len(collaborators) > 100:
+        raise ValueError("challenge_collaborators_invalid")
+    cleaned_collaborators: dict[str, dict] = {}
+    for route, row in collaborators.items():
+        route_id = _validate_route_id(route)
+        cleaned_collaborators[route_id] = _sanitize_collaborator(row)
+    progress["collaborators"] = cleaned_collaborators
+    return progress
 
 
 def _default_requests() -> dict:
@@ -426,6 +505,7 @@ def update_progress(
         if key == "collaborators" and not isinstance(value, dict):
             raise ValueError("challenge_collaborators_invalid")
         progress[key] = value
+    progress = _validate_progress(progress)
     progress["updated_at"] = _utc(now)
     _atomic_json_write(_progress_path(challenge_id), progress)
     return progress
