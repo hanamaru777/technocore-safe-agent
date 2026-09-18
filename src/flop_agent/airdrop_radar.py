@@ -23,6 +23,7 @@ MAX_PAGE_BYTES = 2_000_000
 DEFAULT_ATTEMPTS = 3
 DEFAULT_TIMEOUT_SECONDS = 12.0
 MAX_GITHUB_ORG_PAGES = 3
+MAX_REDIRECTS = 5
 SEVERITY_ORDER = {"ACTION_NOW": 0, "HIGH": 1, "MEDIUM": 2, "INFO": 3}
 
 
@@ -250,10 +251,11 @@ def _stable_url(url: str) -> str:
     return parsed._replace(query="", fragment="").geturl()
 
 
-def _validate_url(url: str, allowed_hosts: tuple[str, ...]) -> None:
+def _validate_url(url: str, allowed_hosts: tuple[str, ...]) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
         raise RuntimeError("airdrop_radar_non_official_url")
+    return url
 
 
 def _stream_read(
@@ -263,28 +265,44 @@ def _stream_read(
     headers: dict[str, str],
     byte_budget: int,
 ) -> tuple[str, str]:
-    _validate_url(url, allowed_hosts)
-    with httpx.stream(
-        "GET",
-        url,
-        follow_redirects=True,
+    current = _validate_url(url, allowed_hosts)
+    with httpx.Client(
         timeout=DEFAULT_TIMEOUT_SECONDS,
         headers=headers,
-    ) as response:
-        response.raise_for_status()
-        _validate_url(str(response.url), allowed_hosts)
-        length = response.headers.get("content-length")
-        if length and length.isdigit() and int(length) > byte_budget:
-            raise RuntimeError("airdrop_radar_page_too_large")
-        chunks: list[bytes] = []
-        total = 0
-        for chunk in response.iter_bytes():
-            total += len(chunk)
-            if total > byte_budget:
-                raise RuntimeError("airdrop_radar_page_too_large")
-            chunks.append(chunk)
-        encoding = response.encoding or "utf-8"
-        return b"".join(chunks).decode(encoding, errors="replace"), str(response.url)
+        follow_redirects=False,
+    ) as client:
+        for redirect_count in range(MAX_REDIRECTS + 1):
+            _validate_url(current, allowed_hosts)
+            with client.stream("GET", current) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise RuntimeError("airdrop_radar_redirect_missing_location")
+                    if redirect_count >= MAX_REDIRECTS:
+                        raise RuntimeError("airdrop_radar_redirect_limit")
+                    # Reject an untrusted hop before making any request to it.
+                    current = _validate_url(urljoin(current, location), allowed_hosts)
+                    continue
+
+                response.raise_for_status()
+                final_url = _validate_url(str(response.url), allowed_hosts)
+                length = response.headers.get("content-length")
+                if length and length.isdigit() and int(length) > byte_budget:
+                    raise RuntimeError("airdrop_radar_page_too_large")
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes():
+                    total += len(chunk)
+                    if total > byte_budget:
+                        raise RuntimeError("airdrop_radar_page_too_large")
+                    chunks.append(chunk)
+                encoding = response.encoding or "utf-8"
+                return (
+                    b"".join(chunks).decode(encoding, errors="replace"),
+                    final_url,
+                )
+
+    raise RuntimeError("airdrop_radar_redirect_limit")
 
 
 def _network_fetch(spec: SourceSpec) -> FetchResult:

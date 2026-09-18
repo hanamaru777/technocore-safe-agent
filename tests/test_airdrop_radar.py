@@ -591,6 +591,148 @@ def test_official_opportunity_link_removal_is_visible() -> None:
     assert event["severity"] == "MEDIUM"
 
 
+class _FakeRadarResponse:
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes = b"",
+        encoding: str = "utf-8",
+    ) -> None:
+        self.status_code = status_code
+        self.url = url
+        self.headers = headers or {}
+        self._body = body
+        self.encoding = encoding
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"http {self.status_code}")
+
+    def iter_bytes(self):
+        yield self._body
+
+
+class _FakeRadarClient:
+    def __init__(
+        self,
+        responses: dict[str, _FakeRadarResponse],
+        calls: list[str],
+    ) -> None:
+        self.responses = responses
+        self.calls = calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def stream(self, method: str, url: str):
+        assert method == "GET"
+        self.calls.append(url)
+        return self.responses[url]
+
+
+def test_radar_rejects_disallowed_redirect_before_second_request(
+    monkeypatch,
+) -> None:
+    start = "https://flop.finance/intro/yellowpaper/"
+    calls: list[str] = []
+    responses = {
+        start: _FakeRadarResponse(
+            status_code=302,
+            url=start,
+            headers={"location": "https://evil.example/steal"},
+        )
+    }
+    monkeypatch.setattr(
+        airdrop_radar.httpx,
+        "Client",
+        lambda **_kwargs: _FakeRadarClient(responses, calls),
+    )
+
+    with pytest.raises(RuntimeError, match="non_official_url"):
+        airdrop_radar._stream_read(
+            start,
+            allowed_hosts=("flop.finance", "www.flop.finance"),
+            headers={},
+            byte_budget=1000,
+        )
+    assert calls == [start]
+
+
+def test_radar_allows_prevalidated_relative_redirect(monkeypatch) -> None:
+    start = "https://flop.finance/intro/yellowpaper/"
+    final = "https://www.flop.finance/intro/yellowpaper-v2/"
+    calls: list[str] = []
+    responses = {
+        start: _FakeRadarResponse(
+            status_code=302,
+            url=start,
+            headers={"location": "https://www.flop.finance/intro/yellowpaper-v2/"},
+        ),
+        final: _FakeRadarResponse(
+            status_code=200,
+            url=final,
+            headers={"content-length": "3"},
+            body=b"abc",
+        ),
+    }
+    monkeypatch.setattr(
+        airdrop_radar.httpx,
+        "Client",
+        lambda **_kwargs: _FakeRadarClient(responses, calls),
+    )
+
+    body, final_url = airdrop_radar._stream_read(
+        start,
+        allowed_hosts=("flop.finance", "www.flop.finance"),
+        headers={},
+        byte_budget=1000,
+    )
+    assert body == "abc"
+    assert final_url == final
+    assert calls == [start, final]
+
+
+def test_radar_redirect_limit_is_visible(monkeypatch) -> None:
+    hosts = ("flop.finance",)
+    calls: list[str] = []
+    responses: dict[str, _FakeRadarResponse] = {}
+    current = "https://flop.finance/r0"
+    for i in range(airdrop_radar.MAX_REDIRECTS + 1):
+        nxt = f"https://flop.finance/r{i + 1}"
+        responses[current] = _FakeRadarResponse(
+            status_code=302,
+            url=current,
+            headers={"location": nxt},
+        )
+        current = nxt
+    monkeypatch.setattr(
+        airdrop_radar.httpx,
+        "Client",
+        lambda **_kwargs: _FakeRadarClient(responses, calls),
+    )
+
+    with pytest.raises(RuntimeError, match="redirect_limit"):
+        airdrop_radar._stream_read(
+            "https://flop.finance/r0",
+            allowed_hosts=hosts,
+            headers={},
+            byte_budget=1000,
+        )
+    assert len(calls) == airdrop_radar.MAX_REDIRECTS + 1
+
+
 def test_redirect_query_change_is_not_a_target_change() -> None:
     assert airdrop_radar._stable_url(
         "https://docs.google.com/forms/d/e/form/viewform?usp=header#top"
