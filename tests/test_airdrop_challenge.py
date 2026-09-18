@@ -669,6 +669,102 @@ def test_primary_cannot_also_be_an_alternate(
         )
 
 
+class _FakeResponse:
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes = b"",
+    ) -> None:
+        self.status_code = status_code
+        self.url = url
+        self.headers = headers or {}
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"http {self.status_code}")
+
+    def iter_bytes(self):
+        yield self._body
+
+
+class _FakeClient:
+    def __init__(self, responses: dict[str, _FakeResponse], calls: list[str]) -> None:
+        self.responses = responses
+        self.calls = calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def stream(self, method: str, url: str):
+        assert method == "GET"
+        self.calls.append(url)
+        return self.responses[url]
+
+
+def test_disallowed_redirect_is_rejected_before_second_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = "https://flop.finance/challenge/validator.py"
+    calls: list[str] = []
+    responses = {
+        start: _FakeResponse(
+            status_code=302,
+            url=start,
+            headers={"location": "https://evil.example/steal"},
+        )
+    }
+
+    monkeypatch.setattr(
+        airdrop_challenge.httpx,
+        "Client",
+        lambda **_kwargs: _FakeClient(responses, calls),
+    )
+    with pytest.raises(ValueError, match="official_url_invalid"):
+        airdrop_challenge._read_official_bytes(start)
+    assert calls == [start]
+
+
+def test_allowed_relative_redirect_is_read_after_prevalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = "https://flop.finance/challenge/latest"
+    final = "https://flop.finance/challenge/validator.py"
+    calls: list[str] = []
+    responses = {
+        start: _FakeResponse(
+            status_code=302,
+            url=start,
+            headers={"location": "/challenge/validator.py"},
+        ),
+        final: _FakeResponse(
+            status_code=200,
+            url=final,
+            headers={"content-length": "3"},
+            body=b"abc",
+        ),
+    }
+    monkeypatch.setattr(
+        airdrop_challenge.httpx,
+        "Client",
+        lambda **_kwargs: _FakeClient(responses, calls),
+    )
+    assert airdrop_challenge._read_official_bytes(start) == b"abc"
+    assert calls == [start, final]
+
+
 def test_runner_has_get_only_network_and_no_binding_transport() -> None:
     source = inspect.getsource(airdrop_challenge)
     lowered = source.lower()
