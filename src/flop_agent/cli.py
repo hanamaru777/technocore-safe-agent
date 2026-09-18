@@ -16,6 +16,13 @@ def main() -> None:
     for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-stage-e2e-v3", "autopilot-quarantine-e2e", "autopilot-quarantine-e2e-v2"):
         sub.add_parser(command)
     radar = sub.add_parser("airdrop-radar"); radar.add_argument("--previous")
+    challenge_create = sub.add_parser("challenge-create"); challenge_create.add_argument("--spec", required=True)
+    challenge_status = sub.add_parser("challenge-status"); challenge_status.add_argument("challenge_id")
+    challenge_progress = sub.add_parser("challenge-progress"); challenge_progress.add_argument("challenge_id"); challenge_progress.add_argument("--patch", required=True)
+    challenge_pin = sub.add_parser("challenge-pin"); challenge_pin.add_argument("challenge_id"); challenge_pin.add_argument("--name", required=True); challenge_pin.add_argument("--url", required=True); challenge_pin.add_argument("--sha256")
+    challenge_plan_request = sub.add_parser("challenge-request-plan"); challenge_plan_request.add_argument("challenge_id"); challenge_plan_request.add_argument("--action", required=True); challenge_plan_request.add_argument("--request-id", required=True); challenge_plan_request.add_argument("--payload", required=True)
+    challenge_mark_request = sub.add_parser("challenge-request-mark"); challenge_mark_request.add_argument("challenge_id"); challenge_mark_request.add_argument("--request-id", required=True); challenge_mark_request.add_argument("--status", required=True); challenge_mark_request.add_argument("--receipt-hash")
+    challenge_requests = sub.add_parser("challenge-requests"); challenge_requests.add_argument("challenge_id")
     compact = sub.add_parser("compact-observer-state"); compact.add_argument("--apply", action="store_true")
     agent = sub.add_parser("agent"); agent.add_argument("identifier")
     resident_candidate = sub.add_parser("candidate"); resident_candidate.add_argument("candidate_id")
@@ -145,6 +152,47 @@ def main() -> None:
             from . import airdrop_monitor
             airdrop_monitor.run_forever()
             return
+        elif args.command == "challenge-create":
+            from . import airdrop_challenge
+            output = airdrop_challenge.create_challenge(
+                json.loads(Path(args.spec).read_text("utf-8"))
+            )
+        elif args.command == "challenge-status":
+            from . import airdrop_challenge
+            output = airdrop_challenge.build_plan(args.challenge_id)
+        elif args.command == "challenge-progress":
+            from . import airdrop_challenge
+            output = airdrop_challenge.update_progress(
+                args.challenge_id,
+                json.loads(Path(args.patch).read_text("utf-8")),
+            )
+        elif args.command == "challenge-pin":
+            from . import airdrop_challenge
+            output = airdrop_challenge.fetch_and_pin_artifact(
+                args.challenge_id,
+                name=args.name,
+                source_url=args.url,
+                expected_sha256=args.sha256,
+            )
+        elif args.command == "challenge-request-plan":
+            from . import airdrop_challenge
+            output = airdrop_challenge.plan_request(
+                args.challenge_id,
+                action=args.action,
+                request_id=args.request_id,
+                payload=json.loads(Path(args.payload).read_text("utf-8")),
+            )
+        elif args.command == "challenge-request-mark":
+            from . import airdrop_challenge
+            output = airdrop_challenge.mark_request(
+                args.challenge_id,
+                request_id=args.request_id,
+                status=args.status,
+                receipt_hash=args.receipt_hash,
+            )
+        elif args.command == "challenge-requests":
+            from . import airdrop_challenge
+            output = airdrop_challenge.request_status(args.challenge_id)
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
         elif args.command == "doctor": output = core.doctor()
