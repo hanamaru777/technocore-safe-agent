@@ -118,6 +118,10 @@ def main() -> None:
             previous = None
             if args.previous:
                 previous = json.load(sys.stdin) if args.previous == "-" else json.loads(Path(args.previous).read_text("utf-8"))
+                if isinstance(previous, dict) and isinstance(previous.get("snapshot"), dict):
+                    previous = previous["snapshot"]
+                if not isinstance(previous, dict) or previous.get("schema_version") != airdrop_radar.SCHEMA_VERSION:
+                    raise RuntimeError("airdrop_radar_previous_snapshot_invalid")
             output = {"snapshot": current, "diff": airdrop_radar.compare_snapshots(previous, current)}
         elif args.command == "activity-log": output = {"valid": core.verify_activity_log()[0], "path": str(core.STATE / "activities.jsonl")}
         elif args.command == "sync-official": output = core.sync_official()
