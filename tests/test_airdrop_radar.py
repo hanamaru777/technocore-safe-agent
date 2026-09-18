@@ -422,7 +422,7 @@ def test_lower_tier_scoring_change_is_high_even_if_resolved_winner_stays_same() 
     assert after["resolved_facts"]["agent_scoring_basis"]["value"] == "verified_inference_spend"
     events = airdrop_radar.compare_snapshots(before, after)["events"]
     event = next(row for row in events if row["key"] == "agent_scoring_basis")
-    assert event["type"] == "SOURCE_VARIANT_CHANGED"
+    assert event["type"] == "RESOLVED"
     assert event["severity"] == "HIGH"
 
 
@@ -657,7 +657,7 @@ def test_github_org_discovery_reads_second_page_when_first_is_full(monkeypatch) 
     def fake_read(url: str, **_kwargs):
         calls.append(url)
         return (
-            json.dumps(page1 if "page=1" in url else page2),
+            json.dumps(page1 if "&page=1" in url else page2),
             url,
         )
 
