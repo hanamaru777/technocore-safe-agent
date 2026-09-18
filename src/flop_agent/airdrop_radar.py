@@ -1236,6 +1236,31 @@ def compare_snapshots(
                     severity="HIGH",
                 )
             )
+        for url in sorted(before_links - after_links):
+            changed_sources.add(name)
+            events.append(
+                _event(
+                    event_type="OFFICIAL_LINK_REMOVED",
+                    key=f"official_link:{url}",
+                    before={"url": url, "source": name},
+                    after=None,
+                    severity="MEDIUM",
+                )
+            )
+
+        before_target = before_source_rows[name].get("final_url")
+        after_target = after_source_rows[name].get("final_url")
+        if before_target and after_target and before_target != after_target:
+            changed_sources.add(name)
+            events.append(
+                _event(
+                    event_type="SOURCE_TARGET_CHANGED",
+                    key=f"source:{name}:target",
+                    before=before_target,
+                    after=after_target,
+                    severity="HIGH" if name == "kol_application" else "MEDIUM",
+                )
+            )
 
     before_ok_sources = {
         name: row
