@@ -21,8 +21,8 @@ YELLOW = """
 <p>E.38 — Genesis allocation & airdrop vesting [TBD]. The claim path is unspecified.
 Still open: cap levels and the sublinear form on the conversion score, activity minimums,
 whether spend-to-unlock ships. balance is never a scoring term.</p>
-<p>E.40 — Agent & staker leg distribution [TBD]. Placeholder:
-pro-rata by settled inference spend for the agent leg.</p>
+<p>E.40 — Agent & staker leg distribution [TBD]. Specify the pools and
+the pro-rata basis (agents: verified inference spend, unconfirmed).</p>
 <script>genesis_agent_airdrop = 9,999,999,999 FLOP</script>
 <style>.fake { content: "testnet is live"; }</style>
 </body></html>
@@ -129,7 +129,7 @@ def test_current_fact_model_preserves_authority_and_conflicts() -> None:
     assert report["resolved_facts"]["genesis_agent_airdrop"]["conflict"] is False
 
     scoring = report["resolved_facts"]["agent_scoring_basis"]
-    assert scoring["value"] == "settled_inference_spend"
+    assert scoring["value"] == "verified_inference_spend"
     assert scoring["source"] == "yellowpaper"
     assert scoring["status"] == "unconfirmed"
     assert scoring["conflict"] is True
@@ -373,8 +373,8 @@ def test_lower_tier_scoring_change_is_high_even_if_resolved_winner_stays_same() 
         fetcher=fetch_from(changed),
         sleeper=lambda _seconds: None,
     )
-    assert before["resolved_facts"]["agent_scoring_basis"]["value"] == "settled_inference_spend"
-    assert after["resolved_facts"]["agent_scoring_basis"]["value"] == "settled_inference_spend"
+    assert before["resolved_facts"]["agent_scoring_basis"]["value"] == "verified_inference_spend"
+    assert after["resolved_facts"]["agent_scoring_basis"]["value"] == "verified_inference_spend"
     events = airdrop_radar.compare_snapshots(before, after)["events"]
     event = next(row for row in events if row["key"] == "agent_scoring_basis")
     assert event["type"] == "SOURCE_VARIANT_CHANGED"
