@@ -600,23 +600,122 @@ def secret_scan() -> list[str]:
     return hits
 
 
+def _reachable_history_blob_paths() -> dict[str, set[str]]:
+    """Map every blob reachable from --all refs to every observed historical path."""
+    mapping: dict[str, set[str]] = {}
+
+    # rev-list is the coverage floor: every reachable object is visited once and
+    # blobs normally carry one representative path.
+    objects = subprocess.run(
+        ["git", "rev-list", "--objects", "--all"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.splitlines()
+    for row in objects:
+        if " " not in row:
+            continue
+        object_id, path = row.split(" ", 1)
+        if path:
+            mapping.setdefault(object_id, set()).add(path)
+
+    # Raw history adds alternate paths for moved/reused blobs and merge-resolution
+    # blobs. -m exposes merge diffs; --root covers the first commit.
+    raw = subprocess.run(
+        [
+            "git",
+            "log",
+            "--all",
+            "-m",
+            "--format=",
+            "--raw",
+            "--root",
+            "--no-renames",
+            "--no-abbrev",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.splitlines()
+    zero = "0" * 40
+    for row in raw:
+        if not row.startswith(":") or "\t" not in row:
+            continue
+        metadata, path = row.split("\t", 1)
+        fields = metadata[1:].split()
+        if len(fields) < 5 or not path:
+            continue
+        old_sha, new_sha = fields[2], fields[3]
+        for object_id in (old_sha, new_sha):
+            if object_id != zero:
+                mapping.setdefault(object_id, set()).add(path)
+    return mapping
+
+
+def _read_git_object_batch(object_ids: list[str]):
+    """Yield (object_id, object_type, bytes) through one git cat-file process."""
+    process = subprocess.Popen(
+        ["git", "cat-file", "--batch"],
+        cwd=ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    try:
+        for object_id in object_ids:
+            process.stdin.write((object_id + "\n").encode("ascii"))
+            process.stdin.flush()
+            header = process.stdout.readline().decode("ascii", errors="replace").strip()
+            parts = header.split()
+            if len(parts) != 3 or parts[0] != object_id:
+                raise RuntimeError("git cat-file batch returned an invalid header")
+            object_type = parts[1]
+            size = int(parts[2])
+            content = process.stdout.read(size)
+            terminator = process.stdout.read(1)
+            if len(content) != size or terminator != b"\n":
+                raise RuntimeError("git cat-file batch returned a truncated object")
+            yield object_id, object_type, content
+    finally:
+        try:
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+        return_code = process.wait(timeout=30)
+        if return_code:
+            stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+            raise RuntimeError("git cat-file batch failed: " + stderr[:240])
+
+
 def history_secret_scan() -> list[str]:
-    """Scan every reachable Git commit without printing any matched material."""
-    commits = subprocess.run(["git", "rev-list", "--all"], cwd=ROOT, text=True, capture_output=True, check=True).stdout.splitlines()
+    """Scan every unique blob in reachable Git history without printing material."""
+    blob_paths = _reachable_history_blob_paths()
     hits: list[str] = []
-    for commit in commits:
-        files = subprocess.run(["git", "ls-tree", "-r", "--name-only", commit], cwd=ROOT, text=True, capture_output=True, check=True).stdout.splitlines()
-        for name in files:
-            if name == "uv.lock":
+    for object_id, object_type, content in _read_git_object_batch(sorted(blob_paths)):
+        if object_type != "blob":
+            continue
+        paths = sorted(path for path in blob_paths[object_id] if path != "uv.lock")
+        if not paths:
+            continue
+        decoded = content.decode("utf-8", errors="replace")
+        for number, line in enumerate(decoded.splitlines(), 1):
+            if not SECRET_PATTERN.search(line):
                 continue
-            content = subprocess.run(["git", "show", f"{commit}:{name}"], cwd=ROOT, capture_output=True, check=False).stdout.decode("utf-8", errors="replace")
-            for number, line in enumerate(content.splitlines(), 1):
+            is_required_seed_handling = "SIGN_SEED" in line and (
+                "os.environ" in line
+                or "env:SIGN_SEED" in line
+                or "Remove-Item Env:SIGN_SEED" in line
+            )
+            for name in paths:
                 is_documented_hash = (
                     (name == "SOURCES.md" and "SHA" in line)
                     or "SIGNER_SHA256 =" in line
                     or bool(PUBLIC_HASH_ASSIGNMENT_RE.search(line))
                 )
-                is_required_seed_handling = "SIGN_SEED" in line and ("os.environ" in line or "env:SIGN_SEED" in line or "Remove-Item Env:SIGN_SEED" in line)
-                if SECRET_PATTERN.search(line) and not is_documented_hash and not is_required_seed_handling:
-                    hits.append(f"{commit[:12]}:{name}:{number}")
+                if not is_documented_hash and not is_required_seed_handling:
+                    hits.append(f"{object_id[:12]}:{name}:{number}")
     return hits
