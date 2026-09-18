@@ -32,7 +32,8 @@ YELLOW = """
 <p>airdrop_vesting_duration_blocks | 7_776_000 blocks</p>
 <p>E.38 — Genesis allocation & airdrop vesting [TBD]. The claim path is unspecified.
 Still open: cap levels and the sublinear form on the conversion score, activity minimums,
-whether spend-to-unlock ships. balance is never a scoring term.</p>
+the testnet→mainnet conversion, the agent vesting horizon, whether spend-to-unlock ships.
+balance is never a scoring term.</p>
 <p>E.40 — Agent & staker leg distribution [TBD]. Specify the pools and
 the pro-rata basis (agents: verified inference spend, unconfirmed).</p>
 <script>genesis_agent_airdrop = 9,999,999,999 FLOP</script>
@@ -167,6 +168,9 @@ def test_current_fact_model_preserves_authority_and_conflicts() -> None:
     assert report["resolved_facts"]["spend_to_unlock_status"]["value"] == "open"
     assert report["resolved_facts"]["spend_to_unlock_ratio"]["value"] == "3:1"
     assert report["resolved_facts"]["activity_minimums_status"]["value"] == "open"
+    assert report["resolved_facts"]["conversion_cap_status"]["value"] == "open"
+    assert report["resolved_facts"]["testnet_to_mainnet_conversion_status"]["value"] == "unspecified"
+    assert report["resolved_facts"]["agent_vesting_status"]["value"] == "open"
     assert report["resolved_facts"]["balance_is_scoring_term"]["value"] is False
     assert report["resolved_facts"]["agent_identity_min_stake"]["value"] == 10
     assert report["resolved_facts"]["agent_identity_min_stake"]["status"] == "normative"
