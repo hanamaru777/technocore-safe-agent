@@ -51,6 +51,11 @@ trap 'stop unexpected_rc_$?' ERR
 [[ $EUID -eq 0 ]] || stop run_as_root
 [[ $TARGET =~ ^[0-9a-f]{40}$ ]] || stop exact_target_sha_required
 [[ -d $APP/.git && -x $APP/.venv/bin/python ]] || stop production_checkout_or_venv_missing
+OWNER=$(stat -c %U "$APP/.git")
+[[ -n $OWNER ]] || stop production_checkout_owner_missing
+git_owner() {
+  sudo -u "$OWNER" git "$@"
+}
 [[ -f $OBSERVER_STATE ]] || stop observer_state_missing
 [[ -r $SOURCE_ENV ]] || stop discord_source_env_unreadable
 
@@ -63,8 +68,8 @@ done
 [[ ! -e $STATE/airdrop-radar ]] || stop airdrop_state_already_exists_review_required
 
 cd "$APP"
-[[ -z $(git status --porcelain) ]] || stop production_worktree_not_clean
-PRE=$(git rev-parse HEAD)
+[[ -z $(git_owner status --porcelain) ]] || stop production_worktree_not_clean
+PRE=$(git_owner rev-parse HEAD)
 [[ $PRE == "$PRE_EXPECTED" ]] || stop "unexpected_production_head:$PRE"
 
 for svc in "${EXISTING_SERVICES[@]}"; do
@@ -142,10 +147,10 @@ target.write_text(
 os.chmod(target, 0o600)
 PY
 
-git fetch --no-tags origin main
-REMOTE=$(git rev-parse origin/main)
+git_owner fetch --no-tags origin main
+REMOTE=$(git_owner rev-parse origin/main)
 [[ $REMOTE == "$TARGET" ]] || stop "origin_main_moved:expected=$TARGET:actual=$REMOTE"
-git merge-base --is-ancestor "$PRE" "$TARGET" || stop target_not_fast_forward_from_production
+git_owner merge-base --is-ancestor "$PRE" "$TARGET" || stop target_not_fast_forward_from_production
 
 EXPECTED_PATHS=$(cat <<'EOF' | sort
 packaging/oracle/airdrop-monitor.service
@@ -169,7 +174,7 @@ tests/test_airdrop_radar.py
 tests/test_security.py
 EOF
 )
-ACTUAL_PATHS=$(git diff --name-only "$PRE..$TARGET" | sort)
+ACTUAL_PATHS=$(git_owner diff --name-only "$PRE..$TARGET" | sort)
 [[ $ACTUAL_PATHS == "$EXPECTED_PATHS" ]] || {
   echo "AIRDROP_PROD_DEPLOY=STOP:changed_file_allowlist_mismatch" >&2
   echo "ACTUAL_CHANGED_PATHS:" >&2
@@ -184,7 +189,7 @@ for path in \
   packaging/oracle/airdrop-notifier.service \
   packaging/oracle/airdrop-notifier.timer \
   packaging/oracle/deploy-airdrop-production-v1.sh; do
-  git cat-file -e "$TARGET:$path" || stop "target_missing_required_path:$path"
+  git_owner cat-file -e "$TARGET:$path" || stop "target_missing_required_path:$path"
 done
 
 CUTOVER_STARTED=0
@@ -203,7 +208,7 @@ rollback() {
     systemctl daemon-reload >/dev/null 2>&1
     rm -rf -- "$STATE/airdrop-radar"
     cd "$APP"
-    git reset --hard "$PRE" >/dev/null 2>&1
+    git_owner reset --hard "$PRE" >/dev/null 2>&1
     echo "AIRDROP_PROD_ROLLBACK=COMPLETE existing_services_not_restarted=YES" >&2
   fi
   cleanup_tmp
@@ -212,8 +217,8 @@ rollback() {
 trap rollback EXIT
 
 CUTOVER_STARTED=1
-git merge --ff-only "$TARGET" >/dev/null
-[[ $(git rev-parse HEAD) == "$TARGET" ]] || stop post_merge_head_mismatch
+git_owner merge --ff-only "$TARGET" >/dev/null
+[[ $(git_owner rev-parse HEAD) == "$TARGET" ]] || stop post_merge_head_mismatch
 
 install -o root -g root -m 0600 "$ENV_TMP" "$NOTIFIER_ENV"
 install -o root -g root -m 0644 "$APP/packaging/oracle/airdrop-monitor.service" "$MONITOR_SERVICE_FILE"
@@ -354,7 +359,7 @@ PY
 [[ $EVENTS_POST == "$CORE_EVENTS_EXPECTED" && $MESSAGES_POST == "$CORE_MESSAGES_EXPECTED" ]] || \
   stop "P0_core_changed_after:$EVENTS_POST/$MESSAGES_POST"
 [[ $HEALTH_POST == ok || $HEALTH_POST == degraded ]] || stop "observer_health_not_allowed_after:$HEALTH_POST"
-[[ -z $(git status --porcelain) ]] || stop post_deploy_worktree_not_clean
+[[ -z $(git_owner status --porcelain) ]] || stop post_deploy_worktree_not_clean
 
 DONE=1
 trap - EXIT
@@ -363,7 +368,7 @@ cleanup_tmp
 printf '%s\n' \
   "AIRDROP_PROD_DEPLOY=PASS" \
   "PRE_SHA=$PRE" \
-  "POST_SHA=$(git rev-parse HEAD)" \
+  "POST_SHA=$(git_owner rev-parse HEAD)" \
   "PROTECTED_CORE=$EVENTS_POST/$MESSAGES_POST OBSERVER_HEALTH=$HEALTH_POST" \
   "EXISTING_SERVICES_UNCHANGED=YES" \
   "MONITOR_OUTCOME=$MONITOR_OUTCOME RADAR_HEALTH=$RADAR_HEALTH LEDGER_INTEGRITY=$LEDGER_OK" \
