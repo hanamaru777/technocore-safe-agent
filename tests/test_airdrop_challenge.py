@@ -768,8 +768,9 @@ def test_allowed_relative_redirect_is_read_after_prevalidation(
 def test_runner_has_get_only_network_and_no_binding_transport() -> None:
     source = inspect.getsource(airdrop_challenge)
     lowered = source.lower()
-    assert 'httpx.stream(' in lowered
-    assert '"get"' in lowered
+    assert "httpx.client(" in lowered
+    assert 'client.stream("get"' in lowered
+    assert "follow_redirects=false" in lowered
     assert "httpx.post" not in lowered
     assert "httpx.put" not in lowered
     assert "httpx.delete" not in lowered
