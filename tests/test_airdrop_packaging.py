@@ -152,3 +152,16 @@ def test_airdrop_production_deploy_smoke_is_discord_only() -> None:
     assert "DISCORD_SMOKE=DELIVERED" in helper
     assert "technocore.chat" not in helper
     assert "sign.py" not in helper
+
+
+def test_airdrop_production_deploy_runs_git_as_checkout_owner() -> None:
+    helper = _read("deploy-airdrop-production-v1.sh")
+    assert 'OWNER=$(stat -c %U "$APP/.git")' in helper
+    assert 'sudo -u "$OWNER" git "$@"' in helper
+    assert "git_owner fetch --no-tags origin main" in helper
+    assert 'git_owner merge --ff-only "$TARGET"' in helper
+    assert 'git_owner reset --hard "$PRE"' in helper
+    assert '$(git_owner status --porcelain)' in helper
+    assert "git fetch --no-tags origin main" not in helper
+    assert 'git merge --ff-only "$TARGET"' not in helper
+    assert 'git reset --hard "$PRE"' not in helper
