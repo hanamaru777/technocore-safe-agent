@@ -11,7 +11,7 @@ from . import core
 def main() -> None:
     parser = argparse.ArgumentParser(prog="flop")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan", "airdrop-record", "airdrop-ledger-status", "airdrop-evidence-export", "airdrop-monitor-once", "airdrop-monitor-status", "airdrop-alerts", "airdrop-daily-summary", "airdrop-monitor"):
+    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan", "airdrop-record", "airdrop-ledger-status", "airdrop-evidence-export", "airdrop-monitor-once", "airdrop-monitor-status", "airdrop-alerts", "airdrop-daily-summary", "airdrop-monitor", "airdrop-notifier-once", "airdrop-notifier-status"):
         sub.add_parser(command)
     for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-stage-e2e-v3", "autopilot-quarantine-e2e", "autopilot-quarantine-e2e-v2"):
         sub.add_parser(command)
@@ -152,6 +152,12 @@ def main() -> None:
             from . import airdrop_monitor
             airdrop_monitor.run_forever()
             return
+        elif args.command == "airdrop-notifier-once":
+            from . import airdrop_notifier
+            output = airdrop_notifier.run_once()
+        elif args.command == "airdrop-notifier-status":
+            from . import airdrop_notifier
+            output = airdrop_notifier.status()
         elif args.command == "challenge-create":
             from . import airdrop_challenge
             output = airdrop_challenge.create_challenge(
