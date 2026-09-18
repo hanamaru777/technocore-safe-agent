@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=oneshot
 User=technocore
 WorkingDirectory=/opt/technocore-safe-agent
-EnvironmentFile=/etc/technocore-safe-agent/env
+EnvironmentFile=/etc/technocore-safe-agent/airdrop-notifier.env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.cli airdrop-notifier-once
