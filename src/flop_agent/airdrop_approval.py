@@ -111,17 +111,18 @@ def _default_state() -> dict:
 
 def _atomic_write(value: dict) -> None:
     path = state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-        newline="\n",
-    )
+    handle = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+            newline="\n",
+        )
         with handle:
             json.dump(value, handle, ensure_ascii=False, sort_keys=True, indent=2)
             handle.write("\n")
@@ -129,9 +130,14 @@ def _atomic_write(value: dict) -> None:
             os.fsync(handle.fileno())
         os.chmod(handle.name, 0o640)
         os.replace(handle.name, path)
+    except OSError as error:
+        raise ApprovalInboxError("airdrop_approval_state_write_failed") from error
     finally:
-        if os.path.exists(handle.name):
-            os.unlink(handle.name)
+        if handle is not None and os.path.exists(handle.name):
+            try:
+                os.unlink(handle.name)
+            except OSError:
+                pass
 
 
 def _binding_from_record(record: dict) -> dict:
@@ -467,28 +473,27 @@ def poll_notices(*, now: datetime | None = None) -> list[str]:
     current = (now or datetime.now(UTC)).astimezone(UTC)
     try:
         state = _load_state()
+        changed = _refresh_expired(state, current)
+        rows = [
+            record
+            for record in state["requests"].values()
+            if record["status"] == "pending" and record["notified_at"] is None
+        ]
+        rows.sort(key=lambda row: (row["expires_at"], row["request_id"]))
+        notices = []
+        for record in rows[:NOTICE_LIMIT]:
+            notices.append(render_request(record))
+            record["notified_at"] = current.isoformat()
+            changed = True
+        if changed:
+            _atomic_write(state)
     except ApprovalInboxError:
         if _FAILURE_NOTIFIED:
             return []
         _FAILURE_NOTIFIED = True
         return [
             "🔴 FLOP Airdrop Action Inbox異常\n"
-            "承認状態を安全に読めないためfail-closedです。外部実行は行っていません。"
+            "承認状態を安全に扱えないためfail-closedです。外部実行は行っていません。"
         ]
-
     _FAILURE_NOTIFIED = False
-    changed = _refresh_expired(state, current)
-    rows = [
-        record
-        for record in state["requests"].values()
-        if record["status"] == "pending" and record["notified_at"] is None
-    ]
-    rows.sort(key=lambda row: (row["expires_at"], row["request_id"]))
-    notices = []
-    for record in rows[:NOTICE_LIMIT]:
-        notices.append(render_request(record))
-        record["notified_at"] = current.isoformat()
-        changed = True
-    if changed:
-        _atomic_write(state)
     return notices
