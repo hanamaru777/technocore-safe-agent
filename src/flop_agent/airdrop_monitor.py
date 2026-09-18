@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
 
-from . import airdrop_ledger, airdrop_radar
+from . import airdrop_action_stager, airdrop_ledger, airdrop_radar
 
 SCHEMA_VERSION = 1
 CONFIG_NAME = "monitor-config.json"
@@ -165,6 +165,9 @@ def _heartbeat_default() -> dict:
         "new_events": 0,
         "immediate_alerts": 0,
         "digest_alerts": 0,
+        "staging_outcome": None,
+        "staged_approvals": 0,
+        "staging_error_type": None,
         "error_type": None,
     }
 
@@ -475,6 +478,24 @@ def run_once(
             digest_alerts=0,
         )
         raise
+    staging_outcome = "ok"
+    staging_error_type = None
+    staged_approvals = 0
+    repaired_approvals = 0
+    try:
+        staging = airdrop_action_stager.stage_new_events(
+            new_event_ids,
+            records_by_id,
+            now=current,
+        )
+        staged_approvals = len(staging.get("staged", []))
+        repaired_approvals = len(staging.get("repaired", []))
+    except Exception as error:
+        # Approval staging is fail-closed but isolated from Radar evidence and
+        # ordinary alert delivery. Operator health reporting exposes the error.
+        staging_outcome = "failed"
+        staging_error_type = error.__class__.__name__
+
     _write_heartbeat(
         last_attempt_at=observed_at,
         last_completed_at=observed_at,
@@ -485,6 +506,9 @@ def run_once(
         new_events=len(new_event_ids),
         immediate_alerts=len(immediate),
         digest_alerts=len(digest),
+        staging_outcome=staging_outcome,
+        staged_approvals=staged_approvals,
+        staging_error_type=staging_error_type,
     )
     return {
         "outcome": "recorded",
@@ -495,6 +519,10 @@ def run_once(
         "new_events": recorded.get("new_events", []),
         "immediate_alerts": immediate,
         "digest_alerts": digest,
+        "staging_outcome": staging_outcome,
+        "staging_error_type": staging_error_type,
+        "staged_approvals": staged_approvals,
+        "repaired_approvals": repaired_approvals,
         "ledger": recorded.get("ledger"),
     }
 
@@ -538,6 +566,9 @@ def monitor_status(*, now: datetime | None = None) -> dict:
         "snapshot_id": heartbeat.get("snapshot_id"),
         "pending_immediate_alerts": pending_immediate,
         "pending_digest_alerts": pending_digest,
+        "staging_outcome": heartbeat.get("staging_outcome"),
+        "staged_approvals": heartbeat.get("staged_approvals", 0),
+        "staging_error_type": heartbeat.get("staging_error_type"),
         "ledger_integrity_valid": ledger_status["integrity_valid"],
         "ledger_count": ledger_status["ledger_count"],
         "scan_interval_seconds": config["interval_seconds"],
