@@ -1396,6 +1396,23 @@ def compare_snapshots(
             )
         )
 
+    # A source version change can contain new semantics outside the currently
+    # extracted fact set. Escalate the normative Yellow Paper more strongly.
+    for name in sorted(stable_ok_sources):
+        before_version = before_source_rows[name].get("meta", {}).get("version")
+        after_version = after_source_rows[name].get("meta", {}).get("version")
+        if before_version and after_version and before_version != after_version:
+            changed_sources.add(name)
+            events.append(
+                _event(
+                    event_type="SOURCE_VERSION_CHANGED",
+                    key=f"source:{name}:version",
+                    before=before_version,
+                    after=after_version,
+                    severity="HIGH" if name == "yellowpaper" else "MEDIUM",
+                )
+            )
+
     # Discover new high-signal pages linked from already trusted FLOP pages.
     # Link appearance is a review signal only; it never means the action is open.
     for name in sorted(stable_ok_sources):
