@@ -7,10 +7,12 @@ transport to deliver later.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
@@ -21,6 +23,7 @@ SCHEMA_VERSION = 1
 CONFIG_NAME = "monitor-config.json"
 HEARTBEAT_NAME = "monitor-heartbeat.json"
 ALERTS_NAME = "alert-outbox.json"
+ALERT_LOCK_NAME = "alert-outbox.lock"
 
 ABSOLUTE_MINIMUM_SCAN_SECONDS = 300
 DEFAULT_INTERVAL_SECONDS = 900
@@ -122,6 +125,18 @@ def load_config() -> dict:
         _atomic_json_write(path, DEFAULT_CONFIG)
         return dict(DEFAULT_CONFIG)
     return _validate_config(_read_json(path, default=dict(DEFAULT_CONFIG)))
+
+
+@contextmanager
+def _alert_lock():
+    monitor_dir().mkdir(parents=True, exist_ok=True)
+    path = _path(ALERT_LOCK_NAME)
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _empty_alerts() -> dict:
@@ -265,9 +280,26 @@ def _enforce_alert_capacity(alerts: dict, limit: int) -> None:
     events = alerts["events"]
     if len(events) <= limit:
         return
-    # Pending alerts are evidence-backed operator work. Never silently evict one
-    # merely to satisfy a storage bound.
-    raise RuntimeError("airdrop_monitor_alert_capacity_exceeded")
+
+    delivered = sorted(
+        (
+            (event_id, item)
+            for event_id, item in events.items()
+            if isinstance(item, dict) and item.get("delivery_state") == "delivered"
+        ),
+        key=lambda pair: (
+            str(pair[1].get("delivered_at") or pair[1].get("last_seen") or ""),
+            str(pair[0]),
+        ),
+    )
+    for event_id, _item in delivered:
+        if len(events) <= limit:
+            break
+        events.pop(event_id, None)
+
+    # Pending alerts are evidence-backed operator work. Never silently evict one.
+    if len(events) > limit:
+        raise RuntimeError("airdrop_monitor_alert_capacity_exceeded")
 
 
 def _queue_alerts(
@@ -277,42 +309,43 @@ def _queue_alerts(
     observed_at: str,
     config: dict,
 ) -> tuple[list[dict], list[dict]]:
-    state = _load_alerts()
     by_id = records_by_id
     immediate: list[dict] = []
     digest: list[dict] = []
 
-    for event_id in new_event_ids:
-        durable = by_id.get(event_id)
-        if not durable:
-            raise RuntimeError("airdrop_monitor_event_missing_from_evidence_bundle")
-        payload = _build_alert(durable)
-        route = payload["route"]
-        if route == "ledger_only":
-            continue
+    with _alert_lock():
+        state = _load_alerts()
+        for event_id in new_event_ids:
+            durable = by_id.get(event_id)
+            if not durable:
+                raise RuntimeError("airdrop_monitor_event_missing_from_evidence_bundle")
+            payload = _build_alert(durable)
+            route = payload["route"]
+            if route == "ledger_only":
+                continue
 
-        known = state["events"].get(event_id)
-        if isinstance(known, dict):
-            known["last_seen"] = observed_at
-            continue
+            known = state["events"].get(event_id)
+            if isinstance(known, dict):
+                known["last_seen"] = observed_at
+                continue
 
-        item = {
-            "event_id": event_id,
-            "first_queued_at": observed_at,
-            "last_seen": observed_at,
-            "route": route,
-            "delivery_state": "pending",
-            "payload": payload,
-        }
-        state["events"][event_id] = item
-        if route == "immediate":
-            immediate.append(payload)
-        else:
-            digest.append(payload)
+            item = {
+                "event_id": event_id,
+                "first_queued_at": observed_at,
+                "last_seen": observed_at,
+                "route": route,
+                "delivery_state": "pending",
+                "payload": payload,
+            }
+            state["events"][event_id] = item
+            if route == "immediate":
+                immediate.append(payload)
+            else:
+                digest.append(payload)
 
-    state["updated_at"] = observed_at
-    _enforce_alert_capacity(state, config["max_alerts"])
-    _atomic_json_write(_path(ALERTS_NAME), state)
+        state["updated_at"] = observed_at
+        _enforce_alert_capacity(state, config["max_alerts"])
+        _atomic_json_write(_path(ALERTS_NAME), state)
     return immediate, digest
 
 
@@ -481,16 +514,17 @@ def monitor_status(*, now: datetime | None = None) -> dict:
         age = max(0, int((current - _parse_utc(completed)).total_seconds()))
         stale = age > config["heartbeat_stale_after_seconds"]
 
-    alerts = _load_alerts()
-    pending_immediate = 0
-    pending_digest = 0
-    for item in alerts.get("events", {}).values():
-        if not isinstance(item, dict) or item.get("delivery_state") != "pending":
-            continue
-        if item.get("route") == "immediate":
-            pending_immediate += 1
-        elif item.get("route") == "digest":
-            pending_digest += 1
+    with _alert_lock():
+        alerts = _load_alerts()
+        pending_immediate = 0
+        pending_digest = 0
+        for item in alerts.get("events", {}).values():
+            if not isinstance(item, dict) or item.get("delivery_state") != "pending":
+                continue
+            if item.get("route") == "immediate":
+                pending_immediate += 1
+            elif item.get("route") == "digest":
+                pending_digest += 1
 
     ledger_status = airdrop_ledger.status()
     return {
@@ -512,12 +546,13 @@ def monitor_status(*, now: datetime | None = None) -> dict:
 
 
 def pending_alerts() -> dict:
-    state = _load_alerts()
-    rows = [
-        item
-        for item in state.get("events", {}).values()
-        if isinstance(item, dict) and item.get("delivery_state") == "pending"
-    ]
+    with _alert_lock():
+        state = _load_alerts()
+        rows = [
+            dict(item)
+            for item in state.get("events", {}).values()
+            if isinstance(item, dict) and item.get("delivery_state") == "pending"
+        ]
     rows.sort(
         key=lambda item: (
             0 if item.get("route") == "immediate" else 1,
@@ -529,6 +564,54 @@ def pending_alerts() -> dict:
         "schema_version": SCHEMA_VERSION,
         "alerts": rows,
     }
+
+
+def mark_alert_delivered(
+    event_id: str,
+    *,
+    transport: str,
+    receipt: str,
+    now: datetime | None = None,
+) -> dict:
+    if not isinstance(event_id, str) or not event_id:
+        raise ValueError("airdrop_monitor_event_id_invalid")
+    if not isinstance(transport, str) or not 1 <= len(transport) <= 40:
+        raise ValueError("airdrop_monitor_delivery_transport_invalid")
+    if not isinstance(receipt, str) or not 1 <= len(receipt) <= 200:
+        raise ValueError("airdrop_monitor_delivery_receipt_invalid")
+    delivered_at = _utc(now)
+    with _alert_lock():
+        state = _load_alerts()
+        item = state.get("events", {}).get(event_id)
+        if not isinstance(item, dict):
+            raise RuntimeError("airdrop_monitor_alert_not_found")
+        if item.get("delivery_state") == "delivered":
+            return dict(item)
+        if item.get("delivery_state") != "pending":
+            raise RuntimeError("airdrop_monitor_alert_delivery_state_invalid")
+        item["delivery_state"] = "delivered"
+        item["delivered_at"] = delivered_at
+        item["delivery_transport"] = transport
+        item["delivery_receipt"] = receipt
+        state["updated_at"] = delivered_at
+        _enforce_alert_capacity(state, load_config()["max_alerts"])
+        _atomic_json_write(_path(ALERTS_NAME), state)
+        return dict(item)
+
+
+def alert_delivery_status(event_id: str) -> dict:
+    with _alert_lock():
+        state = _load_alerts()
+        item = state.get("events", {}).get(event_id)
+        if not isinstance(item, dict):
+            raise RuntimeError("airdrop_monitor_alert_not_found")
+        return {
+            "event_id": event_id,
+            "delivery_state": item.get("delivery_state"),
+            "delivered_at": item.get("delivered_at"),
+            "delivery_transport": item.get("delivery_transport"),
+            "delivery_receipt": item.get("delivery_receipt"),
+        }
 
 
 def daily_summary(*, now: datetime | None = None) -> dict:
