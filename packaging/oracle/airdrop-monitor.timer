@@ -1,0 +1,12 @@
+[Unit]
+Description=run FLOP airdrop monitor every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=15min
+AccuracySec=10s
+RandomizedDelaySec=15s
+Unit=technocore-safe-agent-airdrop-monitor.service
+
+[Install]
+WantedBy=timers.target

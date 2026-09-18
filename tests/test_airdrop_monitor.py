@@ -430,6 +430,188 @@ def test_alert_capacity_failure_is_visible_and_does_not_evict_pending(
     assert heartbeat["outcome"] == "alert_routing_failed"
 
 
+def test_mark_alert_delivered_is_post_success_and_idempotent(
+    isolated_state: Path,
+) -> None:
+    first = high_snapshot("delivery-1", 1, T0, "a")
+    second = high_snapshot("delivery-2", 2, T0 + timedelta(minutes=15), "b")
+    airdrop_monitor.run_once(scanner=lambda: first, now=T0)
+    changed = airdrop_monitor.run_once(
+        scanner=lambda: second,
+        now=T0 + timedelta(minutes=15),
+    )
+    event_id = changed["immediate_alerts"][0]["event_id"]
+
+    assert airdrop_monitor.alert_delivery_status(event_id)["delivery_state"] == "pending"
+
+    delivered = airdrop_monitor.mark_alert_delivered(
+        event_id,
+        transport="discord",
+        receipt="discord-message-123",
+        now=T0 + timedelta(minutes=16),
+    )
+    assert delivered["delivery_state"] == "delivered"
+    assert delivered["delivery_transport"] == "discord"
+    assert delivered["delivery_receipt"] == "discord-message-123"
+    assert airdrop_monitor.pending_alerts()["alerts"] == []
+
+    again = airdrop_monitor.mark_alert_delivered(
+        event_id,
+        transport="discord",
+        receipt="different-receipt-must-not-replace",
+        now=T0 + timedelta(minutes=17),
+    )
+    assert again["delivery_receipt"] == "discord-message-123"
+    assert again["delivered_at"] == delivered["delivered_at"]
+
+
+def test_mark_alerts_delivered_updates_digest_batch_atomically(
+    isolated_state: Path,
+) -> None:
+    base = isolated_state / "airdrop-radar"
+    base.mkdir(parents=True, exist_ok=True)
+    events = {
+        event_id: {
+            "event_id": event_id,
+            "first_queued_at": T0.isoformat(),
+            "last_seen": T0.isoformat(),
+            "route": "digest",
+            "delivery_state": "pending",
+            "payload": {"event_id": event_id},
+        }
+        for event_id in ("digest-a", "digest-b")
+    }
+    (base / "alert-outbox.json").write_text(
+        json.dumps(
+            {
+                "schema_version": airdrop_monitor.SCHEMA_VERSION,
+                "updated_at": T0.isoformat(),
+                "events": events,
+            }
+        ),
+        "utf-8",
+    )
+
+    rows = airdrop_monitor.mark_alerts_delivered(
+        ["digest-a", "digest-b"],
+        transport="discord",
+        receipt="same-discord-message",
+        now=T0 + timedelta(minutes=1),
+    )
+    assert {row["delivery_state"] for row in rows} == {"delivered"}
+    assert {row["delivery_receipt"] for row in rows} == {"same-discord-message"}
+    assert airdrop_monitor.pending_alerts()["alerts"] == []
+
+
+def test_mark_alerts_delivered_validates_entire_batch_before_mutation(
+    isolated_state: Path,
+) -> None:
+    base = isolated_state / "airdrop-radar"
+    base.mkdir(parents=True, exist_ok=True)
+    events = {
+        "digest-a": {
+            "event_id": "digest-a",
+            "first_queued_at": T0.isoformat(),
+            "last_seen": T0.isoformat(),
+            "route": "digest",
+            "delivery_state": "pending",
+            "payload": {"event_id": "digest-a"},
+        }
+    }
+    path = base / "alert-outbox.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": airdrop_monitor.SCHEMA_VERSION,
+                "updated_at": T0.isoformat(),
+                "events": events,
+            }
+        ),
+        "utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="alert_not_found"):
+        airdrop_monitor.mark_alerts_delivered(
+            ["digest-a", "missing"],
+            transport="discord",
+            receipt="must-not-partially-commit",
+            now=T0 + timedelta(minutes=1),
+        )
+    persisted = json.loads(path.read_text("utf-8"))
+    assert persisted["events"]["digest-a"]["delivery_state"] == "pending"
+
+
+def test_capacity_prunes_delivered_before_refusing_pending(
+    isolated_state: Path,
+) -> None:
+    base = isolated_state / "airdrop-radar"
+    base.mkdir(parents=True, exist_ok=True)
+    config = {
+        **airdrop_monitor.DEFAULT_CONFIG,
+        "max_alerts": 10,
+    }
+    (base / "monitor-config.json").write_text(json.dumps(config), "utf-8")
+    existing_events = {
+        f"pending-{i}": {
+            "event_id": f"pending-{i}",
+            "first_queued_at": T0.isoformat(),
+            "last_seen": T0.isoformat(),
+            "route": "immediate",
+            "delivery_state": "pending",
+            "payload": {"event_id": f"pending-{i}"},
+        }
+        for i in range(9)
+    }
+    existing_events["old-delivered"] = {
+        "event_id": "old-delivered",
+        "first_queued_at": (T0 - timedelta(days=1)).isoformat(),
+        "last_seen": (T0 - timedelta(days=1)).isoformat(),
+        "route": "immediate",
+        "delivery_state": "delivered",
+        "delivered_at": (T0 - timedelta(days=1)).isoformat(),
+        "delivery_transport": "discord",
+        "delivery_receipt": "old-message",
+        "payload": {"event_id": "old-delivered"},
+    }
+    (base / "alert-outbox.json").write_text(
+        json.dumps(
+            {
+                "schema_version": airdrop_monitor.SCHEMA_VERSION,
+                "updated_at": T0.isoformat(),
+                "events": existing_events,
+            }
+        ),
+        "utf-8",
+    )
+
+    first = high_snapshot("capacity-1", 1, T0, "a")
+    second = high_snapshot("capacity-2", 2, T0 + timedelta(minutes=15), "b")
+    airdrop_monitor.run_once(scanner=lambda: first, now=T0)
+    result = airdrop_monitor.run_once(
+        scanner=lambda: second,
+        now=T0 + timedelta(minutes=15),
+    )
+    new_id = result["immediate_alerts"][0]["event_id"]
+
+    persisted = json.loads((base / "alert-outbox.json").read_text("utf-8"))
+    assert len(persisted["events"]) == 10
+    assert "old-delivered" not in persisted["events"]
+    assert new_id in persisted["events"]
+    assert sum(
+        item.get("delivery_state") == "pending"
+        for item in persisted["events"].values()
+    ) == 10
+
+
+def test_alert_lock_file_is_local_and_shared_by_outbox_operations(
+    isolated_state: Path,
+) -> None:
+    base = isolated_state / "airdrop-radar"
+    assert not (base / airdrop_monitor.ALERT_LOCK_NAME).exists()
+    assert airdrop_monitor.pending_alerts()["alerts"] == []
+    assert (base / airdrop_monitor.ALERT_LOCK_NAME).is_file()
+
+
 def test_status_exposes_heartbeat_age_and_staleness(isolated_state: Path) -> None:
     snap = high_snapshot("s1", 1, T0, "a")
     airdrop_monitor.run_once(scanner=lambda: snap, now=T0)
