@@ -12,6 +12,7 @@ from flop_agent import (
     airdrop_approval,
     airdrop_ledger,
     airdrop_monitor,
+    airdrop_notifier,
     core,
 )
 
@@ -294,6 +295,64 @@ def test_staging_is_idempotent_and_payload_digest_is_canonical(
     assert len(airdrop_approval.list_requests(now=T0)) == 1
 
 
+def test_expiry_and_severity_guards(
+    isolated_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = durable()
+    row["event"]["action_candidate"]["expires_at"] = (
+        T0 + timedelta(days=8)
+    ).isoformat()
+    patch_ledger(monkeypatch, [row])
+    with pytest.raises(
+        airdrop_action_stager.StagingBridgeError,
+        match="expiry_invalid",
+    ):
+        airdrop_action_stager.stage_new_events(
+            [row["event_id"]],
+            {row["event_id"]: row},
+            now=T0,
+        )
+
+    row = durable(severity="MEDIUM")
+    patch_ledger(monkeypatch, [row])
+    with pytest.raises(
+        airdrop_action_stager.StagingBridgeError,
+        match="severity_not_actionable",
+    ):
+        airdrop_action_stager.stage_new_events(
+            [row["event_id"]],
+            {row["event_id"]: row},
+            now=T0,
+        )
+
+
+def test_bound_candidate_tamper_fails_closed(
+    isolated_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = durable()
+    patch_ledger(monkeypatch, [row])
+    staged = airdrop_action_stager.stage_new_events(
+        [row["event_id"]],
+        {row["event_id"]: row},
+        now=T0,
+    )["staged"][0]
+
+    raw = json.loads(airdrop_action_stager.store_path().read_text("utf-8"))
+    raw["candidates"][staged["candidate_id"]]["summary"] = "tampered"
+    airdrop_action_stager.store_path().write_text(
+        json.dumps(raw),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        airdrop_action_stager.StagingBridgeError,
+        match="approval_binding_mismatch",
+    ):
+        airdrop_action_stager.get_candidate_for_request(staged["request_id"])
+
+
 def test_incomplete_candidate_reconciles_on_next_cycle(
     isolated_state: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -399,6 +458,21 @@ def test_monitor_staging_failure_is_visible_but_radar_recording_survives(
     status = airdrop_monitor.monitor_status(now=T0)
     assert status["staging_outcome"] == "failed"
     assert status["staging_error_type"] == "StagingBridgeError"
+
+
+def test_staging_failure_is_a_discord_health_problem() -> None:
+    status = {
+        "outcome": "recorded",
+        "heartbeat_stale": False,
+        "last_attempt_at": T0.isoformat(),
+        "last_completed_at": T0.isoformat(),
+        "radar_health": "ok",
+        "staging_outcome": "failed",
+        "staging_error_type": "StagingBridgeError",
+    }
+    assert airdrop_notifier._health_class(status) == "problem"
+    rendered = airdrop_notifier._render_health_problem(status)
+    assert "action_staging_failed:StagingBridgeError" in rendered
 
 
 def test_stager_has_no_network_signer_or_execution_capability() -> None:
