@@ -465,6 +465,82 @@ def test_mark_alert_delivered_is_post_success_and_idempotent(
     assert again["delivered_at"] == delivered["delivered_at"]
 
 
+def test_mark_alerts_delivered_updates_digest_batch_atomically(
+    isolated_state: Path,
+) -> None:
+    base = isolated_state / "airdrop-radar"
+    base.mkdir(parents=True, exist_ok=True)
+    events = {
+        event_id: {
+            "event_id": event_id,
+            "first_queued_at": T0.isoformat(),
+            "last_seen": T0.isoformat(),
+            "route": "digest",
+            "delivery_state": "pending",
+            "payload": {"event_id": event_id},
+        }
+        for event_id in ("digest-a", "digest-b")
+    }
+    (base / "alert-outbox.json").write_text(
+        json.dumps(
+            {
+                "schema_version": airdrop_monitor.SCHEMA_VERSION,
+                "updated_at": T0.isoformat(),
+                "events": events,
+            }
+        ),
+        "utf-8",
+    )
+
+    rows = airdrop_monitor.mark_alerts_delivered(
+        ["digest-a", "digest-b"],
+        transport="discord",
+        receipt="same-discord-message",
+        now=T0 + timedelta(minutes=1),
+    )
+    assert {row["delivery_state"] for row in rows} == {"delivered"}
+    assert {row["delivery_receipt"] for row in rows} == {"same-discord-message"}
+    assert airdrop_monitor.pending_alerts()["alerts"] == []
+
+
+def test_mark_alerts_delivered_validates_entire_batch_before_mutation(
+    isolated_state: Path,
+) -> None:
+    base = isolated_state / "airdrop-radar"
+    base.mkdir(parents=True, exist_ok=True)
+    events = {
+        "digest-a": {
+            "event_id": "digest-a",
+            "first_queued_at": T0.isoformat(),
+            "last_seen": T0.isoformat(),
+            "route": "digest",
+            "delivery_state": "pending",
+            "payload": {"event_id": "digest-a"},
+        }
+    }
+    path = base / "alert-outbox.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": airdrop_monitor.SCHEMA_VERSION,
+                "updated_at": T0.isoformat(),
+                "events": events,
+            }
+        ),
+        "utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="alert_not_found"):
+        airdrop_monitor.mark_alerts_delivered(
+            ["digest-a", "missing"],
+            transport="discord",
+            receipt="must-not-partially-commit",
+            now=T0 + timedelta(minutes=1),
+        )
+    persisted = json.loads(path.read_text("utf-8"))
+    assert persisted["events"]["digest-a"]["delivery_state"] == "pending"
+
+
 def test_capacity_prunes_delivered_before_refusing_pending(
     isolated_state: Path,
 ) -> None:
