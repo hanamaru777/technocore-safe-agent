@@ -439,12 +439,41 @@ def test_export_bundle_is_concise_and_preserves_eligibility_evidence(
         scanned_at=NOW1.isoformat(),
     )
     airdrop_ledger.record_scan(current, now=NOW1)
-    bundle = airdrop_ledger.export_bundle(now=NOW2)
+    changed = snapshot(
+        "bundle-2",
+        [
+            source(
+                "yellowpaper",
+                facts=[
+                    fact("genesis_agent_airdrop", 1_250_000_000),
+                    fact("agent_identity_min_stake", 10),
+                ],
+                content_sha="7" * 64,
+            )
+        ],
+        scanned_at=NOW2.isoformat(),
+    )
+    airdrop_ledger.record_scan(changed, now=NOW2)
+    bundle = airdrop_ledger.export_bundle(now=NOW3)
 
     assert bundle["integrity"]["valid"] is True
-    assert bundle["current"]["facts"]["genesis_agent_airdrop"]["value"] == 1_200_000_000
+    assert bundle["current"]["facts"]["genesis_agent_airdrop"]["value"] == 1_250_000_000
     assert bundle["current"]["facts"]["agent_identity_min_stake"]["value"] == 10
     assert len(bundle["recent_events"]) <= airdrop_ledger.MAX_EXPORT_EVENTS
+    event = next(
+        row
+        for row in bundle["recent_events"]
+        if row["key"] == "genesis_agent_airdrop"
+    )
+    assert event["event"]["before"]["value"] == 1_200_000_000
+    assert event["event"]["after"]["value"] == 1_250_000_000
+    assert event["source_evidence"]
+    assert any(
+        row.get("facts")
+        and row["facts"][0].get("evidence_sha256")
+        and row["facts"][0].get("evidence_excerpt")
+        for row in event["source_evidence"]
+    )
     rendered = json.dumps(bundle)
     assert "raw_body" not in rendered
     assert "cookie" not in rendered
