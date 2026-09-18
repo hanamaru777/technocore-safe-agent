@@ -150,6 +150,22 @@ def test_trusted_open_event_stages_exact_durable_candidate(
     assert exact["payload"] == row["event"]["action_candidate"]["payload"]
 
 
+def test_noncanonical_durable_event_is_rejected(
+    isolated_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = durable()
+    patch_ledger(monkeypatch, [row])
+    fake = json.loads(json.dumps(row))
+    fake["event"]["after"] = {"value": "live"}
+
+    with pytest.raises(
+        airdrop_action_stager.StagingBridgeError,
+        match="not_canonical_ledger_record",
+    ):
+        airdrop_action_stager.stage_durable_event(fake, now=T0)
+
+
 def test_no_embedded_candidate_is_noop(
     isolated_state: Path,
     monkeypatch: pytest.MonkeyPatch,
