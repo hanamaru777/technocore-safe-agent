@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 from flop_agent import core
 
@@ -69,3 +70,52 @@ def test_expected_sha_and_poem_sha_are_explicitly_supported():
 def test_reachable_history_blob_map_covers_current_core_file():
     mapping = core._reachable_history_blob_paths()
     assert any("src/flop_agent/core.py" in paths for paths in mapping.values())
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _init_temp_git_repo(repo: Path) -> None:
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "security-test@example.invalid")
+    _git(repo, "config", "user.name", "Security Test")
+
+
+def test_history_secret_scan_finds_secret_removed_from_current_tree(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_temp_git_repo(repo)
+
+    leaked = "f" * 64
+    (repo / "leak.txt").write_text(f'api_key="{leaked}"\n', "utf-8")
+    _git(repo, "add", "leak.txt")
+    _git(repo, "commit", "-qm", "historical leak")
+
+    (repo / "leak.txt").write_text("clean\n", "utf-8")
+    _git(repo, "add", "leak.txt")
+    _git(repo, "commit", "-qm", "remove leak")
+
+    monkeypatch.setattr(core, "ROOT", repo)
+    hits = core.history_secret_scan()
+    assert any(hit.endswith(":leak.txt:1") for hit in hits)
+
+
+def test_history_secret_scan_allows_only_known_public_poem_digest(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_temp_git_repo(repo)
+
+    public = "a" * 64
+    (repo / "plan.sh").write_text(f'EXPECTED_SHA="{public}"\n', "utf-8")
+    _git(repo, "add", "plan.sh")
+    _git(repo, "commit", "-qm", "public poem digest")
+
+    monkeypatch.setattr(core, "ROOT", repo)
+    assert core.history_secret_scan() == []
