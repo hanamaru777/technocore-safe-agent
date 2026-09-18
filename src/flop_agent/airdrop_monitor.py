@@ -398,23 +398,50 @@ def run_once(
         )
         raise
 
-    verified = airdrop_ledger.verify_ledger()
-    records_by_id = {
-        str(row["event_id"]): row
-        for row in verified.get("records", [])
-        if isinstance(row, dict) and isinstance(row.get("event_id"), str)
-    }
     new_event_ids = [
         row["event_id"]
         for row in recorded.get("new_events", [])
         if isinstance(row, dict) and isinstance(row.get("event_id"), str)
     ]
-    immediate, digest = _queue_alerts(
-        new_event_ids,
-        records_by_id,
-        observed_at=observed_at,
-        config=config,
-    )
+    try:
+        verified = airdrop_ledger.verify_ledger()
+        records_by_id = {
+            str(row["event_id"]): row
+            for row in verified.get("records", [])
+            if isinstance(row, dict) and isinstance(row.get("event_id"), str)
+        }
+        immediate, digest = _queue_alerts(
+            new_event_ids,
+            records_by_id,
+            observed_at=observed_at,
+            config=config,
+        )
+    except airdrop_ledger.LedgerIntegrityError as error:
+        _write_heartbeat(
+            last_attempt_at=observed_at,
+            last_completed_at=observed_at,
+            outcome="blocked_integrity",
+            radar_health=recorded.get("health"),
+            snapshot_id=recorded.get("snapshot_id"),
+            error_type=error.__class__.__name__,
+            new_events=len(new_event_ids),
+            immediate_alerts=0,
+            digest_alerts=0,
+        )
+        raise
+    except Exception as error:
+        _write_heartbeat(
+            last_attempt_at=observed_at,
+            last_completed_at=observed_at,
+            outcome="alert_routing_failed",
+            radar_health=recorded.get("health"),
+            snapshot_id=recorded.get("snapshot_id"),
+            error_type=error.__class__.__name__,
+            new_events=len(new_event_ids),
+            immediate_alerts=0,
+            digest_alerts=0,
+        )
+        raise
     _write_heartbeat(
         last_attempt_at=observed_at,
         last_completed_at=observed_at,
