@@ -192,6 +192,7 @@ def test_no_embedded_candidate_is_noop(
         ("provisional", 2, "ok", "current"),
         ("official", 2, "error", "current"),
         ("official", 2, "ok", "previous"),
+        ("official", 2, "ok", "last_success"),
     ],
 )
 def test_untrusted_evidence_never_stages(
@@ -276,7 +277,9 @@ def test_secret_like_and_external_url_payloads_are_blocked(
 ) -> None:
     for payload, error in [
         ({"private_key": "never"}, "secret_like_key"),
+        ({"note": "Bearer abcdefghijklmnop"}, "secret_like_value"),
         ({"url": "https://evil.example/claim"}, "url_not_allowlisted"),
+        ({"links": ["https://evil.example/claim"]}, "url_not_allowlisted"),
     ]:
         row = durable(payload=payload)
         patch_ledger(monkeypatch, [row])
