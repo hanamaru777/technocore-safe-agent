@@ -38,7 +38,7 @@ FORBIDDEN_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 FORBIDDEN_VALUE_RE = re.compile(
-    r"(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\\bBearer\\s+[A-Za-z0-9._~+/=-]{8,})",
+    r"(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~+/=-]{8,})",
     re.IGNORECASE,
 )
 HEX24 = re.compile(r"^[0-9a-f]{24}$")
