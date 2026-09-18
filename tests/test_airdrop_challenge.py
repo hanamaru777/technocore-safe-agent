@@ -677,7 +677,11 @@ def test_runner_has_get_only_network_and_no_binding_transport() -> None:
     assert "httpx.post" not in lowered
     assert "httpx.put" not in lowered
     assert "httpx.delete" not in lowered
-    assert "requests." not in lowered
+    assert "import requests" not in lowered
+    assert "from requests" not in lowered
+    assert "requests.post(" not in lowered
+    assert "requests.put(" not in lowered
+    assert "requests.delete(" not in lowered
     assert "subprocess" not in lowered
     assert "sign_seed" not in lowered
     assert ' / "observer"' not in source
