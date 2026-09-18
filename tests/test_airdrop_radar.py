@@ -591,6 +591,12 @@ def test_official_opportunity_link_removal_is_visible() -> None:
     assert event["severity"] == "MEDIUM"
 
 
+def test_redirect_query_change_is_not_a_target_change() -> None:
+    assert airdrop_radar._stable_url(
+        "https://docs.google.com/forms/d/e/form/viewform?usp=header#top"
+    ) == "https://docs.google.com/forms/d/e/form/viewform"
+
+
 def test_kol_form_redirect_target_change_is_high() -> None:
     before = snapshot()
     after = copy.deepcopy(before)
