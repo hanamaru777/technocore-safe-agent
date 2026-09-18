@@ -261,38 +261,24 @@ def _build_alert(event_record: dict) -> dict:
     }
 
 
-def _bundle_by_event_id(bundle: dict) -> dict[str, dict]:
-    return {
-        str(row["event_id"]): row
-        for row in bundle.get("recent_events", [])
-        if isinstance(row, dict) and isinstance(row.get("event_id"), str)
-    }
-
-
-def _trim_alerts(alerts: dict, limit: int) -> None:
+def _enforce_alert_capacity(alerts: dict, limit: int) -> None:
     events = alerts["events"]
     if len(events) <= limit:
         return
-    ordered = sorted(
-        events.items(),
-        key=lambda item: (
-            str(item[1].get("last_seen") or ""),
-            str(item[0]),
-        ),
-        reverse=True,
-    )
-    alerts["events"] = dict(ordered[:limit])
+    # Pending alerts are evidence-backed operator work. Never silently evict one
+    # merely to satisfy a storage bound.
+    raise RuntimeError("airdrop_monitor_alert_capacity_exceeded")
 
 
 def _queue_alerts(
     new_event_ids: list[str],
-    bundle: dict,
+    records_by_id: dict[str, dict],
     *,
     observed_at: str,
     config: dict,
 ) -> tuple[list[dict], list[dict]]:
     state = _load_alerts()
-    by_id = _bundle_by_event_id(bundle)
+    by_id = records_by_id
     immediate: list[dict] = []
     digest: list[dict] = []
 
@@ -325,7 +311,7 @@ def _queue_alerts(
             digest.append(payload)
 
     state["updated_at"] = observed_at
-    _trim_alerts(state, config["max_alerts"])
+    _enforce_alert_capacity(state, config["max_alerts"])
     _atomic_json_write(_path(ALERTS_NAME), state)
     return immediate, digest
 
@@ -345,7 +331,10 @@ def _scan_floor(heartbeat: dict, config: dict, current: datetime) -> dict | None
     return {
         "outcome": "skipped_too_soon",
         "seconds_until_eligible": remaining,
-        "next_eligible_at": (current.timestamp() + remaining),
+        "next_eligible_at": datetime.fromtimestamp(
+            current.timestamp() + remaining,
+            tz=UTC,
+        ).isoformat(),
     }
 
 
@@ -409,7 +398,12 @@ def run_once(
         )
         raise
 
-    bundle = airdrop_ledger.export_bundle(now=current)
+    verified = airdrop_ledger.verify_ledger()
+    records_by_id = {
+        str(row["event_id"]): row
+        for row in verified.get("records", [])
+        if isinstance(row, dict) and isinstance(row.get("event_id"), str)
+    }
     new_event_ids = [
         row["event_id"]
         for row in recorded.get("new_events", [])
@@ -417,7 +411,7 @@ def run_once(
     ]
     immediate, digest = _queue_alerts(
         new_event_ids,
-        bundle,
+        records_by_id,
         observed_at=observed_at,
         config=config,
     )
