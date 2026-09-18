@@ -131,6 +131,15 @@ HIGH_KEYS = {
     "kol_application_status",
     "kol_compensation_guaranteed",
     "kol_program_terms_status",
+    "agent_identity_min_stake",
+    "circuit_breaker_tx_count",
+    "circuit_breaker_flop_cap",
+    "agent_daily_cap_autonomous",
+    "agent_per_tx_limit",
+    "circuit_breaker_window",
+    "max_active_reservations_base",
+    "escrow_per_reservation_slot",
+    "session_key_max_duration_blocks",
 }
 ACTION_OPEN_KEYS = {"testnet_status", "faucet_status", "claim_status", "registration_status"}
 ACTION_OPEN_VALUES = {"open", "live", "enabled"}
@@ -350,6 +359,31 @@ def _param_fact(text: str, source: SourceSpec, param: str, status: str = "normat
     )
 
 
+def _numeric_param_fact(
+    text: str,
+    source: SourceSpec,
+    param: str,
+    unit: str,
+    *,
+    status: str = "normative",
+) -> dict | None:
+    match = re.search(
+        rf"\b{re.escape(param)}\b\s*(?:\||=|:)?\s*([0-9][0-9,_]*)\s+{re.escape(unit)}\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return _fact(
+        key=param,
+        value=_parse_int(match.group(1)),
+        unit=unit,
+        source=source,
+        status=status,
+        evidence=_context(text, *match.span()),
+    )
+
+
 def _status_fact(text: str, source: SourceSpec, item: str, key: str) -> dict | None:
     match = re.search(
         rf"\b{re.escape(item)}\b.{0,140}?\[(TBD|RATIFY|PARTIAL|PLANNED)\]",
@@ -424,6 +458,44 @@ def _extract_yellowpaper(text: str, source: SourceSpec) -> list[dict]:
         row = _param_fact(text, source, param)
         if row:
             facts.append(row)
+
+    reference_marker = text.lower().find("reference-only")
+    operational_params = (
+        ("agent_identity_min_stake", "FLOP"),
+        ("circuit_breaker_tx_count", "count"),
+        ("circuit_breaker_flop_cap", "FLOP"),
+        ("agent_daily_cap_autonomous", "FLOP"),
+        ("agent_per_tx_limit", "FLOP"),
+        ("circuit_breaker_window", "blocks"),
+        ("max_active_reservations_base", "count"),
+        ("escrow_per_reservation_slot", "FLOP"),
+    )
+    for param, unit in operational_params:
+        row = _numeric_param_fact(text, source, param, unit)
+        if row:
+            match_pos = text.lower().find(param.lower())
+            if reference_marker >= 0 and match_pos > reference_marker:
+                row["status"] = "reference_only_unenforced"
+            facts.append(row)
+
+    session_lifetime = re.search(
+        r"SessionKeysMaxDuration.{0,80}?(?:<=|≤)\s*([0-9][0-9,_]*)\s+blocks"
+        r"|(?:<=|≤)\s*([0-9][0-9,_]*)\s+blocks\s*\(SessionKeysMaxDuration",
+        text,
+        re.IGNORECASE,
+    )
+    if session_lifetime:
+        raw = session_lifetime.group(1) or session_lifetime.group(2)
+        facts.append(
+            _fact(
+                key="session_key_max_duration_blocks",
+                value=_parse_int(raw),
+                unit="blocks",
+                source=source,
+                status="normative",
+                evidence=_context(text, *session_lifetime.span()),
+            )
+        )
 
     vest = re.search(r"\bairdrop_vesting_duration_blocks\b\s*\|\s*([0-9][0-9,_]*)\s+blocks", text, re.IGNORECASE)
     if vest:
