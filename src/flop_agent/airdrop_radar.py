@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -133,6 +133,43 @@ EXACT_DEADLINE_RE = re.compile(
 DATE_ONLY_DEADLINE_RE = re.compile(
     r"(?i)\b(deadline|cutoff|closes?|ends?)\b.{0,100}?(20\d{2}-\d{2}-\d{2})(?!T)"
 )
+
+
+INTERESTING_SITE_LINK_RE = re.compile(
+    r"(?:airdrop|testnet|claim|faucet|challenge|campaign|genesis|agent)",
+    re.IGNORECASE,
+)
+
+
+class _OfficialLinks(HTMLParser):
+    def __init__(self, base_url: str, allowed_hosts: tuple[str, ...]) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.allowed_hosts = allowed_hosts
+        self.links: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "a":
+            return
+        href = next((value for key, value in attrs if key.lower() == "href"), None)
+        if not href:
+            return
+        absolute = urljoin(self.base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme != "https" or parsed.hostname not in self.allowed_hosts:
+            return
+        clean = parsed._replace(query="", fragment="").geturl()
+        if INTERESTING_SITE_LINK_RE.search(parsed.path):
+            self.links.add(clean)
+
+
+def _official_interest_links(html: str, source: SourceSpec) -> list[str]:
+    if source.kind != "html":
+        return []
+    parser = _OfficialLinks(source.url, source.allowed_hosts)
+    parser.feed(html)
+    parser.close()
+    return sorted(parser.links)
 
 
 class _VisibleText(HTMLParser):
@@ -716,6 +753,7 @@ def _source_report(
             "meta": meta,
             "facts": facts,
             "deadlines": deadlines,
+            "interest_links": _official_interest_links(result.body, spec),
         }
     except Exception as error:
         return {
@@ -1121,6 +1159,23 @@ def compare_snapshots(
                 extra=extra,
             )
         )
+
+    # Discover new high-signal pages linked from already trusted FLOP pages.
+    # Link appearance is a review signal only; it never means the action is open.
+    for name in sorted(stable_ok_sources):
+        before_links = set(before_source_rows[name].get("interest_links", []))
+        after_links = set(after_source_rows[name].get("interest_links", []))
+        for url in sorted(after_links - before_links):
+            changed_sources.add(name)
+            events.append(
+                _event(
+                    event_type="OFFICIAL_LINK_DISCOVERED",
+                    key=f"official_link:{url}",
+                    before=None,
+                    after={"url": url, "source": name},
+                    severity="HIGH",
+                )
+            )
 
     before_ok_sources = {
         name: row
