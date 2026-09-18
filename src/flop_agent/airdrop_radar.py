@@ -251,10 +251,11 @@ def _stable_url(url: str) -> str:
     return parsed._replace(query="", fragment="").geturl()
 
 
-def _validate_url(url: str, allowed_hosts: tuple[str, ...]) -> None:
+def _validate_url(url: str, allowed_hosts: tuple[str, ...]) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
         raise RuntimeError("airdrop_radar_non_official_url")
+    return url
 
 
 def _stream_read(
