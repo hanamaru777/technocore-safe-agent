@@ -923,7 +923,7 @@ def compare_snapshots(
     *,
     now: datetime | None = None,
 ) -> dict:
-    """Return deterministic material changes; first snapshot establishes a baseline."""
+    """Return deterministic material changes; outages never masquerade as rule changes."""
     if previous is None:
         return {
             "baseline": True,
@@ -937,24 +937,109 @@ def compare_snapshots(
     after_facts = current.get("resolved_facts", {})
     changed_sources: set[str] = set()
 
+    before_source_rows = {
+        str(row.get("name")): row
+        for row in previous.get("sources", [])
+        if isinstance(row, dict) and row.get("name")
+    }
+    after_source_rows = {
+        str(row.get("name")): row
+        for row in current.get("sources", [])
+        if isinstance(row, dict) and row.get("name")
+    }
+    common_source_names = set(before_source_rows) & set(after_source_rows)
+    stable_ok_sources = {
+        name
+        for name in common_source_names
+        if before_source_rows[name].get("status") == "ok"
+        and after_source_rows[name].get("status") == "ok"
+    }
+    newly_failed = {
+        name
+        for name in common_source_names
+        if before_source_rows[name].get("status") == "ok"
+        and after_source_rows[name].get("status") != "ok"
+    }
+    recovered = {
+        name
+        for name in common_source_names
+        if before_source_rows[name].get("status") != "ok"
+        and after_source_rows[name].get("status") == "ok"
+    }
+
+    for name in sorted(newly_failed):
+        after_row = after_source_rows[name]
+        severity = "HIGH" if after_row.get("critical") else "MEDIUM"
+        events.append(
+            _event(
+                event_type="SOURCE_UNAVAILABLE",
+                key=f"source:{name}:availability",
+                before="ok",
+                after=after_row.get("error_type") or "error",
+                severity=severity,
+            )
+        )
+
+    for name in sorted(recovered):
+        after_row = after_source_rows[name]
+        severity = "MEDIUM" if after_row.get("critical") else "INFO"
+        events.append(
+            _event(
+                event_type="SOURCE_RECOVERED",
+                key=f"source:{name}:availability",
+                before="error",
+                after="ok",
+                severity=severity,
+            )
+        )
+
+    def variant_sources(row: dict | None) -> set[str]:
+        if not row:
+            return set()
+        return {
+            str(item.get("source"))
+            for item in row.get("variants", [])
+            if isinstance(item, dict) and item.get("source")
+        }
+
+    # Compare the resolved fact only when the apparent change is not caused by
+    # a source entering/leaving availability. This prevents a Tier-1 outage
+    # from looking like a protocol change merely because Tier-2 becomes the
+    # temporary fallback winner.
     for key in sorted(set(before_facts) | set(after_facts)):
         before = before_facts.get(key)
         after = after_facts.get(key)
+        before_sources = variant_sources(before)
+        after_sources = variant_sources(after)
+        transition_loss = bool((before_sources - after_sources) & newly_failed)
+        transition_gain = bool((after_sources - before_sources) & recovered)
+
         if before is None:
+            if transition_gain:
+                continue
             event_type = "NEW"
         elif after is None:
+            if transition_loss:
+                continue
             event_type = "REMOVED"
-        elif _canonical(before.get("value")) != _canonical(after.get("value")) or before.get("status") != after.get("status"):
+        elif (
+            _canonical(before.get("value")) != _canonical(after.get("value"))
+            or before.get("status") != after.get("status")
+        ):
+            if transition_loss or transition_gain:
+                continue
             event_type = "CHANGED"
         elif bool(before.get("conflict")) != bool(after.get("conflict")):
+            if transition_loss or transition_gain:
+                continue
             event_type = "CONFLICT" if after.get("conflict") else "RESOLVED"
         else:
             continue
 
         if before:
-            changed_sources.add(str(before.get("source")))
+            changed_sources.update(variant_sources(before) & stable_ok_sources)
         if after:
-            changed_sources.add(str(after.get("source")))
+            changed_sources.update(variant_sources(after) & stable_ok_sources)
         events.append(
             _event(
                 event_type=event_type,
@@ -965,37 +1050,36 @@ def compare_snapshots(
             )
         )
 
-    # A lower-tier official source can change while the higher-tier resolved winner
-    # remains stable (for example a teaser changes while E.38 is still TBD).
-    # Preserve that as a material source-variant event instead of hiding it behind
-    # a generic content hash alert.
+    # Compare per-source variants only across sources that were available in
+    # both snapshots. A failed/recovered source is represented by its explicit
+    # availability event above, never by a fake semantic change.
     for key in sorted(set(before_facts) & set(after_facts)):
         before = before_facts[key]
         after = after_facts[key]
         if any(row["key"] == key for row in events):
             continue
-        before_variants = [
-            {
-                "source": row.get("source"),
-                "tier": row.get("tier"),
-                "status": row.get("status"),
-                "value": row.get("value"),
-            }
-            for row in before.get("variants", [])
-        ]
-        after_variants = [
-            {
-                "source": row.get("source"),
-                "tier": row.get("tier"),
-                "status": row.get("status"),
-                "value": row.get("value"),
-            }
-            for row in after.get("variants", [])
-        ]
+
+        def stable_variants(row: dict) -> list[dict]:
+            return sorted(
+                [
+                    {
+                        "source": item.get("source"),
+                        "tier": item.get("tier"),
+                        "status": item.get("status"),
+                        "value": item.get("value"),
+                    }
+                    for item in row.get("variants", [])
+                    if item.get("source") in stable_ok_sources
+                ],
+                key=lambda item: (str(item.get("source")), int(item.get("tier") or 999)),
+            )
+
+        before_variants = stable_variants(before)
+        after_variants = stable_variants(after)
         if _canonical(before_variants) == _canonical(after_variants):
             continue
-        changed_sources.update(str(row.get("source")) for row in before.get("variants", []))
-        changed_sources.update(str(row.get("source")) for row in after.get("variants", []))
+        changed_sources.update(str(row.get("source")) for row in before_variants)
+        changed_sources.update(str(row.get("source")) for row in after_variants)
         events.append(
             _event(
                 event_type="SOURCE_VARIANT_CHANGED",
@@ -1006,10 +1090,19 @@ def compare_snapshots(
             )
         )
 
-    previous_deadlines = {_deadline_identity(row): row for row in previous.get("deadlines", [])}
-    current_deadlines = {_deadline_identity(row): row for row in current.get("deadlines", [])}
+    previous_deadlines = {
+        _deadline_identity(row): row for row in previous.get("deadlines", [])
+    }
+    current_deadlines = {
+        _deadline_identity(row): row for row in current.get("deadlines", [])
+    }
     for deadline_id, row in current_deadlines.items():
         if deadline_id in previous_deadlines:
+            continue
+        # A deadline reappearing only because its source recovered is not a new
+        # opportunity. The source-recovery event already tells the operator to
+        # refresh the snapshot.
+        if row.get("source") in recovered:
             continue
         extra = {"deadline": row}
         severity = "HIGH"
@@ -1029,14 +1122,21 @@ def compare_snapshots(
             )
         )
 
-    before_sources = {
-        row["name"]: row for row in previous.get("sources", []) if row.get("status") == "ok"
+    before_ok_sources = {
+        name: row
+        for name, row in before_source_rows.items()
+        if row.get("status") == "ok"
     }
-    after_sources = {
-        row["name"]: row for row in current.get("sources", []) if row.get("status") == "ok"
+    after_ok_sources = {
+        name: row
+        for name, row in after_source_rows.items()
+        if row.get("status") == "ok"
     }
-    for name in sorted(set(before_sources) & set(after_sources)):
-        if before_sources[name].get("content_sha256") == after_sources[name].get("content_sha256"):
+    for name in sorted(stable_ok_sources):
+        if (
+            before_ok_sources[name].get("content_sha256")
+            == after_ok_sources[name].get("content_sha256")
+        ):
             continue
         if name in changed_sources:
             continue
@@ -1044,13 +1144,15 @@ def compare_snapshots(
             _event(
                 event_type="CONTENT_CHANGED",
                 key=f"source:{name}",
-                before=before_sources[name].get("content_sha256"),
-                after=after_sources[name].get("content_sha256"),
+                before=before_ok_sources[name].get("content_sha256"),
+                after=after_ok_sources[name].get("content_sha256"),
                 severity="INFO",
             )
         )
 
-    events.sort(key=lambda row: (SEVERITY_ORDER[row["severity"]], row["key"], row["event_id"]))
+    events.sort(
+        key=lambda row: (SEVERITY_ORDER[row["severity"]], row["key"], row["event_id"])
+    )
     return {
         "baseline": False,
         "previous_snapshot_id": previous.get("snapshot_id"),
@@ -1061,3 +1163,4 @@ def compare_snapshots(
             for severity in SEVERITY_ORDER
         },
     }
+
