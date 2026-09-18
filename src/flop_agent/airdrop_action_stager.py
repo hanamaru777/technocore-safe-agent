@@ -248,6 +248,26 @@ def _validate_stored(candidate_id: str, row: object) -> dict:
         or not HEX64.fullmatch(approval_digest)
     ):
         raise StagingBridgeError("airdrop_stager_stored_candidate_invalid")
+    if request_id is not None:
+        binding = airdrop_approval._request_binding(
+            action_class=row["action_class"],
+            payload_sha256=row["payload_sha256"],
+            source_event_id=row["source_event_id"],
+            summary=row["summary"],
+            cost_note=row["cost_note"],
+            reversible=row["reversible"],
+            expires_at=row["expires_at"],
+        )
+        expected_request_id = airdrop_approval._request_id(binding)
+        expected_approval_digest = airdrop_approval._approval_digest(
+            expected_request_id,
+            binding,
+        )
+        if (
+            request_id != expected_request_id
+            or approval_digest != expected_approval_digest
+        ):
+            raise StagingBridgeError("airdrop_stager_approval_binding_mismatch")
     expected = _candidate_id(
         row["source_event_id"],
         row["action_class"],
@@ -390,8 +410,9 @@ def _persist_candidate(candidate: dict, current: datetime) -> dict:
         store = _load_store()
         known = store["candidates"].get(candidate_id)
         if known is not None:
-            if _canonical({k: v for k, v in known.items() if k not in {"request_id", "approval_digest"}}) != _canonical(
-                {k: v for k, v in row.items() if k not in {"request_id", "approval_digest"}}
+            ignored = {"request_id", "approval_digest", "created_at"}
+            if _canonical({k: v for k, v in known.items() if k not in ignored}) != _canonical(
+                {k: v for k, v in row.items() if k not in ignored}
             ):
                 raise StagingBridgeError("airdrop_stager_existing_candidate_mismatch")
             return json.loads(json.dumps(known))
