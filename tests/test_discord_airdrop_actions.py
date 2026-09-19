@@ -396,6 +396,21 @@ def test_control_component_delegates_same_user_and_channel_gate(
         )
 
 
+def test_real_discord_view_has_exact_three_bounded_buttons(
+    isolated_state: Path,
+) -> None:
+    import discord
+
+    row = stage_manual()
+    view = discord_control._airdrop_action_view(discord, row)
+
+    assert len(view.children) == 3
+    assert [item.label for item in view.children] == ["詳細", "承認", "拒否"]
+    assert all(item.custom_id is not None for item in view.children)
+    assert all(len(item.custom_id) <= 100 for item in view.children)
+    assert all(row["approval_digest"] not in item.custom_id for item in view.children)
+
+
 def test_gateway_has_one_client_and_component_handler() -> None:
     source = (
         core.ROOT / "src" / "flop_agent" / "discord_control.py"
