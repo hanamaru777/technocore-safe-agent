@@ -228,7 +228,7 @@ echo "--- ERROR CLASSIFICATION (COUNTS ONLY) ---"
   do
     [[ -f "$path" ]] && tail -c 262144 "$path" 2>/dev/null || true
   done
-} | python3 - <<'PY'
+} | python3 -c '
 import sys
 
 text=sys.stdin.read().lower()
@@ -245,8 +245,8 @@ patterns={
 }
 for key,needles in patterns.items():
     count=sum(text.count(needle) for needle in needles)
-    print(f"LOG_CLASS_{key.upper()}={count}")
-PY
+    print("LOG_CLASS_"+key.upper()+"="+str(count))
+'
 
 echo "--- DIAGNOSTIC CONCLUSION INPUTS ---"
 echo "EXPECTED_SECURITY_ROOT_IMDS=200"
