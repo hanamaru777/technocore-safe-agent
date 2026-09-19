@@ -1,7 +1,7 @@
 """Fail-closed local execution gate for approved FLOP Airdrop actions.
 
-The generic gate has no network client, signer, Discord token, subprocess, socket,
-or action-specific credential access. Production adapter registry is intentionally
+The generic gate has no network transport, signer, Discord credential, process-spawn,
+or action-specific credential capability. Production adapter registry is intentionally
 empty in v1. Future adapters must be separately audited.
 
 Safety model:
@@ -422,7 +422,7 @@ def _source_binding(
         validation_time = current
     else:
         validation_time = attempt_time
-        if request["status"] not in {"approved", "expired", "consumed"}:
+        if request["status"] not in {"approved", "expired"}:
             raise AirdropExecutorError(
                 f"airdrop_executor_request_not_reconcilable:{request['status']}"
             )
