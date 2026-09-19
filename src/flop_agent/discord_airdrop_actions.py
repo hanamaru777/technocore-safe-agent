@@ -157,7 +157,7 @@ def _render_evidence(record: dict, candidate: dict | None) -> str:
             "evidence:",
         ]
     )
-    for evidence in ledger.get("source_evidence", [])[:8]:
+    for evidence in ledger.get("source_evidence", []):
         if not isinstance(evidence, dict):
             continue
         lines.append(
