@@ -68,16 +68,19 @@ PY
 }
 
 airdrop_snapshot() {
-  sudo python3 - "$AIRDROP_DIR/monitor-heartbeat.json" "$AIRDROP_DIR/ledger.jsonl" <<'PY'
+  sudo -u technocore env -i \
+    PATH=/usr/bin:/bin \
+    FLOP_STATE_DIR="$STATE" \
+    PYTHONPATH="$APP/src" \
+    "$APP/.venv/bin/python" - <<'PY'
 from __future__ import annotations
-import json, pathlib, sys
+import json
 from datetime import UTC, datetime
+from flop_agent import airdrop_ledger
 
-hb=json.loads(pathlib.Path(sys.argv[1]).read_text("utf-8"))
-ledger=pathlib.Path(sys.argv[2])
-count=0
-if ledger.exists():
-    count=sum(1 for line in ledger.read_text("utf-8").splitlines() if line.strip())
+base=airdrop_ledger.ledger_dir()
+hb=json.loads((base/"monitor-heartbeat.json").read_text("utf-8"))
+verified=airdrop_ledger.verify_ledger()
 completed=hb.get("last_completed_at")
 if not isinstance(completed,str):
     raise SystemExit("heartbeat_missing")
@@ -89,7 +92,7 @@ print(
     hb.get("outcome","missing"),
     hb.get("radar_health","missing"),
     age,
-    count,
+    verified.get("count","missing"),
     hb.get("staging_outcome","missing"),
     hb.get("staged_approvals",0),
     hb.get("staging_error_type") or "none",
