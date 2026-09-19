@@ -187,7 +187,13 @@ app_gate pre
 
 echo "PROD359_PREFLIGHT=PASS version=$PRE_ACTUAL_VERSION revision=$PRE_ACTUAL_REVISION tracking=${TRACKING:-unknown} stable=$REMOTE_STABLE"
 
-snap refresh oracle-cloud-agent --channel=latest/stable
+if ! snap refresh oracle-cloud-agent --channel=latest/stable; then
+  CURRENT_AFTER_FAILED_REFRESH=$(snap_version)
+  if [[ $CURRENT_AFTER_FAILED_REFRESH != "$PRE_VERSION" ]]; then
+    REFRESH_COMPLETED=1
+  fi
+  stop "snap_refresh_failed:current=$CURRENT_AFTER_FAILED_REFRESH"
+fi
 REFRESH_COMPLETED=1
 
 wait_oca || stop oca_services_not_active_after_refresh
@@ -214,9 +220,12 @@ id -u ocarun >/dev/null 2>&1 && OCARUN_PRESENT=YES
 
 RUNCOMMAND_ARTIFACT=NO
 for base in /snap/oracle-cloud-agent/current /var/snap/oracle-cloud-agent/common; do
-  if [[ -e "$base" ]] && find "$base" -maxdepth 8 \( -iname '*runcommand*' -o -iname '*run-command*' \) -print -quit 2>/dev/null | grep -q .; then
-    RUNCOMMAND_ARTIFACT=YES
-    break
+  if [[ -e "$base" ]]; then
+    artifact=$(find "$base" -maxdepth 8 \( -iname '*runcommand*' -o -iname '*run-command*' \) -print -quit 2>/dev/null || true)
+    if [[ -n "$artifact" ]]; then
+      RUNCOMMAND_ARTIFACT=YES
+      break
+    fi
   fi
 done
 
