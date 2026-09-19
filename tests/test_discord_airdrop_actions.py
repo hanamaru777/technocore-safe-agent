@@ -16,7 +16,8 @@ from flop_agent import (
 )
 
 
-T0 = datetime(2026, 9, 19, 0, 0, tzinfo=UTC)
+T0 = datetime(2020, 1, 1, 0, 0, tzinfo=UTC)
+FUTURE = datetime(2099, 1, 1, 0, 0, tzinfo=UTC)
 PAYLOAD = "c" * 64
 
 
