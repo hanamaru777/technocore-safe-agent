@@ -236,7 +236,8 @@ for action in expected:
     if not isinstance(row,dict):
         raise SystemExit(f"missing_{action}")
     if row.get("state") != "BLOCKED":
-        actual=row.get("state")\n        raise SystemExit(f"{action}_not_blocked:{actual}")
+        actual=row.get("state")
+        raise SystemExit(f"{action}_not_blocked:{actual}")
     blockers=row.get("blockers")
     if not isinstance(blockers,list) or not blockers:
         raise SystemExit(f"{action}_blockers_missing")
