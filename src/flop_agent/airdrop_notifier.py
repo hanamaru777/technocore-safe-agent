@@ -5,6 +5,7 @@ to FLOP/Technocore/X and it never persists the Discord bot token.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -101,6 +102,9 @@ def _default_state() -> dict:
         "digest_due_at": None,
         "health_notice_state": None,
         "health_notice_at": None,
+        "readiness_notice_fingerprint": None,
+        "readiness_notice_snapshot": None,
+        "readiness_notice_at": None,
     }
 
 
@@ -271,6 +275,173 @@ def _health_class(status: dict) -> str:
     if status.get("heartbeat_stale") and status.get("last_completed_at"):
         return "problem"
     return "healthy"
+
+
+READINESS_ACTIONS = ("faucet", "registration", "claim")
+READINESS_STATES = frozenset({"BLOCKED", "IMPLEMENTATION_READY"})
+
+
+def _normalize_readiness(status: dict) -> dict | None:
+    raw = status.get("adapter_readiness")
+    if not isinstance(raw, dict) or raw.get("ledger_valid") is not True:
+        return None
+    actions = raw.get("actions")
+    if not isinstance(actions, dict):
+        return None
+
+    normalized: dict[str, dict] = {}
+    for action in READINESS_ACTIONS:
+        row = actions.get(action)
+        if not isinstance(row, dict):
+            return None
+        state = row.get("state")
+        blockers = row.get("blockers")
+        if state not in READINESS_STATES or not isinstance(blockers, list):
+            return None
+        if not all(isinstance(item, str) and 1 <= len(item) <= 240 for item in blockers):
+            return None
+        normalized[action] = {
+            "state": state,
+            "blockers": sorted(set(blockers)),
+        }
+
+    overall = (
+        "IMPLEMENTATION_READY"
+        if all(row["state"] == "IMPLEMENTATION_READY" for row in normalized.values())
+        else "BLOCKED"
+    )
+    return {"overall": overall, "actions": normalized}
+
+
+def _validate_readiness_snapshot(snapshot: object) -> dict:
+    if not isinstance(snapshot, dict):
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    if snapshot.get("overall") not in READINESS_STATES:
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    actions = snapshot.get("actions")
+    if not isinstance(actions, dict) or set(actions) != set(READINESS_ACTIONS):
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    for action in READINESS_ACTIONS:
+        row = actions.get(action)
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"state", "blockers"}
+            or row.get("state") not in READINESS_STATES
+            or not isinstance(row.get("blockers"), list)
+            or not all(
+                isinstance(item, str) and 1 <= len(item) <= 240
+                for item in row["blockers"]
+            )
+            or row["blockers"] != sorted(set(row["blockers"]))
+        ):
+            raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    expected_overall = (
+        "IMPLEMENTATION_READY"
+        if all(
+            actions[action]["state"] == "IMPLEMENTATION_READY"
+            for action in READINESS_ACTIONS
+        )
+        else "BLOCKED"
+    )
+    if snapshot["overall"] != expected_overall:
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    return snapshot
+
+
+def _readiness_fingerprint(snapshot: dict) -> str:
+    rendered = json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
+def _render_readiness_change(previous: dict, current: dict) -> str:
+    lines: list[str] = []
+    ready_now = [
+        action
+        for action in READINESS_ACTIONS
+        if current["actions"][action]["state"] == "IMPLEMENTATION_READY"
+        and previous["actions"][action]["state"] != "IMPLEMENTATION_READY"
+    ]
+    if ready_now:
+        lines.append("🔴 FLOP Adapter Readiness: IMPLEMENTATION_READY")
+    else:
+        lines.append("🟡 FLOP Adapter Readiness 更新")
+
+    for action in READINESS_ACTIONS:
+        before = previous["actions"][action]
+        after = current["actions"][action]
+        if before == after:
+            continue
+        lines.append(
+            f"・{action}: {_safe_text(before['state'], 40)} → "
+            f"{_safe_text(after['state'], 40)}"
+        )
+        removed = sorted(set(before["blockers"]) - set(after["blockers"]))
+        added = sorted(set(after["blockers"]) - set(before["blockers"]))
+        if removed:
+            lines.append(
+                "  解消: " + _safe_text(", ".join(removed), 420)
+            )
+        if added:
+            lines.append(
+                "  追加: " + _safe_text(", ".join(added), 420)
+            )
+        if after["blockers"]:
+            lines.append(
+                "  現在のblocker: "
+                + _safe_text(", ".join(after["blockers"]), 520)
+            )
+
+    lines.extend(
+        [
+            "",
+            "重要: IMPLEMENTATION_READYは実行許可ではありません。",
+            "実adapter実装・登録・外部writeは別の監査と承認が必要です。",
+        ]
+    )
+    return "\n".join(lines)[:MAX_CONTENT]
+
+
+def _apply_readiness_notice(
+    state: dict,
+    monitor_status: dict,
+    *,
+    send: Callable[[str], str],
+    current: datetime,
+) -> int:
+    snapshot = _normalize_readiness(monitor_status)
+    if snapshot is None:
+        return 0
+
+    fingerprint = _readiness_fingerprint(snapshot)
+    previous_fingerprint = state.get("readiness_notice_fingerprint")
+    previous = state.get("readiness_notice_snapshot")
+
+    if previous_fingerprint is None and previous is None:
+        state["readiness_notice_fingerprint"] = fingerprint
+        state["readiness_notice_snapshot"] = snapshot
+        state["readiness_notice_at"] = current.isoformat()
+        return 0
+
+    if not isinstance(previous_fingerprint, str):
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    previous = _validate_readiness_snapshot(previous)
+    if _readiness_fingerprint(previous) != previous_fingerprint:
+        raise RuntimeError("airdrop_notifier_readiness_fingerprint_mismatch")
+
+    if previous_fingerprint == fingerprint:
+        return 0
+
+    # Do not advance the durable dedupe baseline until Discord confirms success.
+    send(_render_readiness_change(previous, snapshot))
+    state["readiness_notice_fingerprint"] = fingerprint
+    state["readiness_notice_snapshot"] = snapshot
+    state["readiness_notice_at"] = current.isoformat()
+    return 1
 
 
 def _discord_sender_from_env() -> Callable[[str], str]:
@@ -458,6 +629,16 @@ def run_once(
     elif next_health_state != previous_health:
         state["health_notice_state"] = next_health_state
 
+    try:
+        sent += _apply_readiness_notice(
+            state,
+            monitor_status,
+            send=send,
+            current=current,
+        )
+    except Exception as error:
+        return _failure_result(state, error, current, sent=sent)
+
     # Re-read after immediate deliveries so a concurrent monitor write is visible.
     _, digest = _pending_by_route()
     if digest:
@@ -523,6 +704,10 @@ def status(*, now: datetime | None = None) -> dict:
         "last_error_type": state.get("last_error_type"),
         "digest_due_at": state.get("digest_due_at"),
         "health_notice_state": state.get("health_notice_state"),
+        "readiness_notice_initialized": isinstance(
+            state.get("readiness_notice_fingerprint"), str
+        ),
+        "readiness_notice_at": state.get("readiness_notice_at"),
         "pending_immediate": len(immediate),
         "pending_digest": len(digest),
     }
