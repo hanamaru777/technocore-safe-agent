@@ -526,7 +526,7 @@ def pending_message(*, now: datetime | None = None) -> str:
 
 
 def poll_notice_batch(*, now: datetime | None = None) -> dict:
-    """Claim bounded durable notices as structured records for one delivery worker."""
+    """Return bounded pending notices without acknowledging delivery."""
     global _FAILURE_NOTIFIED
     current = (now or datetime.now(UTC)).astimezone(UTC)
     try:
@@ -534,16 +534,11 @@ def poll_notice_batch(*, now: datetime | None = None) -> dict:
             state = _load_state()
             changed = _refresh_expired(state, current)
             rows = [
-                record
+                json.loads(json.dumps(record))
                 for record in state["requests"].values()
                 if record["status"] == "pending" and record["notified_at"] is None
             ]
             rows.sort(key=lambda row: (row["expires_at"], row["request_id"]))
-            claimed = []
-            for record in rows[:NOTICE_LIMIT]:
-                claimed.append(json.loads(json.dumps(record)))
-                record["notified_at"] = current.isoformat()
-                changed = True
             if changed:
                 _atomic_write(state)
     except ApprovalInboxError:
@@ -558,13 +553,56 @@ def poll_notice_batch(*, now: datetime | None = None) -> dict:
             ],
         }
     _FAILURE_NOTIFIED = False
-    return {"records": claimed, "messages": []}
+    return {"records": rows[:NOTICE_LIMIT], "messages": []}
+
+
+def mark_notice_delivered(
+    request_id: str,
+    approval_digest: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    if not isinstance(request_id, str) or not HEX32.fullmatch(request_id):
+        raise ApprovalInboxError("airdrop_approval_request_id_invalid")
+    if not isinstance(approval_digest, str) or not HEX64.fullmatch(approval_digest):
+        raise ApprovalInboxError("airdrop_approval_digest_invalid")
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    with _state_lock():
+        state = _load_state()
+        changed = _refresh_expired(state, current)
+        record = state["requests"].get(request_id)
+        if record is None:
+            if changed:
+                _atomic_write(state)
+            raise ApprovalInboxError("airdrop_approval_request_not_found")
+        if record["approval_digest"] != approval_digest:
+            if changed:
+                _atomic_write(state)
+            raise ApprovalInboxError("airdrop_approval_digest_mismatch")
+        if record["status"] != "pending":
+            if changed:
+                _atomic_write(state)
+            raise ApprovalInboxError(
+                f"airdrop_approval_notice_not_pending:{record['status']}"
+            )
+        if record["notified_at"] is None:
+            record["notified_at"] = current.isoformat()
+            _validate_record(request_id, record)
+            _atomic_write(state)
+        elif changed:
+            _atomic_write(state)
+        return json.loads(json.dumps(record))
 
 
 def poll_notices(*, now: datetime | None = None) -> list[str]:
-    """Compatibility text surface for non-component consumers and tests."""
+    """Compatibility text surface that acknowledges its own local delivery."""
     batch = poll_notice_batch(now=now)
-    return [
-        *batch["messages"],
-        *(render_request(record) for record in batch["records"]),
-    ]
+    notices = list(batch["messages"])
+    for record in batch["records"]:
+        notices.append(render_request(record))
+        mark_notice_delivered(
+            record["request_id"],
+            record["approval_digest"],
+            now=now,
+        )
+    return notices
