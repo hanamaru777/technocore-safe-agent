@@ -66,13 +66,16 @@ def _read_bounded(
     namespace: str,
     key: str,
     *,
-    reader: Callable[[str, str], str],
+    reader: Callable[[str, str], str | None],
     failure_reason: str,
+    missing_reason: str,
 ) -> dict:
     try:
         value = reader(namespace, key)
     except Exception as error:
         raise ResolutionError(failure_reason) from error
+    if value is None:
+        raise ResolutionError(missing_reason)
     if not isinstance(value, str) or not value:
         raise ResolutionError(failure_reason)
     encoded = value.encode("utf-8")
@@ -114,7 +117,7 @@ def _material_key(full_spec: str) -> str | None:
 def resolve_offer(
     item: dict,
     *,
-    reader: Callable[[str, str], str] = core.read_note,
+    reader: Callable[[str, str], str | None] = core.read_note_optional,
     now_ms: int | None = None,
 ) -> dict:
     """Resolve at most two fixed-origin Notes for one retained live offer.
@@ -132,6 +135,7 @@ def resolve_offer(
         job_id,
         reader=reader,
         failure_reason="full_spec_read_failed",
+        missing_reason="full_spec_not_found",
     )
     material_key = _material_key(full_spec["value"])
     material = None
@@ -141,6 +145,7 @@ def resolve_offer(
             material_key,
             reader=reader,
             failure_reason="material_read_failed",
+            missing_reason="material_not_found",
         )
 
     return {
