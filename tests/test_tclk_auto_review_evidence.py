@@ -11,6 +11,13 @@ from flop_agent import tclk_review_evidence
 NOW = 2_000_000_000_000
 
 
+@pytest.fixture(autouse=True)
+def _reset_auto_retry_runtime(monkeypatch):
+    monkeypatch.setattr(discord_review, "_AUTO_FAILURE_NOTIFIED", set())
+    monkeypatch.setattr(discord_review, "_AUTO_RETRY_AFTER", {})
+    monkeypatch.setattr(discord_review, "_AUTO_RETRY_ATTEMPTS", {})
+
+
 def _offer(index: int = 1, *, job_id: str = "job-safe-open") -> dict:
     return {
         "id": "0x" + f"{index:064x}",
@@ -129,27 +136,112 @@ def test_new_candidate_auto_resolves_and_notice_requires_no_chatgpt_relay(monkey
     assert len(notices[0]) <= 2000
 
 
-def test_transient_auto_resolution_failure_retries_without_repeated_failure_spam(monkeypatch):
+def test_transient_auto_resolution_failure_backs_off_then_recovers(monkeypatch):
     item = _offer()
+    clock = {"now": 1000.0}
+    calls = {"count": 0}
+
     monkeypatch.setattr(discord_review.observer, "load_state", lambda: {"tclk": {"offers": {item["id"]: item}}})
     monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_BASELINED", True)
     monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_SEEN", set())
-    monkeypatch.setattr(discord_review, "_AUTO_FAILURE_NOTIFIED", set())
+    monkeypatch.setattr(discord_review.time, "monotonic", lambda: clock["now"])
 
     def transient(_item):
+        calls["count"] += 1
         raise tclk_review_evidence.EvidenceError("full_spec_read_failed")
 
     monkeypatch.setattr(discord_review.tclk_review_evidence, "capture", transient)
+
     first = discord_review._new_auto_review_notices()
-    second = discord_review._new_auto_review_notices()
     assert len(first) == 1 and "自動で再試行" in first[0]
+    assert calls["count"] == 1
+    assert discord_review._AUTO_RETRY_ATTEMPTS[item["id"]] == 1
+    assert discord_review._AUTO_RETRY_AFTER[item["id"]] == 1060.0
+
+    clock["now"] = 1059.0
+    second = discord_review._new_auto_review_notices()
     assert second == []
+    assert calls["count"] == 1
     assert item["id"] not in knowledge_app._TCLK_NOTICE_SEEN
 
-    monkeypatch.setattr(discord_review.tclk_review_evidence, "capture", lambda _item: _resolved_record(item))
+    clock["now"] = 1061.0
+    monkeypatch.setattr(
+        discord_review.tclk_review_evidence,
+        "capture",
+        lambda _item: _resolved_record(item),
+    )
     third = discord_review._new_auto_review_notices()
     assert len(third) == 1 and "AUTO-RESOLVE: PASS" in third[0]
     assert item["id"] in knowledge_app._TCLK_NOTICE_SEEN
+    assert item["id"] not in discord_review._AUTO_RETRY_AFTER
+    assert item["id"] not in discord_review._AUTO_RETRY_ATTEMPTS
+
+
+def test_missing_full_spec_uses_longer_backoff_and_can_recover(monkeypatch):
+    item = _offer()
+    clock = {"now": 2000.0}
+    calls = {"count": 0}
+
+    monkeypatch.setattr(discord_review.observer, "load_state", lambda: {"tclk": {"offers": {item["id"]: item}}})
+    monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_BASELINED", True)
+    monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_SEEN", set())
+    monkeypatch.setattr(discord_review.time, "monotonic", lambda: clock["now"])
+
+    def missing(_item):
+        calls["count"] += 1
+        raise tclk_review_evidence.EvidenceError("full_spec_not_found")
+
+    monkeypatch.setattr(discord_review.tclk_review_evidence, "capture", missing)
+
+    first = discord_review._new_auto_review_notices()
+    assert len(first) == 1
+    assert "full_spec_not_found" in first[0]
+    assert "自動で再試行" in first[0]
+    assert calls["count"] == 1
+    assert discord_review._AUTO_RETRY_AFTER[item["id"]] == 2300.0
+
+    clock["now"] = 2299.0
+    assert discord_review._new_auto_review_notices() == []
+    assert calls["count"] == 1
+
+    clock["now"] = 2301.0
+    monkeypatch.setattr(
+        discord_review.tclk_review_evidence,
+        "capture",
+        lambda _item: _resolved_record(item),
+    )
+    recovered = discord_review._new_auto_review_notices()
+    assert len(recovered) == 1
+    assert "AUTO-RESOLVE: PASS" in recovered[0]
+    assert item["id"] in knowledge_app._TCLK_NOTICE_SEEN
+
+
+def test_non_transient_review_failure_is_terminal_without_retry_state(monkeypatch):
+    item = _offer()
+    calls = {"count": 0}
+
+    monkeypatch.setattr(discord_review.observer, "load_state", lambda: {"tclk": {"offers": {item["id"]: item}}})
+    monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_BASELINED", True)
+    monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_SEEN", set())
+    monkeypatch.setattr(discord_review.time, "monotonic", lambda: 3000.0)
+
+    def unsafe(_item):
+        calls["count"] += 1
+        raise tclk_review_evidence.EvidenceError("unsupported_note_reference")
+
+    monkeypatch.setattr(discord_review.tclk_review_evidence, "capture", unsafe)
+
+    first = discord_review._new_auto_review_notices()
+    assert len(first) == 1
+    assert "fail-closedで見送ります" in first[0]
+    assert calls["count"] == 1
+    assert item["id"] in knowledge_app._TCLK_NOTICE_SEEN
+    assert item["id"] not in discord_review._AUTO_RETRY_AFTER
+    assert item["id"] not in discord_review._AUTO_RETRY_ATTEMPTS
+
+    second = discord_review._new_auto_review_notices()
+    assert second == []
+    assert calls["count"] == 1
 
 
 def test_stored_evidence_command_works_without_live_offer(monkeypatch):
