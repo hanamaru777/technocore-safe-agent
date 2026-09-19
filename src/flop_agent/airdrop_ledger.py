@@ -429,6 +429,17 @@ def _load_current() -> dict | None:
     return airdrop_radar.normalize_previous_snapshot(snapshot)
 
 
+def current_snapshot() -> dict:
+    """Return a defensive copy of the current local Radar snapshot.
+
+    This performs no network access and no state mutation.
+    """
+    current = _load_current()
+    if current is None:
+        raise RuntimeError("airdrop_ledger_no_snapshot")
+    return json.loads(json.dumps(current))
+
+
 def _empty_last_success() -> dict:
     return {"schema_version": SCHEMA_VERSION, "sources": {}}
 
