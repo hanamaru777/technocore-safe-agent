@@ -196,16 +196,15 @@ def test_discord_reject_is_separate_exact_action(isolated_state: Path) -> None:
     assert airdrop_approval.get_request(row["request_id"], now=T0)["status"] == "rejected"
 
 
-def test_tclk_notice_chain_includes_airdrop_notices(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tclk_notice_chain_leaves_airdrop_for_structured_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(discord_tclk_approval, "_ORIGINAL_NOTICES", lambda: ["base"])
     monkeypatch.setattr(
         discord_tclk_approval, "_new_prepared_approval_notices", lambda: ["accept"]
     )
     monkeypatch.setattr(
         discord_tclk_approval, "_new_prepared_reveal_notices", lambda: ["reveal"]
-    )
-    monkeypatch.setattr(
-        discord_tclk_approval.airdrop_approval, "poll_notices", lambda: ["airdrop"]
     )
 
     from flop_agent import discord_sonnet_alerts
@@ -216,7 +215,6 @@ def test_tclk_notice_chain_includes_airdrop_notices(monkeypatch: pytest.MonkeyPa
         "accept",
         "reveal",
         "sonnet",
-        "airdrop",
     ]
 
 
