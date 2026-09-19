@@ -11,7 +11,7 @@ from . import core
 def main() -> None:
     parser = argparse.ArgumentParser(prog="flop")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan", "airdrop-record", "airdrop-ledger-status", "airdrop-evidence-export", "airdrop-monitor-once", "airdrop-monitor-status", "airdrop-alerts", "airdrop-daily-summary", "airdrop-monitor", "airdrop-notifier-once", "airdrop-notifier-status"):
+    for command in ("status", "show-did", "activity-log", "sync-official", "doctor", "secret-scan", "history-secret-scan", "airdrop-record", "airdrop-ledger-status", "airdrop-evidence-export", "airdrop-adapter-readiness", "airdrop-monitor-once", "airdrop-monitor-status", "airdrop-alerts", "airdrop-daily-summary", "airdrop-monitor", "airdrop-notifier-once", "airdrop-notifier-status"):
         sub.add_parser(command)
     for command in ("observe", "observe-once", "agents", "opportunities", "observer-status", "discover-backfill", "intelligence", "resident-status", "top-agents", "candidates", "feedback-status", "reset-learning", "pause-resident", "resume-resident", "approved", "export-resident-state", "autopilot-status", "autopilot-queue", "autopilot-enable", "autopilot-disable", "autopilot-pause", "autopilot-resume", "autopilot-stage-e2e", "autopilot-stage-e2e-v2", "autopilot-stage-e2e-v3", "autopilot-quarantine-e2e", "autopilot-quarantine-e2e-v2"):
         sub.add_parser(command)
@@ -136,6 +136,9 @@ def main() -> None:
         elif args.command == "airdrop-evidence-export":
             from . import airdrop_ledger
             output = airdrop_ledger.export_bundle()
+        elif args.command == "airdrop-adapter-readiness":
+            from . import airdrop_adapter_readiness
+            output = airdrop_adapter_readiness.evaluate()
         elif args.command == "airdrop-monitor-once":
             from . import airdrop_monitor
             output = airdrop_monitor.run_once()
