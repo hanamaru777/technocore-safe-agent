@@ -236,7 +236,7 @@ for action in expected:
     if not isinstance(row,dict):
         raise SystemExit(f"missing_{action}")
     if row.get("state") != "BLOCKED":
-        raise SystemExit(f"{action}_not_blocked:{row.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(101))}")
+        raise SystemExit(f"{action}_not_blocked:{row.get(\"state\")}")
     blockers=row.get("blockers")
     if not isinstance(blockers,list) or not blockers:
         raise SystemExit(f"{action}_blockers_missing")
@@ -257,6 +257,11 @@ for svc in "$RES" "$CAP" "$SIG" "$DIS"; do
 done
 
 common_gate post
+
+for svc in "$MON_SVC" "$NOT_SVC"; do
+  [[ "$(svc_value "$svc" Result)" == success ]] || stop "post_oneshot_last_result_not_success:$svc"
+  [[ "$(svc_value "$svc" ExecMainStatus)" == 0 ]] || stop "post_oneshot_last_exit_nonzero:$svc"
+done
 
 read -r POST_REQUESTS POST_CANDIDATES POST_EXECUTIONS < <(local_counts) || stop post_local_state_unreadable
 [[ $POST_REQUESTS == 0 && $POST_CANDIDATES == 0 && $POST_EXECUTIONS == 0 ]] || stop readiness_command_mutated_action_state
