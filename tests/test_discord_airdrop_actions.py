@@ -404,7 +404,11 @@ def test_real_discord_view_has_exact_three_bounded_buttons(
     import discord
 
     row = stage_manual()
-    view = discord_control._airdrop_action_view(discord, row)
+
+    async def build_view():
+        return discord_control._airdrop_action_view(discord, row)
+
+    view = asyncio.run(build_view())
 
     assert len(view.children) == 3
     assert [item.label for item in view.children] == ["詳細", "承認", "拒否"]
