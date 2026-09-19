@@ -39,7 +39,7 @@ def stage_manual(
         summary="Exact local approval UX test.",
         cost_note="0 FLOP / no external execution",
         reversible=False,
-        expires_at=expires_at or T0 + timedelta(hours=2),
+        expires_at=expires_at or FUTURE,
         now=T0,
     )
 
