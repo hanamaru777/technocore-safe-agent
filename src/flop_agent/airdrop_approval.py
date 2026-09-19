@@ -525,7 +525,8 @@ def pending_message(*, now: datetime | None = None) -> str:
     return "\n".join(lines)
 
 
-def poll_notices(*, now: datetime | None = None) -> list[str]:
+def poll_notice_batch(*, now: datetime | None = None) -> dict:
+    """Claim bounded durable notices as structured records for one delivery worker."""
     global _FAILURE_NOTIFIED
     current = (now or datetime.now(UTC)).astimezone(UTC)
     try:
@@ -538,20 +539,32 @@ def poll_notices(*, now: datetime | None = None) -> list[str]:
                 if record["status"] == "pending" and record["notified_at"] is None
             ]
             rows.sort(key=lambda row: (row["expires_at"], row["request_id"]))
-            notices = []
+            claimed = []
             for record in rows[:NOTICE_LIMIT]:
-                notices.append(render_request(record))
+                claimed.append(json.loads(json.dumps(record)))
                 record["notified_at"] = current.isoformat()
                 changed = True
             if changed:
                 _atomic_write(state)
     except ApprovalInboxError:
         if _FAILURE_NOTIFIED:
-            return []
+            return {"records": [], "messages": []}
         _FAILURE_NOTIFIED = True
-        return [
-            "🔴 FLOP Airdrop Action Inbox異常\n"
-            "承認状態を安全に扱えないためfail-closedです。外部実行は行っていません。"
-        ]
+        return {
+            "records": [],
+            "messages": [
+                "🔴 FLOP Airdrop Action Inbox異常\n"
+                "承認状態を安全に扱えないためfail-closedです。外部実行は行っていません。"
+            ],
+        }
     _FAILURE_NOTIFIED = False
-    return notices
+    return {"records": claimed, "messages": []}
+
+
+def poll_notices(*, now: datetime | None = None) -> list[str]:
+    """Compatibility text surface for non-component consumers and tests."""
+    batch = poll_notice_batch(now=now)
+    return [
+        *batch["messages"],
+        *(render_request(record) for record in batch["records"]),
+    ]
