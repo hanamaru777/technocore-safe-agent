@@ -637,6 +637,200 @@ def test_pending_rejected_expired_and_consumed_requests_do_not_prepare(
         )
 
 
+def test_expired_and_consumed_requests_do_not_prepare(
+    isolated_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = SuccessAdapter()
+    install_adapter(monkeypatch, adapter)
+
+    _row, approved = approved_request(
+        monkeypatch,
+        expires_at=T0 + timedelta(minutes=5),
+    )
+    expired = airdrop_approval.get_request(
+        approved["request_id"],
+        now=T0 + timedelta(minutes=10),
+    )
+    assert expired["status"] == "expired"
+
+    with pytest.raises(
+        airdrop_executor.AirdropExecutorError,
+        match="request_not_approved:expired",
+    ):
+        airdrop_executor.prepare_execution(
+            approved["request_id"],
+            adapter_id=adapter.adapter_id,
+            git_sha=GIT_SHA,
+            now=T0 + timedelta(minutes=10),
+        )
+
+    # A separate request is consumed through the normal local-only API.
+    row2 = durable(action_class="claim")
+    patch_ledger(monkeypatch, [row2])
+    staged2 = airdrop_action_stager.stage_new_events(
+        [row2["event_id"]],
+        {row2["event_id"]: row2},
+        now=T0,
+    )["staged"][0]
+    approved2 = airdrop_approval.decide(
+        staged2["request_id"],
+        staged2["approval_digest"],
+        decision="approved",
+        actor_id="42",
+        now=T0 + timedelta(minutes=1),
+    )
+    airdrop_approval.consume(
+        approved2["request_id"],
+        approved2["approval_digest"],
+        receipt="receipt:already:consumed",
+        now=T0 + timedelta(minutes=2),
+    )
+
+    class ClaimAdapter(SuccessAdapter):
+        adapter_id = "test.claim"
+        action_classes = frozenset({"claim"})
+
+    claim_adapter = ClaimAdapter()
+    install_adapter(monkeypatch, claim_adapter)
+    with pytest.raises(
+        airdrop_executor.AirdropExecutorError,
+        match="request_not_approved:consumed",
+    ):
+        airdrop_executor.prepare_execution(
+            approved2["request_id"],
+            adapter_id=claim_adapter.adapter_id,
+            git_sha=GIT_SHA,
+            now=T0 + timedelta(minutes=3),
+        )
+
+
+def test_success_journal_persists_before_local_consumption_retry(
+    isolated_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _row, approved = approved_request(monkeypatch)
+    adapter = SuccessAdapter()
+    install_adapter(monkeypatch, adapter)
+
+    airdrop_executor.prepare_execution(
+        approved["request_id"],
+        adapter_id=adapter.adapter_id,
+        git_sha=GIT_SHA,
+        now=T0 + timedelta(minutes=2),
+    )
+
+    original = airdrop_approval.consume_verified_execution
+    calls = {"count": 0}
+
+    def fail_once(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise airdrop_approval.ApprovalInboxError("simulated_local_persist_failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        airdrop_approval,
+        "consume_verified_execution",
+        fail_once,
+    )
+
+    with pytest.raises(
+        airdrop_executor.AirdropExecutorError,
+        match="success_recorded_consumption_pending",
+    ):
+        airdrop_executor.execute_prepared(
+            approved["request_id"],
+            now=T0 + timedelta(minutes=3),
+        )
+
+    journal = airdrop_executor.get_execution(approved["request_id"])
+    assert journal["status"] == "succeeded"
+    assert journal["receipt"] == "receipt:registration:123"
+    assert adapter.execute_calls == 1
+    assert airdrop_approval.get_request(
+        approved["request_id"],
+        now=T0 + timedelta(minutes=4),
+    )["status"] == "approved"
+
+    repaired = airdrop_executor.finalize_success(
+        approved["request_id"],
+        now=T0 + timedelta(minutes=5),
+    )
+    assert repaired["status"] == "succeeded"
+    assert adapter.execute_calls == 1
+    assert airdrop_approval.get_request(
+        approved["request_id"],
+        now=T0 + timedelta(minutes=5),
+    )["status"] == "consumed"
+
+
+def test_adapter_version_drift_blocks_before_write(
+    isolated_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _row, approved = approved_request(monkeypatch)
+    adapter = SuccessAdapter()
+    install_adapter(monkeypatch, adapter)
+
+    airdrop_executor.prepare_execution(
+        approved["request_id"],
+        adapter_id=adapter.adapter_id,
+        git_sha=GIT_SHA,
+        now=T0 + timedelta(minutes=2),
+    )
+    adapter.version = "2"
+
+    with pytest.raises(airdrop_executor.AirdropExecutorError):
+        airdrop_executor.execute_prepared(
+            approved["request_id"],
+            now=T0 + timedelta(minutes=3),
+        )
+
+    journal = airdrop_executor.get_execution(approved["request_id"])
+    assert journal["status"] == "blocked"
+    assert adapter.execute_calls == 0
+
+
+def test_ambiguous_reconcile_refuses_external_consumption_mismatch(
+    isolated_state: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _row, approved = approved_request(monkeypatch)
+    adapter = AmbiguousAdapter()
+    install_adapter(monkeypatch, adapter)
+
+    airdrop_executor.prepare_execution(
+        approved["request_id"],
+        adapter_id=adapter.adapter_id,
+        git_sha=GIT_SHA,
+        now=T0 + timedelta(minutes=2),
+    )
+    with pytest.raises(airdrop_executor.AirdropExecutorError):
+        airdrop_executor.execute_prepared(
+            approved["request_id"],
+            now=T0 + timedelta(minutes=3),
+        )
+
+    # Local consumption from any other path invalidates this ambiguous journal.
+    airdrop_approval.consume(
+        approved["request_id"],
+        approved["approval_digest"],
+        receipt="receipt:other:path",
+        now=T0 + timedelta(minutes=4),
+    )
+    with pytest.raises(
+        airdrop_executor.AirdropExecutorError,
+        match="request_not_reconcilable:consumed",
+    ):
+        airdrop_executor.reconcile_execution(
+            approved["request_id"],
+            now=T0 + timedelta(minutes=5),
+        )
+    assert adapter.reconcile_calls == 0
+    assert adapter.execute_calls == 1
+
+
 def test_approval_verified_execution_consumption_requires_attempt_inside_window(
     isolated_state: Path,
     monkeypatch: pytest.MonkeyPatch,
