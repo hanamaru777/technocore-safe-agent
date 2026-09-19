@@ -12,6 +12,8 @@ locks, reveals, pays, executes task text, or follows arbitrary URLs.
 """
 from __future__ import annotations
 
+import time
+
 from . import discord_knowledge as app
 from . import observer, tclk_note_review, tclk_review_evidence, tclk_triage, tclk_watch
 
@@ -22,7 +24,30 @@ VALIDATION_NOTE = (
 AUTO_RESOLVE_BATCH = 4
 AUTO_NOTICE_LIMIT = 2
 _AUTO_FAILURE_NOTIFIED: set[str] = set()
+_AUTO_RETRY_AFTER: dict[str, float] = {}
+_AUTO_RETRY_ATTEMPTS: dict[str, int] = {}
 _TRANSIENT_EVIDENCE_ERRORS = {"full_spec_read_failed", "material_read_failed"}
+_MISSING_EVIDENCE_ERRORS = {"full_spec_not_found", "material_not_found"}
+_TRANSIENT_RETRY_SECONDS = (60, 120, 300)
+_MISSING_RETRY_SECONDS = (300, 600, 900)
+
+
+def _retry_delay(reason: str, attempt: int) -> int | None:
+    if reason in _TRANSIENT_EVIDENCE_ERRORS:
+        schedule = _TRANSIENT_RETRY_SECONDS
+    elif reason in _MISSING_EVIDENCE_ERRORS:
+        schedule = _MISSING_RETRY_SECONDS
+    else:
+        return None
+    index = min(max(1, attempt), len(schedule)) - 1
+    return schedule[index]
+
+
+def _clear_retry_state(active_ids: set[str]) -> None:
+    for mapping in (_AUTO_RETRY_AFTER, _AUTO_RETRY_ATTEMPTS):
+        for offer_id in list(mapping):
+            if offer_id not in active_ids:
+                mapping.pop(offer_id, None)
 
 
 def _live_offers() -> list[dict]:
@@ -280,7 +305,16 @@ def _new_auto_review_notices() -> list[str]:
 
     app._TCLK_NOTICE_SEEN.intersection_update(active_ids)
     _AUTO_FAILURE_NOTIFIED.intersection_update(active_ids)
-    new_items = [item for item in items if item.get("id") not in app._TCLK_NOTICE_SEEN]
+    _clear_retry_state(active_ids)
+    now_mono = time.monotonic()
+    new_items = [
+        item
+        for item in items
+        if (
+            item.get("id") not in app._TCLK_NOTICE_SEEN
+            and now_mono >= _AUTO_RETRY_AFTER.get(str(item.get("id")), 0.0)
+        )
+    ]
     rows = tclk_triage.review_candidates(new_items)[:AUTO_RESOLVE_BATCH]
     rendered: list[str] = []
     completed = 0
@@ -292,15 +326,24 @@ def _new_auto_review_notices() -> list[str]:
             record = tclk_review_evidence.capture(item)
         except tclk_review_evidence.EvidenceError as error:
             reason = str(error)
-            retrying = reason in _TRANSIENT_EVIDENCE_ERRORS
-            if not retrying:
+            attempt = _AUTO_RETRY_ATTEMPTS.get(offer_id, 0) + 1
+            delay = _retry_delay(reason, attempt)
+            retrying = delay is not None
+            if retrying:
+                _AUTO_RETRY_ATTEMPTS[offer_id] = attempt
+                _AUTO_RETRY_AFTER[offer_id] = now_mono + delay
+            else:
                 app._TCLK_NOTICE_SEEN.add(offer_id)
+                _AUTO_RETRY_ATTEMPTS.pop(offer_id, None)
+                _AUTO_RETRY_AFTER.pop(offer_id, None)
             if offer_id not in _AUTO_FAILURE_NOTIFIED:
                 rendered.append(_auto_failure_notice(item, verdict, reason, retrying=retrying))
                 _AUTO_FAILURE_NOTIFIED.add(offer_id)
             continue
         app._TCLK_NOTICE_SEEN.add(offer_id)
         _AUTO_FAILURE_NOTIFIED.discard(offer_id)
+        _AUTO_RETRY_ATTEMPTS.pop(offer_id, None)
+        _AUTO_RETRY_AFTER.pop(offer_id, None)
         completed += 1
         rendered.append(_auto_success_notice(item, verdict, record))
 
