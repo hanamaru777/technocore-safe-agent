@@ -126,7 +126,7 @@ def get(offer_id: str) -> dict | None:
 def capture(
     item: dict,
     *,
-    reader: Callable[[str, str], str] = core.read_note,
+    reader: Callable[[str, str], str | None] = core.read_note_optional,
     now_ms: int | None = None,
 ) -> dict:
     """Resolve and persist one review-worthy offer exactly once by offer/frame identity."""
