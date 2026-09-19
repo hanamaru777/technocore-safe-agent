@@ -313,6 +313,41 @@ def _normalize_readiness(status: dict) -> dict | None:
     return {"overall": overall, "actions": normalized}
 
 
+def _validate_readiness_snapshot(snapshot: object) -> dict:
+    if not isinstance(snapshot, dict):
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    if snapshot.get("overall") not in READINESS_STATES:
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    actions = snapshot.get("actions")
+    if not isinstance(actions, dict) or set(actions) != set(READINESS_ACTIONS):
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    for action in READINESS_ACTIONS:
+        row = actions.get(action)
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"state", "blockers"}
+            or row.get("state") not in READINESS_STATES
+            or not isinstance(row.get("blockers"), list)
+            or not all(
+                isinstance(item, str) and 1 <= len(item) <= 240
+                for item in row["blockers"]
+            )
+            or row["blockers"] != sorted(set(row["blockers"]))
+        ):
+            raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    expected_overall = (
+        "IMPLEMENTATION_READY"
+        if all(
+            actions[action]["state"] == "IMPLEMENTATION_READY"
+            for action in READINESS_ACTIONS
+        )
+        else "BLOCKED"
+    )
+    if snapshot["overall"] != expected_overall:
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    return snapshot
+
+
 def _readiness_fingerprint(snapshot: dict) -> str:
     rendered = json.dumps(
         snapshot,
@@ -386,11 +421,17 @@ def _apply_readiness_notice(
     previous_fingerprint = state.get("readiness_notice_fingerprint")
     previous = state.get("readiness_notice_snapshot")
 
-    if previous_fingerprint is None or not isinstance(previous, dict):
+    if previous_fingerprint is None and previous is None:
         state["readiness_notice_fingerprint"] = fingerprint
         state["readiness_notice_snapshot"] = snapshot
         state["readiness_notice_at"] = current.isoformat()
         return 0
+
+    if not isinstance(previous_fingerprint, str):
+        raise RuntimeError("airdrop_notifier_readiness_state_invalid")
+    previous = _validate_readiness_snapshot(previous)
+    if _readiness_fingerprint(previous) != previous_fingerprint:
+        raise RuntimeError("airdrop_notifier_readiness_fingerprint_mismatch")
 
     if previous_fingerprint == fingerprint:
         return 0
