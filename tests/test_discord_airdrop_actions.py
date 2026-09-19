@@ -335,7 +335,9 @@ def test_notice_ack_happens_only_after_successful_gateway_send(
             return None
 
     class FakeDiscord:
-        AllowedMentions = AllowedMentions
+        pass
+
+    FakeDiscord.AllowedMentions = AllowedMentions
 
     class FailingChannel:
         async def send(self, *args, **kwargs):
