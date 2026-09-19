@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
 
-from . import airdrop_action_stager, airdrop_ledger, airdrop_radar
+from . import airdrop_action_stager, airdrop_adapter_readiness, airdrop_ledger, airdrop_radar
 
 SCHEMA_VERSION = 1
 CONFIG_NAME = "monitor-config.json"
@@ -527,6 +527,21 @@ def run_once(
     }
 
 
+def _adapter_readiness_status(*, now: datetime | None = None) -> dict:
+    try:
+        return airdrop_adapter_readiness.concise(
+            airdrop_adapter_readiness.evaluate(now=now)
+        )
+    except Exception as error:
+        return {
+            "overall": "BLOCKED",
+            "snapshot_id": None,
+            "ledger_valid": False,
+            "actions": {},
+            "error_type": error.__class__.__name__,
+        }
+
+
 def monitor_status(*, now: datetime | None = None) -> dict:
     config = load_config()
     heartbeat = _load_heartbeat()
@@ -573,6 +588,7 @@ def monitor_status(*, now: datetime | None = None) -> dict:
         "ledger_count": ledger_status["ledger_count"],
         "scan_interval_seconds": config["interval_seconds"],
         "minimum_scan_interval_seconds": config["minimum_scan_interval_seconds"],
+        "adapter_readiness": _adapter_readiness_status(now=current),
     }
 
 
@@ -744,6 +760,7 @@ def daily_summary(*, now: datetime | None = None) -> dict:
         "what_matters": what_matters,
         "what_to_do": next_steps[:20],
         "key_facts": key_facts,
+        "adapter_readiness": _adapter_readiness_status(now=current),
         "ledger_integrity_valid": bundle.get("integrity", {}).get("valid"),
     }
 
