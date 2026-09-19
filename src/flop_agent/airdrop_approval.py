@@ -475,6 +475,66 @@ def consume(
         return json.loads(json.dumps(record))
 
 
+def consume_verified_execution(
+    request_id: str,
+    approval_digest: str,
+    *,
+    receipt: str,
+    attempted_at: str,
+    now: datetime | None = None,
+) -> dict:
+    """Consume only a request that was approved when a verified execution began.
+
+    Unlike the ordinary consume() path, this can finalize a success receipt after
+    the request expiry if and only if the durable attempt started after approval
+    and before expiry. It remains a local state transition; it performs no
+    external action.
+    """
+    if not isinstance(request_id, str) or not HEX32.fullmatch(request_id):
+        raise ApprovalInboxError("airdrop_approval_request_id_invalid")
+    if not isinstance(approval_digest, str) or not HEX64.fullmatch(approval_digest):
+        raise ApprovalInboxError("airdrop_approval_digest_invalid")
+    rendered_receipt = _safe_text(receipt, 240)
+    if not rendered_receipt:
+        raise ApprovalInboxError("airdrop_approval_receipt_invalid")
+    attempt = _parse_utc(attempted_at)
+    current = (now or datetime.now(UTC)).astimezone(UTC)
+    if attempt > current:
+        raise ApprovalInboxError("airdrop_approval_attempt_in_future")
+
+    with _state_lock():
+        state = _load_state()
+        record = state["requests"].get(request_id)
+        if record is None:
+            raise ApprovalInboxError("airdrop_approval_request_not_found")
+        if record["approval_digest"] != approval_digest:
+            raise ApprovalInboxError("airdrop_approval_digest_mismatch")
+
+        if record["status"] == "consumed":
+            if record.get("consumption_receipt") != rendered_receipt:
+                raise ApprovalInboxError("airdrop_approval_consumption_receipt_mismatch")
+            return json.loads(json.dumps(record))
+
+        if record["status"] not in {"approved", "expired"}:
+            raise ApprovalInboxError(
+                f"airdrop_approval_not_execution_consumable:{record['status']}"
+            )
+        if record.get("decision_at") is None or record.get("decision_actor") is None:
+            raise ApprovalInboxError("airdrop_approval_execution_not_preapproved")
+
+        decision_at = _parse_utc(record["decision_at"])
+        expires_at = _parse_utc(record["expires_at"])
+        if not decision_at <= attempt < expires_at:
+            raise ApprovalInboxError("airdrop_approval_attempt_outside_approval_window")
+
+        record["status"] = "consumed"
+        record["consumed_at"] = current.isoformat()
+        record["consumption_receipt"] = rendered_receipt
+        _validate_record(request_id, record)
+        _atomic_write(state)
+        return json.loads(json.dumps(record))
+
+
 def render_request(record: dict) -> str:
     request_id = record["request_id"]
     digest = record["approval_digest"]
