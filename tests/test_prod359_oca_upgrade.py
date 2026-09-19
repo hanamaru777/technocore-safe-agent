@@ -92,6 +92,8 @@ def test_prod359_helper_has_guarded_revert_after_completed_refresh() -> None:
     assert "PROD359_ROLLBACK_RC=" in text
     assert "PROD359_ROLLBACK_VERSION=" in text
     assert "PROD359_ROLLBACK_REVISION=" in text
+    assert "CURRENT_AFTER_FAILED_REFRESH=$(snap_version)" in text
+    assert 'if [[ $CURRENT_AFTER_FAILED_REFRESH != "$PRE_VERSION" ]]' in text
     assert "DO_NOT_RERUN=YES" in text
 
 
@@ -103,3 +105,5 @@ def test_prod359_helper_observes_runcommand_surface_without_gating_success() -> 
     assert "*runcommand*" in text
     assert "OCARUN_PRESENT=NO" in text
     assert "RUNCOMMAND_ARTIFACT=NO" in text
+    assert "find \"$base\" -maxdepth 8" in text
+    assert "| grep -q" not in text
