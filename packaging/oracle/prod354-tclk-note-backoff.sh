@@ -185,6 +185,8 @@ git_owner merge --ff-only "$TARGET" >/dev/null
 [[ "$(git_owner rev-parse HEAD)" == "$TARGET" ]] || stop post_merge_head_mismatch
 
 SMOKE_DIR=$(mktemp -d /tmp/prod354-tclk-note.XXXXXX)
+chown technocore "$SMOKE_DIR"
+chmod 0750 "$SMOKE_DIR"
 
 SMOKE=$(sudo -u technocore env -i   PATH=/usr/bin:/bin   FLOP_STATE_DIR="$SMOKE_DIR"   PYTHONPATH="$APP/src"   "$APP/.venv/bin/python" - <<'PY'
 from flop_agent import discord_tclk_review, tclk_note_review
