@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import airdrop_approval, autopilot, observer, resident, tclk_watch
+from . import airdrop_approval, autopilot, discord_airdrop_actions, observer, resident, tclk_watch
 
 LOG = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -532,6 +532,21 @@ def activity_message() -> str:
 class Control:
     def __init__(self, allowed_ids: set[str] | None = None, channel_id: str | None = None) -> None:
         self.allowed_ids = allowed_ids if allowed_ids is not None else {item.strip() for item in os.environ.get("DISCORD_ALLOWED_USER_IDS", "").split(",") if item.strip()}; self.channel_id = channel_id if channel_id is not None else os.environ.get("DISCORD_CHANNEL_ID", "")
+
+    def airdrop_component(
+        self,
+        user_id: str,
+        component_custom_id: str,
+        channel_id: str,
+    ) -> dict:
+        return discord_airdrop_actions.handle_interaction(
+            allowed_ids=self.allowed_ids,
+            expected_channel_id=self.channel_id,
+            user_id=user_id,
+            channel_id=channel_id,
+            component_custom_id=component_custom_id,
+        )
+
     def command(self, user_id: str, text: str, channel_id: str | None = None) -> dict:
         if channel_id is not None and channel_id != self.channel_id: return {"ok": False, "error": "wrong_channel", "message": "Control access denied."}
         if user_id not in self.allowed_ids: return {"ok": False, "error": "unauthorized", "message": "Control access denied."}
@@ -646,11 +661,48 @@ def validate_environment() -> tuple[str, str, set[str]]:
     if not channel.isdecimal(): raise RuntimeError("Discord channel ID must be numeric")
     if not allowed or not all(item.isdecimal() for item in allowed): raise RuntimeError("Discord allowed user IDs must be non-empty numeric IDs")
     return token, channel, allowed
-async def notification_worker(channel, control: Control, stop: asyncio.Event) -> None:
+def _airdrop_action_view(discord, record: dict):
+    view = discord.ui.View(timeout=None)
+    styles = {
+        "secondary": discord.ButtonStyle.secondary,
+        "success": discord.ButtonStyle.success,
+        "danger": discord.ButtonStyle.danger,
+    }
+    for spec in discord_airdrop_actions.button_specs(record):
+        view.add_item(
+            discord.ui.Button(
+                label=spec["label"],
+                style=styles[spec["style"]],
+                custom_id=spec["custom_id"],
+            )
+        )
+    return view
+
+
+async def _send_airdrop_action_notices(channel, discord) -> None:
+    batch = await asyncio.to_thread(airdrop_approval.poll_notice_batch)
+    for message in batch["messages"]:
+        await channel.send(
+            message,
+            suppress_embeds=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    for record in batch["records"]:
+        await channel.send(
+            airdrop_approval.render_request(record),
+            suppress_embeds=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+            view=_airdrop_action_view(discord, record),
+        )
+
+
+async def notification_worker(channel, control: Control, stop: asyncio.Event, discord=None) -> None:
     while not stop.is_set():
         for notice in await asyncio.to_thread(control.system_notices): await channel.send(notice, suppress_embeds=True)
         for item in await asyncio.to_thread(control.notifications): await channel.send(candidate_message(item), suppress_embeds=True)
         for notice in await asyncio.to_thread(control.interaction_notices): await channel.send(notice, suppress_embeds=True)
+        if discord is not None:
+            await _send_airdrop_action_notices(channel, discord)
         try: await asyncio.wait_for(stop.wait(), timeout=15)
         except TimeoutError: pass
 async def digest_worker(channel, control: Control, stop: asyncio.Event) -> None:
@@ -670,12 +722,60 @@ def main() -> None:
         channel = bot.get_channel(int(channel_id))
         if channel is None: raise RuntimeError("configured Discord channel is unavailable")
         if getattr(bot, "resident_workers_started", False): return
-        bot.resident_workers_started = True; await asyncio.to_thread(control.ensure_baseline); LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal"); asyncio.create_task(notification_worker(channel, control, stop)); asyncio.create_task(digest_worker(channel, control, stop))
+        bot.resident_workers_started = True; await asyncio.to_thread(control.ensure_baseline); LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal"); asyncio.create_task(notification_worker(channel, control, stop, discord)); asyncio.create_task(digest_worker(channel, control, stop))
     @bot.event
     async def on_message(message):
         if message.author.bot or str(message.channel.id) != channel_id: return
         result = await asyncio.to_thread(control.command, str(message.author.id), message.content, str(message.channel.id))
         for chunk in discord_message_chunks(result["message"]): await message.channel.send(chunk, suppress_embeds=True)
+    @bot.event
+    async def on_interaction(interaction):
+        data = interaction.data if isinstance(interaction.data, dict) else {}
+        component_custom_id = data.get("custom_id")
+        if not isinstance(component_custom_id, str) or not component_custom_id.startswith(discord_airdrop_actions.CUSTOM_PREFIX + ":"):
+            return
+        interaction_channel_id = str(getattr(interaction, "channel_id", "") or "")
+        try:
+            result = await asyncio.to_thread(
+                control.airdrop_component,
+                str(interaction.user.id),
+                component_custom_id,
+                interaction_channel_id,
+            )
+        except discord_airdrop_actions.DiscordAirdropActionError as error:
+            code = str(error)
+            message = "Control access denied." if code in {
+                "airdrop_interaction_wrong_channel",
+                "airdrop_interaction_unauthorized",
+            } else f"Action Inbox: {code}. No external action was executed."
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+            return
+
+        if result["edit_original"]:
+            await interaction.response.edit_message(
+                content=airdrop_approval.render_request(result["record"]),
+                view=None,
+            )
+            await interaction.followup.send(result["message"], ephemeral=True)
+            return
+
+        chunks = discord_message_chunks(result["message"])
+        await interaction.response.send_message(
+            chunks[0],
+            ephemeral=True,
+            suppress_embeds=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        for chunk in chunks[1:]:
+            await interaction.followup.send(
+                chunk,
+                ephemeral=True,
+                suppress_embeds=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
     bot.run(token)
 
 
