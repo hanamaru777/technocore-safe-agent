@@ -688,12 +688,28 @@ async def _send_airdrop_action_notices(channel, discord) -> None:
             allowed_mentions=discord.AllowedMentions.none(),
         )
     for record in batch["records"]:
-        await channel.send(
-            airdrop_approval.render_request(record),
-            suppress_embeds=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-            view=_airdrop_action_view(discord, record),
-        )
+        try:
+            await channel.send(
+                airdrop_approval.render_request(record),
+                suppress_embeds=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+                view=_airdrop_action_view(discord, record),
+            )
+        except Exception:
+            LOG.exception(
+                "Action Inbox Discord delivery failed; request remains pending/unacknowledged"
+            )
+            continue
+        try:
+            await asyncio.to_thread(
+                airdrop_approval.mark_notice_delivered,
+                record["request_id"],
+                record["approval_digest"],
+            )
+        except airdrop_approval.ApprovalInboxError:
+            LOG.exception(
+                "Action Inbox delivery receipt could not be persisted; safe duplicate retry may occur"
+            )
 
 
 async def notification_worker(channel, control: Control, stop: asyncio.Event, discord=None) -> None:
