@@ -148,6 +148,51 @@ def test_note_size_and_read_errors_fail_closed():
         tclk_note_review.resolve_offer(_offer(), reader=failed, now_ms=NOW)
 
 
+def test_missing_full_spec_is_distinct_from_transport_failure():
+    with pytest.raises(tclk_note_review.ResolutionError, match="full_spec_not_found"):
+        tclk_note_review.resolve_offer(
+            _offer(),
+            reader=lambda _namespace, _key: None,
+            now_ms=NOW,
+        )
+
+    def failed(_namespace: str, _key: str) -> str:
+        raise TimeoutError("private transport detail")
+
+    with pytest.raises(tclk_note_review.ResolutionError, match="full_spec_read_failed"):
+        tclk_note_review.resolve_offer(
+            _offer(),
+            reader=failed,
+            now_ms=NOW,
+        )
+
+
+def test_missing_material_is_distinct_from_material_transport_failure():
+    spec = "use /kv/tclk-mat-en/mat-later"
+
+    def missing_material(namespace: str, _key: str) -> str | None:
+        return spec if namespace == "tclk-job-en" else None
+
+    with pytest.raises(tclk_note_review.ResolutionError, match="material_not_found"):
+        tclk_note_review.resolve_offer(
+            _offer(),
+            reader=missing_material,
+            now_ms=NOW,
+        )
+
+    def failed_material(namespace: str, _key: str) -> str:
+        if namespace == "tclk-job-en":
+            return spec
+        raise TimeoutError("private transport detail")
+
+    with pytest.raises(tclk_note_review.ResolutionError, match="material_read_failed"):
+        tclk_note_review.resolve_offer(
+            _offer(),
+            reader=failed_material,
+            now_ms=NOW,
+        )
+
+
 def test_external_url_text_is_flagged_but_never_followed():
     calls = []
 
