@@ -52,7 +52,7 @@ def test_issue367_probe_uses_instance_principal_and_only_plugin_list() -> None:
 
     assert "oci instance-agent plugin list" in text
     assert "--auth instance_principal" in text
-    assert "--name "$PLUGIN_NAME"" in text
+    assert '--name "$PLUGIN_NAME"' in text
     assert "Compute Instance Run Command" in text
     assert "oci instance-agent plugin get" not in text
     assert "oci instance-agent command" not in text
