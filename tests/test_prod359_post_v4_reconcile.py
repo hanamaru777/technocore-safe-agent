@@ -101,7 +101,7 @@ def test_post_v4_reconcile_checks_plugin_surface_safely() -> None:
     ):
         assert token in text
 
-    assert "doc.get("agentConfig")" in text
+    assert 'doc.get("agentConfig")' in text
     assert "pluginsConfig" in text
     assert "Compute Instance Run Command" in text
 
