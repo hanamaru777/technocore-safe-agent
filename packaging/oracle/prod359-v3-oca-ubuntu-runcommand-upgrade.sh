@@ -238,7 +238,132 @@ assert_continuity_state() {
   local snapshot health events messages observer_status resident_status resident_age refresh_age
 
   snapshot=$(observer_snapshot) || stop "$label:observer_unreadable"
-  IFS=
+  IFS=$'\t' read -r health events messages observer_status resident_status resident_age refresh_age <<< "$snapshot"
+
+  [[ $events == "$EXPECTED_CORE_EVENTS" && $messages == "$EXPECTED_CORE_MESSAGES" ]] \
+    || stop "$label:protected_core_changed:$events/$messages"
+  [[ $health == ok || $health == degraded ]] \
+    || stop "$label:unexpected_observer_health:$health"
+  [[ $observer_status == ok || $observer_status == degraded ]] \
+    || stop "$label:unexpected_observer_heartbeat:$observer_status"
+  [[ $resident_status == ok ]] || stop "$label:resident_heartbeat_not_ok:$resident_status"
+  [[ $resident_age =~ ^[0-9]+$ && $resident_age -le 300 ]] \
+    || stop "$label:resident_heartbeat_stale:$resident_age"
+  [[ $refresh_age =~ ^[0-9]+$ && $refresh_age -le 300 ]] \
+    || stop "$label:resident_refresh_stale:$refresh_age"
+
+  OBSERVER_HEALTH=$health
+  OBSERVER_HEARTBEAT_STATUS=$observer_status
+  echo "PROD359V3_CONTINUITY=$label observer=$health observer_hb=$observer_status resident_hb=ok core=$events/$messages resident_age=$resident_age refresh_age=$refresh_age"
+}
+
+direct_read_gate() {
+  local label=$1
+  local result
+
+  [[ -x "$APP/.venv/bin/python" ]] || stop "$label:venv_python_missing"
+
+  result=$(sudo -u technocore env PYTHONPATH="$APP/src" "$APP/.venv/bin/python" - <<'PY'
+import asyncio
+import time
+import httpx
+from flop_agent import core
+
+async def main():
+    timeout=httpx.Timeout(15.0, connect=3.0, pool=3.0)
+    tests=(
+        ("rooms", f"{core.BASE_URL}/rooms", None),
+        ("events", f"{core.BASE_URL}/r/events", {"format":"json","since":0,"wait":0,"limit":1}),
+        ("lobby", f"{core.BASE_URL}/r/lobby", {"format":"json","since":0,"wait":0,"limit":1}),
+    )
+    out=[]
+    async with httpx.AsyncClient() as client:
+        for name,url,params in tests:
+            started=time.monotonic()
+            try:
+                response=await client.get(url, params=params, timeout=timeout)
+            except Exception as exc:
+                print(f"{name}=ERROR:{type(exc).__name__}")
+                raise SystemExit(2)
+            elapsed=time.monotonic()-started
+            out.append(f"{name}={response.status_code}/{elapsed:.3f}s")
+            if response.status_code != 200:
+                print(" ".join(out))
+                raise SystemExit(3)
+    print(" ".join(out))
+
+asyncio.run(main())
+PY
+) || stop "$label:same_user_direct_read_failed"
+
+  echo "PROD359V3_DIRECT_READ=$label $result"
+}
+
+capture_activity_snapshot() {
+  local pid=$1
+  python3 - "$pid" "$CAP_WAL" "$CAP_SHM" <<'PY'
+import pathlib, sys
+pid=int(sys.argv[1])
+proc=pathlib.Path(f"/proc/{pid}/stat")
+if not proc.exists():
+    raise SystemExit(2)
+raw=proc.read_text("utf-8")
+right=raw.rfind(")")
+if right < 0:
+    raise SystemExit(3)
+fields=raw[right+2:].split()
+if len(fields) < 13:
+    raise SystemExit(4)
+utime=int(fields[11])
+stime=int(fields[12])
+
+def sig(path):
+    p=pathlib.Path(path)
+    if not p.exists():
+        return (-1,-1)
+    st=p.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+wal=sig(sys.argv[2])
+shm=sig(sys.argv[3])
+print("\t".join(map(str,(utime+stime,wal[0],wal[1],shm[0],shm[1]))))
+PY
+}
+
+capture_liveness_gate() {
+  local label=$1
+  local pid_before restarts_before before pid_after restarts_after after
+  local ticks1 wal_mtime1 wal_size1 shm_mtime1 shm_size1
+  local ticks2 wal_mtime2 wal_size2 shm_mtime2 shm_size2
+
+  systemctl is-active --quiet "$CAP" || stop "$label:capture_not_active"
+  [[ "$(svc_value "$CAP" Result)" == success ]] || stop "$label:capture_result_not_success"
+
+  pid_before=$(svc_value "$CAP" MainPID)
+  restarts_before=$(svc_value "$CAP" NRestarts)
+  [[ $pid_before == "$CAP_PID" && $restarts_before == "$CAP_RESTARTS" ]] \
+    || stop "$label:capture_baseline_drift:$pid_before/$restarts_before"
+
+  before=$(capture_activity_snapshot "$pid_before") || stop "$label:capture_activity_unreadable_before"
+  IFS=$'\t' read -r ticks1 wal_mtime1 wal_size1 shm_mtime1 shm_size1 <<< "$before"
+
+  sleep 10
+
+  pid_after=$(svc_value "$CAP" MainPID)
+  restarts_after=$(svc_value "$CAP" NRestarts)
+  [[ $pid_after == "$pid_before" && $restarts_after == "$restarts_before" ]] \
+    || stop "$label:capture_changed_during_liveness:$pid_after/$restarts_after"
+
+  after=$(capture_activity_snapshot "$pid_after") || stop "$label:capture_activity_unreadable_after"
+  IFS=$'\t' read -r ticks2 wal_mtime2 wal_size2 shm_mtime2 shm_size2 <<< "$after"
+
+  if [[ $ticks2 == "$ticks1" && $wal_mtime2 == "$wal_mtime1" && $wal_size2 == "$wal_size1" \
+        && $shm_mtime2 == "$shm_mtime1" && $shm_size2 == "$shm_size1" ]]; then
+    stop "$label:capture_no_activity"
+  fi
+
+  echo "PROD359V3_CAPTURE=$label active=yes pid=$pid_after nrestarts=$restarts_after activity_advanced=yes"
+}
 
 root_imds_code() {
   curl -sS --connect-timeout 3 --max-time 5 \
@@ -415,704 +540,6 @@ echo "OCA_HOLD_PRESERVED=$SNAP_HOLD"
 echo "OBSERVER_HEALTH_FINAL=$OBSERVER_HEALTH"
 echo "EVIDENCE_BASED_CONTINUITY_GATE=PASS"
 echo "ACTIVE_CAPTURE_SQLITE_QUERY=NO"
-echo "OCA_SERVICE=active"
-echo "OCA_UPDATER=active"
-echo "OCARUN_ACCOUNT_PRESENT=$OCARUN_PRESENT"
-echo "RUN_COMMAND_LOCAL_ARTIFACT=$RUNCOMMAND_ARTIFACT"
-echo "ROOT_IMDS_HTTP=200"
-echo "TECHNOCORE_IMDS_BLOCKED=YES"
-echo "PROTECTED_CORE=$EXPECTED_CORE_EVENTS/$EXPECTED_CORE_MESSAGES"
-echo "RESIDENT_PRESERVED=$RES_PID/NRestarts=$RES_RESTARTS"
-echo "CAPTURE_PRESERVED=$CAP_PID/NRestarts=$CAP_RESTARTS"
-echo "SIGNER_PRESERVED=$SIG_PID/NRestarts=$SIG_RESTARTS"
-echo "DISCORD_PRESERVED=$DIS_PID/NRestarts=$DIS_RESTARTS"
-echo "APP_RESTART=NO"
-echo "FIREWALL_CHANGE=NO"
-echo "RUN_COMMAND_CREATED=NO"
-echo "OCI_AGENT_CONFIG_CHANGE=NO"
-echo "TECHNOCORE_WRITE=NO"
-echo "FLOP_EXTERNAL_WRITE=NO"
-echo "X_WRITE=NO"
-echo "DO_NOT_RERUN=YES"
-\t' read -r health events messages observer_status resident_status resident_age refresh_age <<< "$snapshot"
-
-  [[ $events == "$EXPECTED_CORE_EVENTS" && $messages == "$EXPECTED_CORE_MESSAGES" ]] \
-    || stop "$label:protected_core_changed:$events/$messages"
-
-  [[ $health == ok || $health == degraded ]] \
-    || stop "$label:unexpected_observer_health:$health"
-
-  [[ $observer_status == ok || $observer_status == degraded ]] \
-    || stop "$label:unexpected_observer_heartbeat:$observer_status"
-
-  [[ $resident_status == ok ]] || stop "$label:resident_heartbeat_not_ok:$resident_status"
-  [[ $resident_age =~ ^[0-9]+$ && $resident_age -le 300 ]] \
-    || stop "$label:resident_heartbeat_stale:$resident_age"
-  [[ $refresh_age =~ ^[0-9]+$ && $refresh_age -le 300 ]] \
-    || stop "$label:resident_refresh_stale:$refresh_age"
-
-  OBSERVER_HEALTH=$health
-  OBSERVER_HEARTBEAT_STATUS=$observer_status
-  echo "PROD359V3_CONTINUITY=$label observer=$health observer_hb=$observer_status resident_hb=ok core=$events/$messages resident_age=$resident_age refresh_age=$refresh_age"
-}
-
-direct_read_gate() {
-  local label=$1
-  local result
-
-  [[ -x "$APP/.venv/bin/python" ]] || stop "$label:venv_python_missing"
-
-  result=$(sudo -u technocore env PYTHONPATH="$APP/src" "$APP/.venv/bin/python" - <<'PY'
-import asyncio
-import time
-import httpx
-from flop_agent import core
-
-async def main():
-    timeout=httpx.Timeout(15.0, connect=3.0, pool=3.0)
-    tests=(
-        ("rooms", f"{core.BASE_URL}/rooms", None),
-        ("events", f"{core.BASE_URL}/r/events", {"format":"json","since":0,"wait":0,"limit":1}),
-        ("lobby", f"{core.BASE_URL}/r/lobby", {"format":"json","since":0,"wait":0,"limit":1}),
-    )
-    out=[]
-    async with httpx.AsyncClient() as client:
-        for name,url,params in tests:
-            started=time.monotonic()
-            try:
-                response=await client.get(url, params=params, timeout=timeout)
-            except Exception as exc:
-                print(f"{name}=ERROR:{type(exc).__name__}")
-                raise SystemExit(2)
-            elapsed=time.monotonic()-started
-            out.append(f"{name}={response.status_code}/{elapsed:.3f}s")
-            if response.status_code != 200:
-                print(" ".join(out))
-                raise SystemExit(3)
-    print(" ".join(out))
-
-asyncio.run(main())
-PY
-) || stop "$label:same_user_direct_read_failed"
-
-  echo "PROD359V3_DIRECT_READ=$label $result"
-}
-
-capture_activity_snapshot() {
-  local pid=$1
-  python3 - "$pid" "$CAP_WAL" "$CAP_SHM" <<'PY'
-import os, pathlib, sys
-pid=int(sys.argv[1])
-proc=pathlib.Path(f"/proc/{pid}/stat")
-if not proc.exists():
-    raise SystemExit(2)
-raw=proc.read_text("utf-8")
-right=raw.rfind(")")
-if right < 0:
-    raise SystemExit(3)
-fields=raw[right+2:].split()
-if len(fields) < 13:
-    raise SystemExit(4)
-utime=int(fields[11])
-stime=int(fields[12])
-
-def sig(path):
-    p=pathlib.Path(path)
-    if not p.exists():
-        return (-1,-1)
-    st=p.stat()
-    return (st.st_mtime_ns, st.st_size)
-
-wal=sig(sys.argv[2])
-shm=sig(sys.argv[3])
-print("\t".join(map(str,(utime+stime,wal[0],wal[1],shm[0],shm[1]))))
-PY
-}
-
-capture_liveness_gate() {
-  local label=$1
-  local pid_before restarts_before before pid_after restarts_after after
-  local ticks1 wal_mtime1 wal_size1 shm_mtime1 shm_size1
-  local ticks2 wal_mtime2 wal_size2 shm_mtime2 shm_size2
-
-  systemctl is-active --quiet "$CAP" || stop "$label:capture_not_active"
-  [[ "$(svc_value "$CAP" Result)" == success ]] || stop "$label:capture_result_not_success"
-
-  pid_before=$(svc_value "$CAP" MainPID)
-  restarts_before=$(svc_value "$CAP" NRestarts)
-  [[ $pid_before == "$CAP_PID" && $restarts_before == "$CAP_RESTARTS" ]] \
-    || stop "$label:capture_baseline_drift:$pid_before/$restarts_before"
-
-  before=$(capture_activity_snapshot "$pid_before") || stop "$label:capture_activity_unreadable_before"
-  IFS=
-
-root_imds_code() {
-  curl -sS --connect-timeout 3 --max-time 5 \
-    -H 'Authorization: Bearer Oracle' \
-    -o /dev/null -w '%{http_code}' "$IMDS_URL" 2>/dev/null || true
-}
-
-technocore_imds_code() {
-  sudo -u technocore curl -sS --connect-timeout 2 --max-time 3 \
-    -H 'Authorization: Bearer Oracle' \
-    -o /dev/null -w '%{http_code}' "$IMDS_URL" 2>/dev/null || true
-}
-
-metadata_gate() {
-  iptables -C OUTPUT -p tcp -d "$META_IP" --dport 80 -j "$META_CHAIN" >/dev/null 2>&1 \
-    || stop metadata_output_jump_missing
-  iptables -C "$META_CHAIN" -m owner --uid-owner 0 -j RETURN >/dev/null 2>&1 \
-    || stop metadata_root_return_missing
-  signer_uid=$(id -u technocore-signer 2>/dev/null) || stop signer_account_missing
-  iptables -C "$META_CHAIN" -m owner --uid-owner "$signer_uid" -j RETURN >/dev/null 2>&1 \
-    || stop metadata_signer_return_missing
-  iptables -C "$META_CHAIN" -j REJECT >/dev/null 2>&1 \
-    || stop metadata_final_reject_missing
-}
-
-app_gate() {
-  local label=$1
-  local tc_code
-  for svc in "$META" "$RES" "$CAP" "$SIG" "$DIS"; do
-    systemctl is-active --quiet "$svc" || stop "$label:required_service_not_active:$svc"
-  done
-
-  wait_observer_ready "$label"
-
-  [[ "$(root_imds_code)" == 200 ]] || stop "$label:root_imds_not_200"
-  tc_code=$(technocore_imds_code)
-  [[ $tc_code != 200 ]] || stop "$label:technocore_imds_unexpectedly_allowed"
-
-  metadata_gate
-  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] \
-    || stop "$label:ntp_not_synchronized"
-
-  echo "PROD359V3_GATE=$label observer_ready=yes core=$EXPECTED_CORE_EVENTS/$EXPECTED_CORE_MESSAGES root_imds=200 technocore_imds_blocked=yes"
-}
-
-wait_oca() {
-  local attempt
-  for attempt in {1..60}; do
-    if systemctl is-active --quiet "$OCA" && systemctl is-active --quiet "$OCA_UPDATER"; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
-rollback() {
-  local rc=$?
-  local revert_rc
-  trap - ERR
-  set +e
-
-  if [[ $DONE -eq 0 && $REFRESH_COMPLETED -eq 1 ]]; then
-    snap revert oracle-cloud-agent --revision="$PRE_REVISION" >/tmp/prod359-v3-snap-revert.log 2>&1
-    revert_rc=$?
-    wait_oca
-    read_snap_list_state
-    echo "PROD359V3_ROLLBACK_RC=$revert_rc" >&2
-    echo "PROD359V3_ROLLBACK_VERSION=$SNAP_VERSION" >&2
-    echo "PROD359V3_ROLLBACK_REVISION=$SNAP_REVISION" >&2
-  fi
-
-  rm -f /tmp/prod359-v3-snap-revert.log
-  exit "$rc"
-}
-trap rollback EXIT
-
-cd "$APP"
-[[ "$(git_owner symbolic-ref --short HEAD)" == main ]] || stop branch_not_main
-[[ "$(git_owner rev-parse HEAD)" == "$EXPECTED_REPO" ]] || stop "unexpected_production_head:$(git_owner rev-parse HEAD)"
-[[ "$(git_owner rev-parse refs/remotes/origin/main)" == "$EXPECTED_ORIGIN_MAIN" ]] || stop "unexpected_local_origin_main:$(git_owner rev-parse refs/remotes/origin/main)"
-[[ -z "$(git_owner status --porcelain=v1 --untracked-files=all)" ]] || stop dirty_worktree
-
-RES_PID=$(svc_value "$RES" MainPID)
-RES_RESTARTS=$(svc_value "$RES" NRestarts)
-CAP_PID=$(svc_value "$CAP" MainPID)
-CAP_RESTARTS=$(svc_value "$CAP" NRestarts)
-SIG_PID=$(svc_value "$SIG" MainPID)
-SIG_RESTARTS=$(svc_value "$SIG" NRestarts)
-DIS_PID=$(svc_value "$DIS" MainPID)
-DIS_RESTARTS=$(svc_value "$DIS" NRestarts)
-
-[[ $RES_PID == "$EXPECTED_RES_PID" && $RES_RESTARTS == "$EXPECTED_RES_RESTARTS" ]] || stop "resident_baseline_changed:$RES_PID/$RES_RESTARTS"
-[[ $CAP_PID == "$EXPECTED_CAP_PID" && $CAP_RESTARTS == "$EXPECTED_CAP_RESTARTS" ]] || stop "capture_baseline_changed:$CAP_PID/$CAP_RESTARTS"
-[[ $SIG_PID == "$EXPECTED_SIG_PID" && $SIG_RESTARTS == "$EXPECTED_SIG_RESTARTS" ]] || stop "signer_baseline_changed:$SIG_PID/$SIG_RESTARTS"
-[[ $DIS_PID == "$EXPECTED_DIS_PID" && $DIS_RESTARTS == "$EXPECTED_DIS_RESTARTS" ]] || stop "discord_baseline_changed:$DIS_PID/$DIS_RESTARTS"
-
-assert_oca_services_ready
-
-assert_pre_snap_state
-
-app_gate pre
-assert_app_processes_preserved
-assert_oca_services_ready
-assert_pre_snap_state
-
-echo "PROD359V3_PREFLIGHT=PASS version=$PRE_ACTUAL_VERSION revision=$PRE_ACTUAL_REVISION tracking=$TRACKING hold=$HOLD stable=$REMOTE_STABLE/$REMOTE_STABLE_REVISION"
-
-if ! snap refresh oracle-cloud-agent --revision="$TARGET_REVISION"; then
-  read_snap_list_state
-  CURRENT_AFTER_FAILED_REFRESH=$SNAP_VERSION
-  CURRENT_REVISION_AFTER_FAILED_REFRESH=$SNAP_REVISION
-  if [[ $CURRENT_AFTER_FAILED_REFRESH != "$PRE_VERSION" || $CURRENT_REVISION_AFTER_FAILED_REFRESH != "$PRE_REVISION" ]]; then
-    REFRESH_COMPLETED=1
-  fi
-  stop "snap_refresh_failed:current=$CURRENT_AFTER_FAILED_REFRESH/$CURRENT_REVISION_AFTER_FAILED_REFRESH"
-fi
-REFRESH_COMPLETED=1
-
-wait_oca || stop oca_services_not_active_after_refresh
-sleep 5
-
-read_snap_list_state
-POST_VERSION=$SNAP_VERSION
-POST_REVISION=$SNAP_REVISION
-[[ $POST_VERSION == "$TARGET_VERSION" ]] || stop "post_version_mismatch:$POST_VERSION"
-[[ $POST_REVISION == "$TARGET_REVISION" ]] || stop "post_revision_mismatch:$POST_REVISION"
-[[ $SNAP_NOTES == *held* ]] || stop post_snap_hold_note_missing
-
-read_snap_info_state
-[[ $SNAP_TRACKING == "$EXPECTED_TRACKING" ]] || stop "post_tracking_changed:expected=$EXPECTED_TRACKING:actual=$SNAP_TRACKING"
-[[ $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_hold_changed:expected=$EXPECTED_HOLD:actual=$SNAP_HOLD"
-
-assert_oca_services_ready
-assert_app_processes_preserved
-
-app_gate post
-assert_app_processes_preserved
-assert_oca_services_ready
-read_snap_list_state
-[[ $SNAP_VERSION == "$TARGET_VERSION" && $SNAP_REVISION == "$TARGET_REVISION" ]] || stop "post_wait_snap_changed:$SNAP_VERSION/$SNAP_REVISION"
-read_snap_info_state
-[[ $SNAP_TRACKING == "$EXPECTED_TRACKING" && $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_wait_snap_metadata_changed:$SNAP_TRACKING/$SNAP_HOLD"
-
-OCARUN_PRESENT=NO
-id -u ocarun >/dev/null 2>&1 && OCARUN_PRESENT=YES
-
-RUNCOMMAND_ARTIFACT=NO
-for base in /snap/oracle-cloud-agent/current /var/snap/oracle-cloud-agent/common; do
-  if [[ -e $base ]]; then
-    artifact=$(find "$base" -maxdepth 8 \( -iname '*runcommand*' -o -iname '*run-command*' \) -print -quit 2>/dev/null || true)
-    if [[ -n $artifact ]]; then
-      RUNCOMMAND_ARTIFACT=YES
-      break
-    fi
-  fi
-done
-
-DONE=1
-trap - EXIT
-
-echo "PROD359V3=PASS"
-echo "REPO_HEAD=$(git_owner rev-parse HEAD)"
-echo "OCA_PRE_VERSION=$PRE_ACTUAL_VERSION"
-echo "OCA_PRE_REVISION=$PRE_ACTUAL_REVISION"
-echo "OCA_POST_VERSION=$POST_VERSION"
-echo "OCA_POST_REVISION=$POST_REVISION"
-echo "OCA_TRACKING_BEFORE=$TRACKING"
-echo "OCA_TRACKING_AFTER=$SNAP_TRACKING"
-echo "OCA_HOLD_PRESERVED=$SNAP_HOLD"
-echo "OCA_SERVICE=active"
-echo "OCA_UPDATER=active"
-echo "OCARUN_ACCOUNT_PRESENT=$OCARUN_PRESENT"
-echo "RUN_COMMAND_LOCAL_ARTIFACT=$RUNCOMMAND_ARTIFACT"
-echo "ROOT_IMDS_HTTP=200"
-echo "TECHNOCORE_IMDS_BLOCKED=YES"
-echo "PROTECTED_CORE=$EXPECTED_CORE_EVENTS/$EXPECTED_CORE_MESSAGES"
-echo "RESIDENT_PRESERVED=$RES_PID/NRestarts=$RES_RESTARTS"
-echo "CAPTURE_PRESERVED=$CAP_PID/NRestarts=$CAP_RESTARTS"
-echo "SIGNER_PRESERVED=$SIG_PID/NRestarts=$SIG_RESTARTS"
-echo "DISCORD_PRESERVED=$DIS_PID/NRestarts=$DIS_RESTARTS"
-echo "APP_RESTART=NO"
-echo "FIREWALL_CHANGE=NO"
-echo "RUN_COMMAND_CREATED=NO"
-echo "OCI_AGENT_CONFIG_CHANGE=NO"
-echo "TECHNOCORE_WRITE=NO"
-echo "FLOP_EXTERNAL_WRITE=NO"
-echo "X_WRITE=NO"
-echo "DO_NOT_RERUN=YES"
-\t' read -r ticks1 wal_mtime1 wal_size1 shm_mtime1 shm_size1 <<< "$before"
-
-  sleep 10
-
-  pid_after=$(svc_value "$CAP" MainPID)
-  restarts_after=$(svc_value "$CAP" NRestarts)
-  [[ $pid_after == "$pid_before" && $restarts_after == "$restarts_before" ]] \
-    || stop "$label:capture_changed_during_liveness:$pid_after/$restarts_after"
-
-  after=$(capture_activity_snapshot "$pid_after") || stop "$label:capture_activity_unreadable_after"
-  IFS=
-
-root_imds_code() {
-  curl -sS --connect-timeout 3 --max-time 5 \
-    -H 'Authorization: Bearer Oracle' \
-    -o /dev/null -w '%{http_code}' "$IMDS_URL" 2>/dev/null || true
-}
-
-technocore_imds_code() {
-  sudo -u technocore curl -sS --connect-timeout 2 --max-time 3 \
-    -H 'Authorization: Bearer Oracle' \
-    -o /dev/null -w '%{http_code}' "$IMDS_URL" 2>/dev/null || true
-}
-
-metadata_gate() {
-  iptables -C OUTPUT -p tcp -d "$META_IP" --dport 80 -j "$META_CHAIN" >/dev/null 2>&1 \
-    || stop metadata_output_jump_missing
-  iptables -C "$META_CHAIN" -m owner --uid-owner 0 -j RETURN >/dev/null 2>&1 \
-    || stop metadata_root_return_missing
-  signer_uid=$(id -u technocore-signer 2>/dev/null) || stop signer_account_missing
-  iptables -C "$META_CHAIN" -m owner --uid-owner "$signer_uid" -j RETURN >/dev/null 2>&1 \
-    || stop metadata_signer_return_missing
-  iptables -C "$META_CHAIN" -j REJECT >/dev/null 2>&1 \
-    || stop metadata_final_reject_missing
-}
-
-app_gate() {
-  local label=$1
-  local tc_code
-  for svc in "$META" "$RES" "$CAP" "$SIG" "$DIS"; do
-    systemctl is-active --quiet "$svc" || stop "$label:required_service_not_active:$svc"
-  done
-
-  wait_observer_ready "$label"
-
-  [[ "$(root_imds_code)" == 200 ]] || stop "$label:root_imds_not_200"
-  tc_code=$(technocore_imds_code)
-  [[ $tc_code != 200 ]] || stop "$label:technocore_imds_unexpectedly_allowed"
-
-  metadata_gate
-  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] \
-    || stop "$label:ntp_not_synchronized"
-
-  echo "PROD359V3_GATE=$label observer_ready=yes core=$EXPECTED_CORE_EVENTS/$EXPECTED_CORE_MESSAGES root_imds=200 technocore_imds_blocked=yes"
-}
-
-wait_oca() {
-  local attempt
-  for attempt in {1..60}; do
-    if systemctl is-active --quiet "$OCA" && systemctl is-active --quiet "$OCA_UPDATER"; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
-rollback() {
-  local rc=$?
-  local revert_rc
-  trap - ERR
-  set +e
-
-  if [[ $DONE -eq 0 && $REFRESH_COMPLETED -eq 1 ]]; then
-    snap revert oracle-cloud-agent --revision="$PRE_REVISION" >/tmp/prod359-v3-snap-revert.log 2>&1
-    revert_rc=$?
-    wait_oca
-    read_snap_list_state
-    echo "PROD359V3_ROLLBACK_RC=$revert_rc" >&2
-    echo "PROD359V3_ROLLBACK_VERSION=$SNAP_VERSION" >&2
-    echo "PROD359V3_ROLLBACK_REVISION=$SNAP_REVISION" >&2
-  fi
-
-  rm -f /tmp/prod359-v3-snap-revert.log
-  exit "$rc"
-}
-trap rollback EXIT
-
-cd "$APP"
-[[ "$(git_owner symbolic-ref --short HEAD)" == main ]] || stop branch_not_main
-[[ "$(git_owner rev-parse HEAD)" == "$EXPECTED_REPO" ]] || stop "unexpected_production_head:$(git_owner rev-parse HEAD)"
-[[ "$(git_owner rev-parse refs/remotes/origin/main)" == "$EXPECTED_ORIGIN_MAIN" ]] || stop "unexpected_local_origin_main:$(git_owner rev-parse refs/remotes/origin/main)"
-[[ -z "$(git_owner status --porcelain=v1 --untracked-files=all)" ]] || stop dirty_worktree
-
-RES_PID=$(svc_value "$RES" MainPID)
-RES_RESTARTS=$(svc_value "$RES" NRestarts)
-CAP_PID=$(svc_value "$CAP" MainPID)
-CAP_RESTARTS=$(svc_value "$CAP" NRestarts)
-SIG_PID=$(svc_value "$SIG" MainPID)
-SIG_RESTARTS=$(svc_value "$SIG" NRestarts)
-DIS_PID=$(svc_value "$DIS" MainPID)
-DIS_RESTARTS=$(svc_value "$DIS" NRestarts)
-
-[[ $RES_PID == "$EXPECTED_RES_PID" && $RES_RESTARTS == "$EXPECTED_RES_RESTARTS" ]] || stop "resident_baseline_changed:$RES_PID/$RES_RESTARTS"
-[[ $CAP_PID == "$EXPECTED_CAP_PID" && $CAP_RESTARTS == "$EXPECTED_CAP_RESTARTS" ]] || stop "capture_baseline_changed:$CAP_PID/$CAP_RESTARTS"
-[[ $SIG_PID == "$EXPECTED_SIG_PID" && $SIG_RESTARTS == "$EXPECTED_SIG_RESTARTS" ]] || stop "signer_baseline_changed:$SIG_PID/$SIG_RESTARTS"
-[[ $DIS_PID == "$EXPECTED_DIS_PID" && $DIS_RESTARTS == "$EXPECTED_DIS_RESTARTS" ]] || stop "discord_baseline_changed:$DIS_PID/$DIS_RESTARTS"
-
-assert_oca_services_ready
-
-assert_pre_snap_state
-
-app_gate pre
-assert_app_processes_preserved
-assert_oca_services_ready
-assert_pre_snap_state
-
-echo "PROD359V3_PREFLIGHT=PASS version=$PRE_ACTUAL_VERSION revision=$PRE_ACTUAL_REVISION tracking=$TRACKING hold=$HOLD stable=$REMOTE_STABLE/$REMOTE_STABLE_REVISION"
-
-if ! snap refresh oracle-cloud-agent --revision="$TARGET_REVISION"; then
-  read_snap_list_state
-  CURRENT_AFTER_FAILED_REFRESH=$SNAP_VERSION
-  CURRENT_REVISION_AFTER_FAILED_REFRESH=$SNAP_REVISION
-  if [[ $CURRENT_AFTER_FAILED_REFRESH != "$PRE_VERSION" || $CURRENT_REVISION_AFTER_FAILED_REFRESH != "$PRE_REVISION" ]]; then
-    REFRESH_COMPLETED=1
-  fi
-  stop "snap_refresh_failed:current=$CURRENT_AFTER_FAILED_REFRESH/$CURRENT_REVISION_AFTER_FAILED_REFRESH"
-fi
-REFRESH_COMPLETED=1
-
-wait_oca || stop oca_services_not_active_after_refresh
-sleep 5
-
-read_snap_list_state
-POST_VERSION=$SNAP_VERSION
-POST_REVISION=$SNAP_REVISION
-[[ $POST_VERSION == "$TARGET_VERSION" ]] || stop "post_version_mismatch:$POST_VERSION"
-[[ $POST_REVISION == "$TARGET_REVISION" ]] || stop "post_revision_mismatch:$POST_REVISION"
-[[ $SNAP_NOTES == *held* ]] || stop post_snap_hold_note_missing
-
-read_snap_info_state
-[[ $SNAP_TRACKING == "$EXPECTED_TRACKING" ]] || stop "post_tracking_changed:expected=$EXPECTED_TRACKING:actual=$SNAP_TRACKING"
-[[ $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_hold_changed:expected=$EXPECTED_HOLD:actual=$SNAP_HOLD"
-
-assert_oca_services_ready
-assert_app_processes_preserved
-
-app_gate post
-assert_app_processes_preserved
-assert_oca_services_ready
-read_snap_list_state
-[[ $SNAP_VERSION == "$TARGET_VERSION" && $SNAP_REVISION == "$TARGET_REVISION" ]] || stop "post_wait_snap_changed:$SNAP_VERSION/$SNAP_REVISION"
-read_snap_info_state
-[[ $SNAP_TRACKING == "$EXPECTED_TRACKING" && $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_wait_snap_metadata_changed:$SNAP_TRACKING/$SNAP_HOLD"
-
-OCARUN_PRESENT=NO
-id -u ocarun >/dev/null 2>&1 && OCARUN_PRESENT=YES
-
-RUNCOMMAND_ARTIFACT=NO
-for base in /snap/oracle-cloud-agent/current /var/snap/oracle-cloud-agent/common; do
-  if [[ -e $base ]]; then
-    artifact=$(find "$base" -maxdepth 8 \( -iname '*runcommand*' -o -iname '*run-command*' \) -print -quit 2>/dev/null || true)
-    if [[ -n $artifact ]]; then
-      RUNCOMMAND_ARTIFACT=YES
-      break
-    fi
-  fi
-done
-
-DONE=1
-trap - EXIT
-
-echo "PROD359V3=PASS"
-echo "REPO_HEAD=$(git_owner rev-parse HEAD)"
-echo "OCA_PRE_VERSION=$PRE_ACTUAL_VERSION"
-echo "OCA_PRE_REVISION=$PRE_ACTUAL_REVISION"
-echo "OCA_POST_VERSION=$POST_VERSION"
-echo "OCA_POST_REVISION=$POST_REVISION"
-echo "OCA_TRACKING_BEFORE=$TRACKING"
-echo "OCA_TRACKING_AFTER=$SNAP_TRACKING"
-echo "OCA_HOLD_PRESERVED=$SNAP_HOLD"
-echo "OCA_SERVICE=active"
-echo "OCA_UPDATER=active"
-echo "OCARUN_ACCOUNT_PRESENT=$OCARUN_PRESENT"
-echo "RUN_COMMAND_LOCAL_ARTIFACT=$RUNCOMMAND_ARTIFACT"
-echo "ROOT_IMDS_HTTP=200"
-echo "TECHNOCORE_IMDS_BLOCKED=YES"
-echo "PROTECTED_CORE=$EXPECTED_CORE_EVENTS/$EXPECTED_CORE_MESSAGES"
-echo "RESIDENT_PRESERVED=$RES_PID/NRestarts=$RES_RESTARTS"
-echo "CAPTURE_PRESERVED=$CAP_PID/NRestarts=$CAP_RESTARTS"
-echo "SIGNER_PRESERVED=$SIG_PID/NRestarts=$SIG_RESTARTS"
-echo "DISCORD_PRESERVED=$DIS_PID/NRestarts=$DIS_RESTARTS"
-echo "APP_RESTART=NO"
-echo "FIREWALL_CHANGE=NO"
-echo "RUN_COMMAND_CREATED=NO"
-echo "OCI_AGENT_CONFIG_CHANGE=NO"
-echo "TECHNOCORE_WRITE=NO"
-echo "FLOP_EXTERNAL_WRITE=NO"
-echo "X_WRITE=NO"
-echo "DO_NOT_RERUN=YES"
-\t' read -r ticks2 wal_mtime2 wal_size2 shm_mtime2 shm_size2 <<< "$after"
-
-  if [[ $ticks2 == "$ticks1" && $wal_mtime2 == "$wal_mtime1" && $wal_size2 == "$wal_size1" \
-        && $shm_mtime2 == "$shm_mtime1" && $shm_size2 == "$shm_size1" ]]; then
-    stop "$label:capture_no_activity"
-  fi
-
-  echo "PROD359V3_CAPTURE=$label active=yes pid=$pid_after nrestarts=$restarts_after activity_advanced=yes"
-}
-
-root_imds_code() {
-  curl -sS --connect-timeout 3 --max-time 5 \
-    -H 'Authorization: Bearer Oracle' \
-    -o /dev/null -w '%{http_code}' "$IMDS_URL" 2>/dev/null || true
-}
-
-technocore_imds_code() {
-  sudo -u technocore curl -sS --connect-timeout 2 --max-time 3 \
-    -H 'Authorization: Bearer Oracle' \
-    -o /dev/null -w '%{http_code}' "$IMDS_URL" 2>/dev/null || true
-}
-
-metadata_gate() {
-  iptables -C OUTPUT -p tcp -d "$META_IP" --dport 80 -j "$META_CHAIN" >/dev/null 2>&1 \
-    || stop metadata_output_jump_missing
-  iptables -C "$META_CHAIN" -m owner --uid-owner 0 -j RETURN >/dev/null 2>&1 \
-    || stop metadata_root_return_missing
-  signer_uid=$(id -u technocore-signer 2>/dev/null) || stop signer_account_missing
-  iptables -C "$META_CHAIN" -m owner --uid-owner "$signer_uid" -j RETURN >/dev/null 2>&1 \
-    || stop metadata_signer_return_missing
-  iptables -C "$META_CHAIN" -j REJECT >/dev/null 2>&1 \
-    || stop metadata_final_reject_missing
-}
-
-app_gate() {
-  local label=$1
-  local tc_code
-  for svc in "$META" "$RES" "$CAP" "$SIG" "$DIS"; do
-    systemctl is-active --quiet "$svc" || stop "$label:required_service_not_active:$svc"
-  done
-
-  wait_observer_ready "$label"
-
-  [[ "$(root_imds_code)" == 200 ]] || stop "$label:root_imds_not_200"
-  tc_code=$(technocore_imds_code)
-  [[ $tc_code != 200 ]] || stop "$label:technocore_imds_unexpectedly_allowed"
-
-  metadata_gate
-  [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] \
-    || stop "$label:ntp_not_synchronized"
-
-  echo "PROD359V3_GATE=$label observer_ready=yes core=$EXPECTED_CORE_EVENTS/$EXPECTED_CORE_MESSAGES root_imds=200 technocore_imds_blocked=yes"
-}
-
-wait_oca() {
-  local attempt
-  for attempt in {1..60}; do
-    if systemctl is-active --quiet "$OCA" && systemctl is-active --quiet "$OCA_UPDATER"; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
-rollback() {
-  local rc=$?
-  local revert_rc
-  trap - ERR
-  set +e
-
-  if [[ $DONE -eq 0 && $REFRESH_COMPLETED -eq 1 ]]; then
-    snap revert oracle-cloud-agent --revision="$PRE_REVISION" >/tmp/prod359-v3-snap-revert.log 2>&1
-    revert_rc=$?
-    wait_oca
-    read_snap_list_state
-    echo "PROD359V3_ROLLBACK_RC=$revert_rc" >&2
-    echo "PROD359V3_ROLLBACK_VERSION=$SNAP_VERSION" >&2
-    echo "PROD359V3_ROLLBACK_REVISION=$SNAP_REVISION" >&2
-  fi
-
-  rm -f /tmp/prod359-v3-snap-revert.log
-  exit "$rc"
-}
-trap rollback EXIT
-
-cd "$APP"
-[[ "$(git_owner symbolic-ref --short HEAD)" == main ]] || stop branch_not_main
-[[ "$(git_owner rev-parse HEAD)" == "$EXPECTED_REPO" ]] || stop "unexpected_production_head:$(git_owner rev-parse HEAD)"
-[[ "$(git_owner rev-parse refs/remotes/origin/main)" == "$EXPECTED_ORIGIN_MAIN" ]] || stop "unexpected_local_origin_main:$(git_owner rev-parse refs/remotes/origin/main)"
-[[ -z "$(git_owner status --porcelain=v1 --untracked-files=all)" ]] || stop dirty_worktree
-
-RES_PID=$(svc_value "$RES" MainPID)
-RES_RESTARTS=$(svc_value "$RES" NRestarts)
-CAP_PID=$(svc_value "$CAP" MainPID)
-CAP_RESTARTS=$(svc_value "$CAP" NRestarts)
-SIG_PID=$(svc_value "$SIG" MainPID)
-SIG_RESTARTS=$(svc_value "$SIG" NRestarts)
-DIS_PID=$(svc_value "$DIS" MainPID)
-DIS_RESTARTS=$(svc_value "$DIS" NRestarts)
-
-[[ $RES_PID == "$EXPECTED_RES_PID" && $RES_RESTARTS == "$EXPECTED_RES_RESTARTS" ]] || stop "resident_baseline_changed:$RES_PID/$RES_RESTARTS"
-[[ $CAP_PID == "$EXPECTED_CAP_PID" && $CAP_RESTARTS == "$EXPECTED_CAP_RESTARTS" ]] || stop "capture_baseline_changed:$CAP_PID/$CAP_RESTARTS"
-[[ $SIG_PID == "$EXPECTED_SIG_PID" && $SIG_RESTARTS == "$EXPECTED_SIG_RESTARTS" ]] || stop "signer_baseline_changed:$SIG_PID/$SIG_RESTARTS"
-[[ $DIS_PID == "$EXPECTED_DIS_PID" && $DIS_RESTARTS == "$EXPECTED_DIS_RESTARTS" ]] || stop "discord_baseline_changed:$DIS_PID/$DIS_RESTARTS"
-
-assert_oca_services_ready
-
-assert_pre_snap_state
-
-app_gate pre
-assert_app_processes_preserved
-assert_oca_services_ready
-assert_pre_snap_state
-
-echo "PROD359V3_PREFLIGHT=PASS version=$PRE_ACTUAL_VERSION revision=$PRE_ACTUAL_REVISION tracking=$TRACKING hold=$HOLD stable=$REMOTE_STABLE/$REMOTE_STABLE_REVISION"
-
-if ! snap refresh oracle-cloud-agent --revision="$TARGET_REVISION"; then
-  read_snap_list_state
-  CURRENT_AFTER_FAILED_REFRESH=$SNAP_VERSION
-  CURRENT_REVISION_AFTER_FAILED_REFRESH=$SNAP_REVISION
-  if [[ $CURRENT_AFTER_FAILED_REFRESH != "$PRE_VERSION" || $CURRENT_REVISION_AFTER_FAILED_REFRESH != "$PRE_REVISION" ]]; then
-    REFRESH_COMPLETED=1
-  fi
-  stop "snap_refresh_failed:current=$CURRENT_AFTER_FAILED_REFRESH/$CURRENT_REVISION_AFTER_FAILED_REFRESH"
-fi
-REFRESH_COMPLETED=1
-
-wait_oca || stop oca_services_not_active_after_refresh
-sleep 5
-
-read_snap_list_state
-POST_VERSION=$SNAP_VERSION
-POST_REVISION=$SNAP_REVISION
-[[ $POST_VERSION == "$TARGET_VERSION" ]] || stop "post_version_mismatch:$POST_VERSION"
-[[ $POST_REVISION == "$TARGET_REVISION" ]] || stop "post_revision_mismatch:$POST_REVISION"
-[[ $SNAP_NOTES == *held* ]] || stop post_snap_hold_note_missing
-
-read_snap_info_state
-[[ $SNAP_TRACKING == "$EXPECTED_TRACKING" ]] || stop "post_tracking_changed:expected=$EXPECTED_TRACKING:actual=$SNAP_TRACKING"
-[[ $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_hold_changed:expected=$EXPECTED_HOLD:actual=$SNAP_HOLD"
-
-assert_oca_services_ready
-assert_app_processes_preserved
-
-app_gate post
-assert_app_processes_preserved
-assert_oca_services_ready
-read_snap_list_state
-[[ $SNAP_VERSION == "$TARGET_VERSION" && $SNAP_REVISION == "$TARGET_REVISION" ]] || stop "post_wait_snap_changed:$SNAP_VERSION/$SNAP_REVISION"
-read_snap_info_state
-[[ $SNAP_TRACKING == "$EXPECTED_TRACKING" && $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_wait_snap_metadata_changed:$SNAP_TRACKING/$SNAP_HOLD"
-
-OCARUN_PRESENT=NO
-id -u ocarun >/dev/null 2>&1 && OCARUN_PRESENT=YES
-
-RUNCOMMAND_ARTIFACT=NO
-for base in /snap/oracle-cloud-agent/current /var/snap/oracle-cloud-agent/common; do
-  if [[ -e $base ]]; then
-    artifact=$(find "$base" -maxdepth 8 \( -iname '*runcommand*' -o -iname '*run-command*' \) -print -quit 2>/dev/null || true)
-    if [[ -n $artifact ]]; then
-      RUNCOMMAND_ARTIFACT=YES
-      break
-    fi
-  fi
-done
-
-DONE=1
-trap - EXIT
-
-echo "PROD359V3=PASS"
-echo "REPO_HEAD=$(git_owner rev-parse HEAD)"
-echo "OCA_PRE_VERSION=$PRE_ACTUAL_VERSION"
-echo "OCA_PRE_REVISION=$PRE_ACTUAL_REVISION"
-echo "OCA_POST_VERSION=$POST_VERSION"
-echo "OCA_POST_REVISION=$POST_REVISION"
-echo "OCA_TRACKING_BEFORE=$TRACKING"
-echo "OCA_TRACKING_AFTER=$SNAP_TRACKING"
-echo "OCA_HOLD_PRESERVED=$SNAP_HOLD"
 echo "OCA_SERVICE=active"
 echo "OCA_UPDATER=active"
 echo "OCARUN_ACCOUNT_PRESENT=$OCARUN_PRESENT"
