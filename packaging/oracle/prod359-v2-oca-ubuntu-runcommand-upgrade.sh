@@ -68,6 +68,51 @@ OWNER=$(stat -c %U "$APP/.git") || stop git_owner_unreadable
 git_owner() { sudo -u "$OWNER" git -C "$APP" "$@"; }
 svc_value() { systemctl show "$1" -p "$2" --value; }
 
+assert_app_processes_preserved() {
+  [[ "$(svc_value "$RES" MainPID)" == "$RES_PID" ]] || stop unexpected_resident_pid_change
+  [[ "$(svc_value "$RES" NRestarts)" == "$RES_RESTARTS" ]] || stop unexpected_resident_restart_change
+  [[ "$(svc_value "$CAP" MainPID)" == "$CAP_PID" ]] || stop unexpected_capture_pid_change
+  [[ "$(svc_value "$CAP" NRestarts)" == "$CAP_RESTARTS" ]] || stop unexpected_capture_restart_change
+  [[ "$(svc_value "$SIG" MainPID)" == "$SIG_PID" ]] || stop unexpected_signer_pid_change
+  [[ "$(svc_value "$SIG" NRestarts)" == "$SIG_RESTARTS" ]] || stop unexpected_signer_restart_change
+  [[ "$(svc_value "$DIS" MainPID)" == "$DIS_PID" ]] || stop unexpected_discord_pid_change
+  [[ "$(svc_value "$DIS" NRestarts)" == "$DIS_RESTARTS" ]] || stop unexpected_discord_restart_change
+}
+
+assert_oca_services_ready() {
+  systemctl is-active --quiet "$OCA" || stop oca_not_active
+  systemctl is-active --quiet "$OCA_UPDATER" || stop oca_updater_not_active
+  [[ "$(systemctl is-enabled "$OCA" 2>/dev/null)" == enabled ]] || stop oca_not_enabled
+  [[ "$(systemctl is-enabled "$OCA_UPDATER" 2>/dev/null)" == enabled ]] || stop oca_updater_not_enabled
+  [[ "$(svc_value "$OCA" Result)" == success ]] || stop oca_result_not_success
+  [[ "$(svc_value "$OCA_UPDATER" Result)" == success ]] || stop oca_updater_result_not_success
+}
+
+assert_pre_snap_state() {
+  read_snap_list_state
+  PRE_ACTUAL_VERSION=$SNAP_VERSION
+  PRE_ACTUAL_REVISION=$SNAP_REVISION
+  [[ $PRE_ACTUAL_VERSION == "$PRE_VERSION" ]] || stop "unexpected_oca_version:$PRE_ACTUAL_VERSION"
+  [[ $PRE_ACTUAL_REVISION == "$PRE_REVISION" ]] || stop "unexpected_oca_revision:$PRE_ACTUAL_REVISION"
+  [[ $SNAP_NOTES == *held* ]] || stop snap_hold_note_missing
+
+  read_snap_info_state
+  TRACKING=$SNAP_TRACKING
+  HOLD=$SNAP_HOLD
+  REMOTE_STABLE=$SNAP_STABLE_VERSION
+  REMOTE_STABLE_REVISION=$SNAP_STABLE_REVISION
+  [[ $TRACKING == "$EXPECTED_TRACKING" ]] || stop "tracking_changed:expected=$EXPECTED_TRACKING:actual=$TRACKING"
+  [[ $HOLD == "$EXPECTED_HOLD" ]] || stop "hold_changed:expected=$EXPECTED_HOLD:actual=$HOLD"
+  [[ $REMOTE_STABLE == "$TARGET_VERSION" && $REMOTE_STABLE_REVISION == "$TARGET_REVISION" ]] || stop "stable_target_moved:expected=$TARGET_VERSION/$TARGET_REVISION:actual=$REMOTE_STABLE/$REMOTE_STABLE_REVISION"
+
+  read_snap_change_state
+  [[ $SNAP_CHANGE_IN_PROGRESS == NO ]] || stop snap_change_in_progress
+
+  read_snap_free_kib
+  FREE_KIB=$SNAP_FREE_KIB
+  [[ $FREE_KIB =~ ^[0-9]+$ && $FREE_KIB -ge 524288 ]] || stop "insufficient_snap_disk_kib:$FREE_KIB"
+}
+
 read_snap_list_state() {
   local raw fields
   raw=$(snap list oracle-cloud-agent 2>&1) || stop snap_list_failed
@@ -312,37 +357,14 @@ DIS_RESTARTS=$(svc_value "$DIS" NRestarts)
 [[ $SIG_PID == "$EXPECTED_SIG_PID" && $SIG_RESTARTS == "$EXPECTED_SIG_RESTARTS" ]] || stop "signer_baseline_changed:$SIG_PID/$SIG_RESTARTS"
 [[ $DIS_PID == "$EXPECTED_DIS_PID" && $DIS_RESTARTS == "$EXPECTED_DIS_RESTARTS" ]] || stop "discord_baseline_changed:$DIS_PID/$DIS_RESTARTS"
 
-systemctl is-active --quiet "$OCA" || stop oca_not_active
-systemctl is-active --quiet "$OCA_UPDATER" || stop oca_updater_not_active
-[[ "$(systemctl is-enabled "$OCA" 2>/dev/null)" == enabled ]] || stop oca_not_enabled
-[[ "$(systemctl is-enabled "$OCA_UPDATER" 2>/dev/null)" == enabled ]] || stop oca_updater_not_enabled
-[[ "$(svc_value "$OCA" Result)" == success ]] || stop oca_result_not_success
-[[ "$(svc_value "$OCA_UPDATER" Result)" == success ]] || stop oca_updater_result_not_success
+assert_oca_services_ready
 
-read_snap_list_state
-PRE_ACTUAL_VERSION=$SNAP_VERSION
-PRE_ACTUAL_REVISION=$SNAP_REVISION
-[[ $PRE_ACTUAL_VERSION == "$PRE_VERSION" ]] || stop "unexpected_oca_version:$PRE_ACTUAL_VERSION"
-[[ $PRE_ACTUAL_REVISION == "$PRE_REVISION" ]] || stop "unexpected_oca_revision:$PRE_ACTUAL_REVISION"
-[[ $SNAP_NOTES == *held* ]] || stop snap_hold_note_missing
-
-read_snap_info_state
-TRACKING=$SNAP_TRACKING
-HOLD=$SNAP_HOLD
-REMOTE_STABLE=$SNAP_STABLE_VERSION
-REMOTE_STABLE_REVISION=$SNAP_STABLE_REVISION
-[[ $TRACKING == "$EXPECTED_TRACKING" ]] || stop "tracking_changed:expected=$EXPECTED_TRACKING:actual=$TRACKING"
-[[ $HOLD == "$EXPECTED_HOLD" ]] || stop "hold_changed:expected=$EXPECTED_HOLD:actual=$HOLD"
-[[ $REMOTE_STABLE == "$TARGET_VERSION" && $REMOTE_STABLE_REVISION == "$TARGET_REVISION" ]] || stop "stable_target_moved:expected=$TARGET_VERSION/$TARGET_REVISION:actual=$REMOTE_STABLE/$REMOTE_STABLE_REVISION"
-
-read_snap_change_state
-[[ $SNAP_CHANGE_IN_PROGRESS == NO ]] || stop snap_change_in_progress
-
-read_snap_free_kib
-FREE_KIB=$SNAP_FREE_KIB
-[[ $FREE_KIB =~ ^[0-9]+$ && $FREE_KIB -ge 524288 ]] || stop "insufficient_snap_disk_kib:$FREE_KIB"
+assert_pre_snap_state
 
 app_gate pre
+assert_app_processes_preserved
+assert_oca_services_ready
+assert_pre_snap_state
 
 echo "PROD359V2_PREFLIGHT=PASS version=$PRE_ACTUAL_VERSION revision=$PRE_ACTUAL_REVISION tracking=$TRACKING hold=$HOLD stable=$REMOTE_STABLE/$REMOTE_STABLE_REVISION"
 
@@ -371,21 +393,16 @@ read_snap_info_state
 [[ $SNAP_TRACKING == "$EXPECTED_TRACKING" ]] || stop "post_tracking_changed:expected=$EXPECTED_TRACKING:actual=$SNAP_TRACKING"
 [[ $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_hold_changed:expected=$EXPECTED_HOLD:actual=$SNAP_HOLD"
 
-systemctl is-active --quiet "$OCA" || stop post_oca_not_active
-systemctl is-active --quiet "$OCA_UPDATER" || stop post_oca_updater_not_active
-[[ "$(svc_value "$OCA" Result)" == success ]] || stop post_oca_result_not_success
-[[ "$(svc_value "$OCA_UPDATER" Result)" == success ]] || stop post_oca_updater_result_not_success
-
-[[ "$(svc_value "$RES" MainPID)" == "$RES_PID" ]] || stop unexpected_resident_pid_change
-[[ "$(svc_value "$RES" NRestarts)" == "$RES_RESTARTS" ]] || stop unexpected_resident_restart_change
-[[ "$(svc_value "$CAP" MainPID)" == "$CAP_PID" ]] || stop unexpected_capture_pid_change
-[[ "$(svc_value "$CAP" NRestarts)" == "$CAP_RESTARTS" ]] || stop unexpected_capture_restart_change
-[[ "$(svc_value "$SIG" MainPID)" == "$SIG_PID" ]] || stop unexpected_signer_pid_change
-[[ "$(svc_value "$SIG" NRestarts)" == "$SIG_RESTARTS" ]] || stop unexpected_signer_restart_change
-[[ "$(svc_value "$DIS" MainPID)" == "$DIS_PID" ]] || stop unexpected_discord_pid_change
-[[ "$(svc_value "$DIS" NRestarts)" == "$DIS_RESTARTS" ]] || stop unexpected_discord_restart_change
+assert_oca_services_ready
+assert_app_processes_preserved
 
 app_gate post
+assert_app_processes_preserved
+assert_oca_services_ready
+read_snap_list_state
+[[ $SNAP_VERSION == "$TARGET_VERSION" && $SNAP_REVISION == "$TARGET_REVISION" ]] || stop "post_wait_snap_changed:$SNAP_VERSION/$SNAP_REVISION"
+read_snap_info_state
+[[ $SNAP_TRACKING == "$EXPECTED_TRACKING" && $SNAP_HOLD == "$EXPECTED_HOLD" ]] || stop "post_wait_snap_metadata_changed:$SNAP_TRACKING/$SNAP_HOLD"
 
 OCARUN_PRESENT=NO
 id -u ocarun >/dev/null 2>&1 && OCARUN_PRESENT=YES
