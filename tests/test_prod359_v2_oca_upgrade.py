@@ -92,6 +92,32 @@ def test_prod359_v2_helper_bounds_transient_observer_degraded_state() -> None:
     assert "protected_core_changed" in text
 
 
+def test_prod359_v2_helper_revalidates_state_after_observer_wait() -> None:
+    text = _text()
+
+    assert "assert_app_processes_preserved()" in text
+    assert "assert_oca_services_ready()" in text
+    assert "assert_pre_snap_state()" in text
+
+    assert text.count("assert_app_processes_preserved") >= 4
+    assert text.count("assert_oca_services_ready") >= 5
+    assert text.count("assert_pre_snap_state") >= 3
+
+    pre = text.index("app_gate pre")
+    refresh = text.index('snap refresh oracle-cloud-agent --revision="$TARGET_REVISION"')
+    between = text[pre:refresh]
+    assert "assert_app_processes_preserved" in between
+    assert "assert_oca_services_ready" in between
+    assert "assert_pre_snap_state" in between
+
+    post = text.index("app_gate post")
+    after = text[post:]
+    assert "assert_app_processes_preserved" in after
+    assert "assert_oca_services_ready" in after
+    assert "post_wait_snap_changed" in after
+    assert "post_wait_snap_metadata_changed" in after
+
+
 def test_prod359_v2_helper_preserves_application_processes() -> None:
     text = _text()
 
