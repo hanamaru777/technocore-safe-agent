@@ -29,6 +29,20 @@ def test_issue390_spool_v1_pins_current_production_baseline() -> None:
         assert token in text
 
 
+def test_issue390_spool_v1_guards_temporary_snapshot_disk_usage() -> None:
+    text = _text()
+
+    for token in (
+        "SOURCE_DB_BYTES=",
+        "TMP_FREE_BYTES=",
+        "MIN_TMP_FREE_BYTES=",
+        "TMP_SPACE_PREFLIGHT=PASS",
+        "ISSUE390_SPOOLV1=STOP:insufficient_tmp_space",
+        "SOURCE_DB_BYTES * 2 + 268435456",
+    ):
+        assert token in text
+
+
 def test_issue390_spool_v1_uses_read_only_online_backup_before_snapshot_queries() -> None:
     text = _text()
 
