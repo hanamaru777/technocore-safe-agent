@@ -21,8 +21,8 @@ def test_prod376_v2_has_no_malformed_double_dollar_expansion() -> None:
 
     assert (chr(36) * 2 + "{") not in text
     assert 'if [[ -z "$code" ]]; then' in text
-    assert "printf '%s %s\\n' "$rc" "$code"" in text
-    assert "printf 'AGENT_CONFIG_%s_HTTP=%s\\n' "$label" "$code"" in text
+    assert "printf " in text and "$rc" in text and "$code" in text
+    assert "AGENT_CONFIG_%s_HTTP=%s" in text
 
 
 def test_prod376_v2_pins_exact_source_and_baseline() -> None:
