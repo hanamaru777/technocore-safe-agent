@@ -108,7 +108,8 @@ def test_prod376_observation_after_acceptance_is_non_binding() -> None:
     assert "OBS_T90_ROOT_IMDS_RC=" in tail
     assert "OBS_T90_SNAP_DAEMON_IMDS_RC=" in tail
     assert "OBS_T90_TECHNOCORE_IMDS_BLOCKED=" in tail
-    assert "RUN_COMMAND_POST_T90_ADVERTISED=" in tail
+    assert "agent_config_snapshot POST_T90" in tail
+    assert 'print(f"RUN_COMMAND_{label}_ADVERTISED="' in text
     assert "stop " not in tail
 
 
