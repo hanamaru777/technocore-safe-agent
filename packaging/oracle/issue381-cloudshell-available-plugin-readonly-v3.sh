@@ -134,11 +134,9 @@ call_available() {
   local scope="$1"
   local out="$2"
   local err="$3"
+  local rc=0
   : >"$out"; : >"$err"
-  set +e
-  oci instance-agent available-plugins get     --compartment-id "$scope"     --os-name "$OS_NAME"     --os-version "$OS_VERSION"     --name "$TARGET_PLUGIN"     --no-retry     --output json     >"$out" 2>"$err"
-  local rc=$?
-  set -e
+  oci instance-agent available-plugins get     --compartment-id "$scope"     --os-name "$OS_NAME"     --os-version "$OS_VERSION"     --name "$TARGET_PLUGIN"     --no-retry     --output json     >"$out" 2>"$err" || rc=$?
   return "$rc"
 }
 
@@ -189,10 +187,8 @@ fi
 echo '--- ACCESSIBLE COMPARTMENT FALLBACK ---'
 COMP_JSON="$TMPDIR/compartments.json"
 COMP_ERR="$TMPDIR/compartments.err"
-set +e
-oci iam compartment list   --compartment-id "$TENANCY"   --compartment-id-in-subtree true   --access-level ACCESSIBLE   --all   --no-retry   --output json   >"$COMP_JSON" 2>"$COMP_ERR"
-COMP_RC=$?
-set -e
+COMP_RC=0
+oci iam compartment list   --compartment-id "$TENANCY"   --compartment-id-in-subtree true   --access-level ACCESSIBLE   --all   --no-retry   --output json   >"$COMP_JSON" 2>"$COMP_ERR" || COMP_RC=$?
 
 echo "COMPARTMENT_DISCOVERY_CLI_RC=$COMP_RC"
 if [[ "$COMP_RC" -ne 0 ]]; then
