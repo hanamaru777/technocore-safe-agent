@@ -68,22 +68,89 @@ echo 'TENANCY_OUTPUT=NO'
 echo "OCI_OS_SELECTOR_NAME=$OS_NAME"
 echo "OCI_OS_SELECTOR_VERSION=$OS_VERSION"
 
-STDOUT="$TMPDIR/stdout.json"
-STDERR="$TMPDIR/stderr.txt"
+CANDIDATES="$TMPDIR/candidates.txt"
+COMPARTMENTS_JSON="$TMPDIR/compartments.json"
+COMPARTMENTS_ERR="$TMPDIR/compartments.err"
+
+printf '%s\n' "$TENANCY" >"$CANDIDATES"
 
 set +e
-oci instance-agent available-plugins get   --compartment-id "$TENANCY"   --os-name "$OS_NAME"   --os-version "$OS_VERSION"   --name "$TARGET_PLUGIN"   --no-retry   --output json   >"$STDOUT" 2>"$STDERR"
-RC=$?
+oci iam compartment list   --compartment-id "$TENANCY"   --compartment-id-in-subtree true   --access-level ACCESSIBLE   --all   --no-retry   --output json   >"$COMPARTMENTS_JSON" 2>"$COMPARTMENTS_ERR"
+COMPARTMENT_LIST_RC=$?
 set -e
 
-if [[ "$RC" -ne 0 ]]; then
-  python3 - "$STDERR" "$RC" <<'PY'
+if [[ "$COMPARTMENT_LIST_RC" -eq 0 ]]; then
+  python3 - "$COMPARTMENTS_JSON" "$CANDIDATES" <<'PY'
+import json
+import pathlib
+import sys
+
+doc=json.loads(pathlib.Path(sys.argv[1]).read_text("utf-8"))
+rows=doc.get("data")
+if not isinstance(rows,list):
+    raise SystemExit(0)
+
+out=pathlib.Path(sys.argv[2])
+with out.open("a",encoding="utf-8") as fh:
+    for row in rows:
+        if not isinstance(row,dict):
+            continue
+        value=row.get("id")
+        if isinstance(value,str) and value:
+            fh.write(value+"\n")
+PY
+  echo 'ACCESSIBLE_COMPARTMENT_DISCOVERY=PASS'
+else
+  echo 'ACCESSIBLE_COMPARTMENT_DISCOVERY=UNAVAILABLE'
+fi
+
+python3 - "$CANDIDATES" <<'PY'
+import pathlib
+import sys
+path=pathlib.Path(sys.argv[1])
+seen=set()
+values=[]
+for line in path.read_text("utf-8").splitlines():
+    value=line.strip()
+    if value and value not in seen:
+        seen.add(value)
+        values.append(value)
+path.write_text("\n".join(values)+"\n","utf-8")
+print("CANDIDATE_SCOPE_COUNT="+str(len(values)))
+PY
+
+STDOUT="$TMPDIR/stdout.json"
+STDERR="$TMPDIR/stderr.txt"
+SUCCESS=0
+ATTEMPTS=0
+AUTH_FAILURES=0
+OTHER_FAILURES=0
+LAST_STATUS=UNAVAILABLE
+LAST_CODE=UNAVAILABLE
+LAST_CLASS=UNAVAILABLE
+
+while IFS= read -r COMPARTMENT_ID; do
+  [[ -n "$COMPARTMENT_ID" ]] || continue
+  ATTEMPTS=$((ATTEMPTS+1))
+  : >"$STDOUT"
+  : >"$STDERR"
+
+  set +e
+  oci instance-agent available-plugins get     --compartment-id "$COMPARTMENT_ID"     --os-name "$OS_NAME"     --os-version "$OS_VERSION"     --name "$TARGET_PLUGIN"     --no-retry     --output json     >"$STDOUT" 2>"$STDERR"
+  RC=$?
+  set -e
+
+  if [[ "$RC" -eq 0 ]]; then
+    SUCCESS=1
+    break
+  fi
+
+  CLASSIFICATION=$(python3 - "$STDERR" <<'PY'
 import pathlib
 import re
 import sys
 
 text=pathlib.Path(sys.argv[1]).read_text("utf-8",errors="replace")
-rc=sys.argv[2]
 lower=text.lower()
 
 error_class="OTHER"
@@ -114,13 +181,28 @@ for candidate in (
         code=candidate
         break
 
-print("CONTROL_PLANE_CALL=FAIL")
-print("CONTROL_PLANE_ERROR_CLASS="+error_class)
-print("CONTROL_PLANE_HTTP_STATUS="+status)
-print("CONTROL_PLANE_ERROR_CODE="+code)
-print("OCI_CLI_RC="+rc)
+print(error_class+"|"+status+"|"+code)
 PY
+)
+  IFS='|' read -r LAST_CLASS LAST_STATUS LAST_CODE <<<"$CLASSIFICATION"
 
+  if [[ "$LAST_CLASS" == AUTHORIZATION || "$LAST_CLASS" == NOT_FOUND_OR_AUTHORIZATION ]]; then
+    AUTH_FAILURES=$((AUTH_FAILURES+1))
+  else
+    OTHER_FAILURES=$((OTHER_FAILURES+1))
+  fi
+done <"$CANDIDATES"
+
+echo "CONTROL_PLANE_SCOPE_ATTEMPTS=$ATTEMPTS"
+echo "CONTROL_PLANE_AUTH_FAILURES=$AUTH_FAILURES"
+echo "CONTROL_PLANE_OTHER_FAILURES=$OTHER_FAILURES"
+
+if [[ "$SUCCESS" -ne 1 ]]; then
+  echo 'CONTROL_PLANE_CALL=FAIL'
+  echo "CONTROL_PLANE_ERROR_CLASS=$LAST_CLASS"
+  echo "CONTROL_PLANE_HTTP_STATUS=$LAST_STATUS"
+  echo "CONTROL_PLANE_ERROR_CODE=$LAST_CODE"
+  echo 'CONTROL_PLANE_AUTHORIZED_SCOPE_FOUND=NO'
   echo 'RAW_OCI_ERROR_OUTPUT=NO'
   echo 'MUTATION_COMMANDS=NONE'
   echo 'IAM_CHANGE=NO'
@@ -128,6 +210,8 @@ PY
   echo 'RUN_COMMAND_CREATED=NO'
   exit 0
 fi
+
+echo 'CONTROL_PLANE_AUTHORIZED_SCOPE_FOUND=YES'
 
 python3 - "$STDOUT" <<'PY'
 import json
