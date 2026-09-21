@@ -50,7 +50,7 @@ def test_issue371_helper_classifies_without_raw_logs() -> None:
     assert "LOG_CLASS_CONNECT=" in text
     assert "LOG_CLASS_TLS=" in text
     assert "LOG_CLASS_SUCCESS_200=" in text
-    assert "cat "$TMPDIR/journal.log"" not in text
+    assert 'cat "$TMPDIR/journal.log"' not in text
 
 def test_issue371_helper_only_reports_proxy_presence() -> None:
     text=_text()
