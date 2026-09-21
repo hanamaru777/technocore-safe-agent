@@ -161,5 +161,6 @@ def test_issue390_safety_tail() -> None:
         "RAW_UNTRUSTED_TEXT_OUTPUT=NO",
         "DID_OUTPUT=NO",
         "RAW_PRIVATE_ROOM_OUTPUT=NO",
+        "DO_NOT_RERUN=YES",
     ):
         assert token in text
