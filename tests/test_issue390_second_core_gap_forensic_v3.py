@@ -54,12 +54,12 @@ def test_issue390_gapv3_emits_current_liveness_deltas() -> None:
     text = _text()
 
     for token in (
-        "T0_LOBBY_CURSOR=",
-        "T10_LOBBY_CURSOR=",
+        'print(f"{tag}_LOBBY_CURSOR={lobby_cursor}")',
         "LOBBY_CURSOR_ADVANCE_AFTER_GAP_EVENT=",
+        "analyze_state T0",
+        "analyze_state T10",
+        'print(f"{tag}_STATE=PASS")',
         "sleep 10",
-        "T0_STATE=PASS",
-        "T10_STATE=PASS",
     ):
         assert token in text
 
