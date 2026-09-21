@@ -50,6 +50,28 @@ if ! command -v timeout >/dev/null 2>&1; then
   echo 'ISSUE390_SPOOLV1=STOP:timeout_command_missing'
   exit 0
 fi
+for cmd in stat df awk; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ISSUE390_SPOOLV1=STOP:required_command_missing:$cmd"
+    exit 0
+  fi
+done
+
+SOURCE_DB_BYTES=$(stat -c %s "$CAP_DB" 2>/dev/null || true)
+TMP_FREE_BYTES=$(df -P -B1 "$TMPDIR" 2>/dev/null | awk 'NR==2 {print $4}')
+if [[ ! "$SOURCE_DB_BYTES" =~ ^[0-9]+$ || ! "$TMP_FREE_BYTES" =~ ^[0-9]+$ ]]; then
+  echo 'ISSUE390_SPOOLV1=STOP:disk_preflight_unavailable'
+  exit 0
+fi
+MIN_TMP_FREE_BYTES=$((SOURCE_DB_BYTES * 2 + 268435456))
+echo "SOURCE_DB_BYTES=$SOURCE_DB_BYTES"
+echo "TMP_FREE_BYTES=$TMP_FREE_BYTES"
+echo "MIN_TMP_FREE_BYTES=$MIN_TMP_FREE_BYTES"
+if (( TMP_FREE_BYTES < MIN_TMP_FREE_BYTES )); then
+  echo 'ISSUE390_SPOOLV1=STOP:insufficient_tmp_space'
+  exit 0
+fi
+echo 'TMP_SPACE_PREFLIGHT=PASS'
 
 APP_HEAD=$(git -C "$APP" rev-parse HEAD 2>/dev/null || true)
 WORKTREE=$(git -C "$APP" status --porcelain=v1 --untracked-files=all 2>/dev/null || true)
