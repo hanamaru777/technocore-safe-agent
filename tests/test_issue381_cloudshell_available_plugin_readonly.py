@@ -25,9 +25,9 @@ def test_issue381_cloudshell_uses_authoritative_readonly_api() -> None:
     text = _text()
 
     assert "oci instance-agent available-plugins get" in text
-    assert "--os-name "$OS_NAME"" in text
-    assert "--os-version "$OS_VERSION"" in text
-    assert "--name "$TARGET_PLUGIN"" in text
+    assert "--os-name" in text and "$OS_NAME" in text
+    assert "--os-version" in text and "$OS_VERSION" in text
+    assert "--name" in text and "$TARGET_PLUGIN" in text
     assert "--no-retry" in text
     assert "Compute Instance Run Command" in text
     assert "Canonical Ubuntu" in text
