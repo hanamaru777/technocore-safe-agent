@@ -56,7 +56,7 @@ def test_prod376_post_stop_reconcile_is_read_only() -> None:
 def test_prod376_post_stop_reconcile_has_no_pid_style_parameter_bug() -> None:
     text = _text()
 
-    assert ("$" + "{") not in text
+    assert (chr(36) * 2 + "{") not in text
     assert 'if [[ -z "$code" ]]; then code=000; fi' in text
     assert '${label}_IMDS_CURL_RC=' in text
     assert '${label}_IMDS_HTTP=' in text
