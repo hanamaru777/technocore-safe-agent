@@ -41,23 +41,23 @@ def test_issue371_helper_never_queries_active_capture_sqlite() -> None:
 def test_issue371_helper_classifies_without_raw_logs() -> None:
     text=_text()
     assert "journalctl" in text
-    assert "LOG_CLASS_AUTH_401=" in text
-    assert "LOG_CLASS_AUTH_403=" in text
-    assert "LOG_CLASS_HTTP_404=" in text
-    assert "LOG_CLASS_HTTP_5XX=" in text
-    assert "LOG_CLASS_TIMEOUT=" in text
-    assert "LOG_CLASS_DNS=" in text
-    assert "LOG_CLASS_CONNECT=" in text
-    assert "LOG_CLASS_TLS=" in text
-    assert "LOG_CLASS_SUCCESS_200=" in text
+    assert '"AUTH_401":' in text
+    assert '"AUTH_403":' in text
+    assert '"HTTP_404":' in text
+    assert '"HTTP_5XX":' in text
+    assert '"TIMEOUT":' in text
+    assert '"DNS":' in text
+    assert '"CONNECT":' in text
+    assert '"TLS":' in text
+    assert '"SUCCESS_200":' in text
+    assert 'print("LOG_CLASS_"+label+"="' in text
     assert 'cat "$TMPDIR/journal.log"' not in text
 
 def test_issue371_helper_only_reports_proxy_presence() -> None:
     text=_text()
     assert "-p Environment --value" in text
-    assert "PROXY_HTTP_PROXY_SET=" in text
-    assert "PROXY_HTTPS_PROXY_SET=" in text
-    assert "PROXY_NO_PROXY_SET=" in text
+    assert 'for key in ("http_proxy","https_proxy","no_proxy"):' in text
+    assert 'print(f"{label}_PROXY_{key.upper()}_SET="' in text
 
 def test_issue371_helper_bounds_oracle_connectivity_probes() -> None:
     text=_text()
