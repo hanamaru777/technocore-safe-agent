@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# Read-only proof tests for Issue #371.
+
 import subprocess
 from flop_agent import core
 
