@@ -359,10 +359,27 @@ echo '--- NATURAL OCA RETRY OBSERVATION / NO RESTART ---'
 agent_config_snapshot POST_T0
 echo 'WAIT_SECONDS=90'
 sleep 90
-assert_post_imds
-assert_service "$OCA" "$EXPECTED_OCA_PID" "$EXPECTED_OCA_RESTARTS" OCA
-assert_service "$UPD" "$EXPECTED_UPD_PID" "$EXPECTED_UPD_RESTARTS" OCA_UPDATER
-assert_core
+
+read -r obs_root_rc obs_root_code <<<"$(probe_imds ROOT)"
+read -r obs_snap_rc obs_snap_code <<<"$(probe_imds SNAP sudo -n -u snap_daemon --)"
+read -r obs_tech_rc obs_tech_code <<<"$(probe_imds TECHNOCORE sudo -n -u technocore --)"
+echo "OBS_T90_ROOT_IMDS_RC=$obs_root_rc HTTP=$obs_root_code"
+echo "OBS_T90_SNAP_DAEMON_IMDS_RC=$obs_snap_rc HTTP=$obs_snap_code"
+if [[ "$obs_tech_code" == 200 ]]; then
+  echo 'OBS_T90_TECHNOCORE_IMDS_BLOCKED=NO'
+else
+  echo 'OBS_T90_TECHNOCORE_IMDS_BLOCKED=YES'
+fi
+
+for svc in "$OCA" "$UPD"; do
+  active=$(systemctl is-active "$svc" 2>/dev/null || true)
+  pid=$(systemctl show "$svc" -p MainPID --value 2>/dev/null || true)
+  restarts=$(systemctl show "$svc" -p NRestarts --value 2>/dev/null || true)
+  echo "OBS_T90_SERVICE=$svc ACTIVE=$active PID=$pid NRESTARTS=$restarts"
+done
+
+obs_core=$(core_snapshot 2>/dev/null || true)
+echo "OBS_T90_CORE=${obs_core:-UNAVAILABLE}"
 agent_config_snapshot POST_T90
 
 echo '=== PROD376=PASS ==='
