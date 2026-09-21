@@ -41,6 +41,8 @@ EXPECTED_OCA_PID=2038593
 EXPECTED_OCA_RESTARTS=0
 EXPECTED_UPD_PID=2038595
 EXPECTED_UPD_RESTARTS=0
+EXPECTED_OCA_VERSION=1.61.0-6
+EXPECTED_OCA_REVISION=126
 
 TMPDIR=$(mktemp -d /tmp/prod376.XXXXXX)
 NEW_HELPER=$TMPDIR/new-metadata-helper
@@ -232,6 +234,60 @@ PY
   echo 'OCA_RUNTIME_USER=snap_daemon'
 }
 
+assert_oca_snap_version() {
+  snap list oracle-cloud-agent >"$TMPDIR/oca-snap.txt" 2>/dev/null || stop "oca_snap_list_failed"
+  parsed=$(python3 - "$TMPDIR/oca-snap.txt" <<'PY'
+from pathlib import Path
+import sys
+rows=[line.split() for line in Path(sys.argv[1]).read_text("utf-8",errors="replace").splitlines() if line.strip()]
+if len(rows) >= 2 and len(rows[1]) >= 3:
+    print(rows[1][1]+" "+rows[1][2])
+else:
+    print("UNAVAILABLE UNAVAILABLE")
+PY
+  )
+  read -r version revision <<<"$parsed"
+  [[ "$version" == "$EXPECTED_OCA_VERSION" ]] || stop "oca_version_changed:$version"
+  [[ "$revision" == "$EXPECTED_OCA_REVISION" ]] || stop "oca_revision_changed:$revision"
+  echo "OCA_VERSION=$version"
+  echo "OCA_REVISION=$revision"
+}
+
+assert_snap_daemon_scope() {
+  scope=$(python3 - <<'PY'
+import pathlib
+import pwd
+try:
+    uid=pwd.getpwnam("snap_daemon").pw_uid
+except KeyError:
+    print("0 NONE")
+    raise SystemExit
+names=[]
+count=0
+for proc in pathlib.Path("/proc").iterdir():
+    if not proc.name.isdigit():
+        continue
+    try:
+        status=(proc/"status").read_text("utf-8",errors="replace")
+        euid=None
+        for line in status.splitlines():
+            if line.startswith("Uid:"):
+                euid=int(line.split()[2])
+                break
+        if euid != uid:
+            continue
+        names.append((proc/"comm").read_text("utf-8",errors="replace").strip())
+        count+=1
+    except Exception:
+        continue
+print(str(count)+" "+",".join(sorted(names)))
+PY
+  )
+  read -r count names <<<"$scope"
+  [[ "$count" == 2 ]] || stop "snap_daemon_process_count:$count"
+  [[ "$names" == "agent,updater" ]] || stop "snap_daemon_process_scope:$names"
+  echo 'SNAP_DAEMON_PROCESS_SCOPE=PASS count=2 comms=agent,updater'
+}
 agent_config_snapshot() {
   label=$1
   file=$TMPDIR/imds-$label.json
@@ -321,6 +377,8 @@ assert_service "$UPD" "$EXPECTED_UPD_PID" "$EXPECTED_UPD_RESTARTS" OCA_UPDATER
 assert_metadata_service
 assert_core
 assert_oca_runtime_user
+assert_oca_snap_version
+assert_snap_daemon_scope
 
 echo '--- PRE / FIREWALL + IMDS ---'
 assert_pre_firewall
@@ -357,6 +415,8 @@ assert_service "$UPD" "$EXPECTED_UPD_PID" "$EXPECTED_UPD_RESTARTS" OCA_UPDATER
 assert_metadata_service
 assert_core
 assert_oca_runtime_user
+assert_oca_snap_version
+assert_snap_daemon_scope
 
 echo 'PROD376V2_HARD_GATES=PASS'
 DONE=1
