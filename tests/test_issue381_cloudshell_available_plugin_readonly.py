@@ -34,6 +34,16 @@ def test_issue381_cloudshell_uses_authoritative_readonly_api() -> None:
     assert "24.04" in text
 
 
+def test_issue381_cloudshell_discovers_authorized_scope_without_printing_ids() -> None:
+    text = _text()
+
+    assert "oci iam compartment list" in text
+    assert "--compartment-id-in-subtree true" in text
+    assert "--access-level ACCESSIBLE" in text
+    assert "CONTROL_PLANE_AUTHORIZED_SCOPE_FOUND=" in text
+    assert "CANDIDATE_SCOPE_COUNT=" in text
+
+
 def test_issue381_cloudshell_hides_sensitive_ids_and_raw_errors() -> None:
     text = _text()
 
