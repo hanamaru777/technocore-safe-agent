@@ -105,8 +105,9 @@ def test_issue390_spool_v1_samples_stall_and_capture_liveness() -> None:
     for token in (
         "OBSERVER_HEARTBEAT_AGE=",
         "RESIDENT_HEARTBEAT_AGE=",
-        "CAPTURE_PROC_T0=",
-        "CAPTURE_PROC_T5=",
+        'print(f"CAPTURE_PROC_{tag}=PRESENT',
+        "proc_meta T0",
+        "proc_meta T5",
         "POST_LOBBY_CURSOR=",
         "ISSUE390_SPOOLV1_POST_STATE=STILL_STALLED",
         "sleep 5",
