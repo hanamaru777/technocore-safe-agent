@@ -254,6 +254,35 @@ def contiguous_end(start: int, path: Path | None = None) -> int:
         connection.close()
 
 
+def first_available_seq(
+    start: int,
+    end: int | None = None,
+    path: Path | None = None,
+) -> int | None:
+    """Return the earliest persisted sequence at or after start.
+
+    end bounds the lookup when a caller only needs to know whether local
+    evidence resumes before a newer server-retained sequence. This avoids
+    treating a pruned oldest prefix as proof that the entire gap is absent from
+    the local spool.
+    """
+    connection = _connect(path)
+    try:
+        if end is None:
+            row = connection.execute(
+                "SELECT MIN(seq) FROM messages WHERE seq>=?",
+                (int(start),),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                "SELECT MIN(seq) FROM messages WHERE seq BETWEEN ? AND ?",
+                (int(start), int(end)),
+            ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+    finally:
+        connection.close()
+
+
 def status(path: Path | None = None) -> dict:
     connection = _connect(path)
     try:

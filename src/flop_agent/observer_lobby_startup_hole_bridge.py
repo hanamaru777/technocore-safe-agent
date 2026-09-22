@@ -46,6 +46,8 @@ def _metrics(state: dict) -> dict:
         "lobby_startup_bridge_bytes",
         "lobby_startup_bridge_unrecoverable_events",
         "lobby_startup_bridge_unrecoverable_messages",
+        "lobby_startup_bridge_local_suffix_handoffs",
+        "lobby_startup_bridge_avoided_unrecoverable_messages",
     ):
         metrics.setdefault(key, 0)
     return metrics
@@ -180,6 +182,41 @@ async def _stream_until_local_resume(
                         metrics["lobby_startup_bridge_bytes"] += total_bytes
                         return recovered_total, None, None, True
                     if seq > cursor + 1:
+                        # The exact oldest local row may have been pruned while a
+                        # large exact local suffix still survives.  Do not classify
+                        # that suffix as lost merely because the server retained
+                        # window now starts later.  Prefer the earliest local resume
+                        # point at or before this server row and account only the
+                        # truly missing prefix before it.
+                        local_resume_seq = capture.first_available_seq(
+                            cursor + 1,
+                            seq,
+                        )
+                        if local_resume_seq is not None:
+                            if local_resume_seq > cursor + 1:
+                                _record_missing_before(
+                                    state,
+                                    local_resume_seq,
+                                    item,
+                                    writer,
+                                )
+                            cursor = int(
+                                state.get("cursors", {}).get(LOBBY_ROOM, 0) or 0
+                            )
+                            if capture.read_range(cursor + 1, cursor + 1):
+                                metrics["lobby_startup_bridge_successes"] += 1
+                                metrics["lobby_startup_bridge_messages"] += recovered_total
+                                metrics["lobby_startup_bridge_bytes"] += total_bytes
+                                metrics["lobby_startup_bridge_local_suffix_handoffs"] += 1
+                                metrics[
+                                    "lobby_startup_bridge_avoided_unrecoverable_messages"
+                                ] += max(0, seq - local_resume_seq)
+                                return recovered_total, None, None, True
+
+                        # No usable local row remains before the current server row
+                        # (or it was concurrently pruned after the bounded lookup).
+                        # Only then is the full prefix proven unavailable locally
+                        # and from this retained-server snapshot.
                         _record_missing_before(state, seq, item, writer)
                         cursor = int(state.get("cursors", {}).get(LOBBY_ROOM, 0) or 0)
                         if capture.read_range(cursor + 1, cursor + 1):

@@ -45,6 +45,28 @@ def test_incomplete_range_fails_closed(tmp_path):
     assert capture.contiguous_end(21, path) == 21
 
 
+def test_first_available_seq_finds_bounded_local_suffix(tmp_path):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [
+                {"seq": 30, "text": "a"},
+                {"seq": 40, "text": "b"},
+                {"seq": 50, "text": "c"},
+            ],
+        )
+    finally:
+        connection.close()
+
+    assert capture.first_available_seq(1, path=path) == 30
+    assert capture.first_available_seq(31, path=path) == 40
+    assert capture.first_available_seq(31, 39, path) is None
+    assert capture.first_available_seq(31, 40, path) == 40
+    assert capture.first_available_seq(51, path=path) is None
+
+
 def test_capture_budget_stays_below_combined_published_ceiling():
     # Production main Observer is currently capped at 300 reads/min. This capture
     # lane adds at most 250 reads/min, leaving headroom below the published 600/IP.
