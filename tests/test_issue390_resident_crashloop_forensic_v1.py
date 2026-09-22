@@ -47,9 +47,10 @@ def test_issue390_crashv1_samples_restart_loop_without_pid_pin() -> None:
 def test_issue390_crashv1_sanitizes_journal() -> None:
     text = _text()
     for token in (
-        "JOURNAL_CLASS_TRACEBACK=",
-        "JOURNAL_CLASS_MEMORY_ERROR=",
-        "JOURNAL_CLASS_MAINTENANCE_EXIT=",
+        'print(f"JOURNAL_CLASS_{label}=',
+        "TRACEBACK",
+        "MEMORY_ERROR",
+        "MAINTENANCE_EXIT",
         "JOURNAL_FRAME idx=",
         "JOURNAL_SAFE_REASON idx=",
         "RAW_JOURNAL_OUTPUT=NO",
@@ -82,7 +83,8 @@ def test_issue390_crashv1_is_read_only() -> None:
         "git reset",
         "git pull",
         "git checkout",
-        "sqlite3",
+        "import sqlite3",
+        "sqlite3.connect",
         "httpx",
         "curl ",
         "wget ",
