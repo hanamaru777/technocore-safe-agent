@@ -126,27 +126,45 @@ async def resident_worker(
     del config, state
 
     context = multiprocessing.get_context("spawn")
-    maintenance_stop = context.Event()
-    maintenance = context.Process(
-        target=_maintenance_process,
-        args=(maintenance_stop,),
-        name=_PROCESS_NAME,
-        daemon=True,
-    )
-
-    maintenance.start()
+    maintenance = None
+    maintenance_stop = None
+    preempted = False
+    loop = asyncio.get_running_loop()
+    next_pressure_check = 0.0
     try:
         while not stop.is_set():
-            if maintenance.exitcode is not None:
+            if maintenance is not None and not preempted and maintenance.exitcode is not None:
                 raise RuntimeError(
                     f"resident maintenance process exited unexpectedly: {maintenance.exitcode}"
                 )
+            if loop.time() >= next_pressure_check:
+                pressured = _maintenance_pressure_high()
+                if maintenance is not None and (pressured or preempted):
+                    preempted = True
+                    await _stop_process(maintenance, maintenance_stop)
+                    # A child stuck in kernel I/O may outlive bounded termination.
+                    # Retain ownership and never spawn an overlapping replacement.
+                    if not maintenance.is_alive():
+                        maintenance = None
+                        maintenance_stop = None
+                        preempted = False
+                if maintenance is None and not pressured and not stop.is_set():
+                    maintenance_stop = context.Event()
+                    maintenance = context.Process(
+                        target=_maintenance_process,
+                        args=(maintenance_stop,),
+                        name=_PROCESS_NAME,
+                        daemon=True,
+                    )
+                    maintenance.start()
+                next_pressure_check = loop.time() + _PRESSURE_RECHECK_SECONDS
             try:
                 await asyncio.wait_for(stop.wait(), timeout=CHECK_INTERVAL_SECONDS)
             except TimeoutError:
                 pass
     finally:
-        await _stop_process(maintenance, maintenance_stop)
+        if maintenance is not None:
+            await _stop_process(maintenance, maintenance_stop)
 
 
 def install() -> None:
