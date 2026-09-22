@@ -213,7 +213,10 @@ def test_server_gap_records_full_prefix_only_without_local_suffix(monkeypatch):
         )
     )
 
-    assert (recovered, retry, error, local_resume) == (1, None, None, False)
+    assert recovered == 1
+    assert retry is None
+    assert error == "snapshot_ended_before_local_resume"
+    assert local_resume is False
     assert state["cursors"]["lobby"] == 20
     assert state["metrics"]["unrecoverable_core_gap_events"] == 1
     assert state["metrics"]["unrecoverable_core_gap_messages"] == 9
