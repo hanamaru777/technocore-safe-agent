@@ -217,6 +217,37 @@ def test_notifications_are_rate_limited_and_status_is_cached(monkeypatch, tmp_pa
     assert resident.resident_status()["agents_known"] == 0
 
 
+def test_pressure_heartbeat_preserves_true_maintenance_refresh(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    state = resident.default_state()
+    true_refresh = "2026-09-22T14:00:00+00:00"
+    supervisor_refresh = "2026-09-22T14:05:00+00:00"
+    state["daemon"]["last_refresh_at"] = true_refresh
+    resident.save_state(state)
+
+    monkeypatch.setattr(resident, "now", lambda: supervisor_refresh)
+    assert resident.write_pressure_heartbeat() is True
+
+    payload = json.loads(resident.heartbeat_path().read_text("utf-8"))
+    assert payload["status"] == resident.PRESSURE_PAUSED_HEARTBEAT_STATUS
+    assert payload["updated_at"] == supervisor_refresh
+    assert payload["resident_status"]["last_refresh_at"] == true_refresh
+
+    status = resident.resident_status()
+    assert status["last_refresh_at"] == supervisor_refresh
+    assert status["maintenance_last_refresh_at"] == true_refresh
+    assert status["maintenance_status"] == resident.PRESSURE_PAUSED_HEARTBEAT_STATUS
+
+    # Persisted Resident state keeps the last real maintenance refresh; the
+    # supervisor heartbeat must not manufacture a successful maintenance cycle.
+    assert resident.load_state()["daemon"]["last_refresh_at"] == true_refresh
+
+
+def test_pressure_heartbeat_requires_existing_safe_snapshot(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    assert resident.write_pressure_heartbeat() is False
+
+
 def test_five_thousand_agent_refresh_is_linear_enough(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path); own = "did:key:z6MkOwn"; (tmp_path / "verified-did.json").write_text(json.dumps({"did": own}), encoding="utf-8")
     state = observer.default_state(); timestamp = datetime.now(UTC).isoformat()
