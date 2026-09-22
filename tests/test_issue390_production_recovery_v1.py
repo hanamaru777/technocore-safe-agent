@@ -160,6 +160,14 @@ def test_prod390v1_has_no_capture_sqlite_or_technocore_write() -> None:
     assert "SYNTHETIC_ACTIVITY=NO" in _text()
 
 
+def test_prod390v1_avoids_full_process_tree_scan_during_recovery() -> None:
+    text = _text()
+
+    assert "process_tree()" not in text
+    assert 'pathlib.Path("/proc").iterdir()' not in text
+    assert "TOP RSS+SWAP" not in text
+
+
 def test_prod390v1_requires_minimum_memory_before_restart() -> None:
     text = _text()
 
