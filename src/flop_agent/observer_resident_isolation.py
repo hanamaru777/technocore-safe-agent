@@ -17,13 +17,63 @@ from __future__ import annotations
 import asyncio
 import multiprocessing
 import os
+from pathlib import Path
 
 from . import observer
 
 CHECK_INTERVAL_SECONDS = 0.25
 _JOIN_TIMEOUT_SECONDS = 2.0
 _PROCESS_NAME = "flop-resident-maintenance"
+_MIN_MEM_AVAILABLE_BYTES = 256 * 1024 * 1024
+_MAX_MEMORY_FULL_AVG10 = 5.0
+_MAX_IO_FULL_AVG10 = 10.0
+_PRESSURE_RECHECK_SECONDS = 15.0
 _INSTALLED = False
+
+
+def _mem_available_bytes() -> int | None:
+    try:
+        for line in Path("/proc/meminfo").read_text("utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                parts = line.split()
+                return int(parts[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _psi_full_avg10(kind: str) -> float | None:
+    try:
+        lines = Path(f"/proc/pressure/{kind}").read_text("utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        if not line.startswith("full "):
+            continue
+        for field in line.split()[1:]:
+            if field.startswith("avg10="):
+                try:
+                    return float(field.split("=", 1)[1])
+                except ValueError:
+                    return None
+    return None
+
+
+def _maintenance_pressure_high() -> bool:
+    """Fail closed for optional maintenance when Linux pressure is unsafe."""
+    available = _mem_available_bytes()
+    if available is None or available < _MIN_MEM_AVAILABLE_BYTES:
+        return True
+
+    memory_full = _psi_full_avg10("memory")
+    if memory_full is not None and memory_full > _MAX_MEMORY_FULL_AVG10:
+        return True
+
+    io_full = _psi_full_avg10("io")
+    if io_full is not None and io_full > _MAX_IO_FULL_AVG10:
+        return True
+
+    return False
 
 
 def maintenance_cycle() -> None:
@@ -45,13 +95,17 @@ def _maintenance_process(stop) -> None:
         pass
 
     while not stop.is_set():
-        try:
-            maintenance_cycle()
-        except RuntimeError:
-            pass
+        pressured = _maintenance_pressure_high()
+        if not pressured:
+            try:
+                maintenance_cycle()
+            except RuntimeError:
+                pass
         if stop.is_set():
             break
         interval = float(resident.load_config()["refresh_interval_seconds"])
+        if pressured:
+            interval = min(interval, _PRESSURE_RECHECK_SECONDS)
         stop.wait(max(1.0, interval))
 
 
