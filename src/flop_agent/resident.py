@@ -20,6 +20,7 @@ STATE_FILE = "resident-state.json"
 CONFIG_FILE = "resident-config.json"
 CONTROL_FILE = "resident-control.json"
 HEARTBEAT_FILE = "resident-heartbeat.json"
+PRESSURE_PAUSED_HEARTBEAT_STATUS = "pressure_paused"
 DEFAULT_CONFIG = {
     "schema_version": SCHEMA_VERSION,
     "candidate_cooldown_seconds": 21600,
@@ -131,6 +132,27 @@ def write_heartbeat(state: dict | None = None, status: str = "ok", *, snapshot: 
     if next_candidate_expiry is None and state is not None: next_candidate_expiry = _next_pending_expiry(state)
     if state is None and next_candidate_expiry is None: next_candidate_expiry = previous.get("next_candidate_expiry")
     observer.atomic_json_write(heartbeat_path(), {"schema_version": 1, "updated_at": now(), "status": status, "observer_revision": observer_revision, "next_candidate_expiry": next_candidate_expiry, "resident_status": snapshot}, compact=True)
+
+
+def write_pressure_heartbeat() -> bool:
+    """Publish supervisor liveness without pretending maintenance refreshed state."""
+    previous = _read_heartbeat_payload()
+    if not isinstance(previous, dict):
+        return False
+    snapshot = previous.get("resident_status")
+    if not isinstance(snapshot, dict) or snapshot.get("read_only") is not True:
+        return False
+    payload = dict(previous)
+    payload.update(
+        {
+            "schema_version": 1,
+            "updated_at": now(),
+            "status": PRESSURE_PAUSED_HEARTBEAT_STATUS,
+            "resident_status": snapshot,
+        }
+    )
+    observer.atomic_json_write(heartbeat_path(), payload, compact=True)
+    return True
 
 
 def _heartbeat_status() -> dict | None: return _read_heartbeat_status()
@@ -336,8 +358,18 @@ def pause(value: bool) -> dict:
 
 def resident_status(state: dict | None = None, observed: dict | None = None) -> dict:
     if state is None and observed is None:
-        cached = _heartbeat_status()
-        if cached is not None: return cached
+        payload = _read_heartbeat_payload()
+        cached = payload.get("resident_status") if payload else None
+        if isinstance(cached, dict) and cached.get("read_only") is True:
+            result = dict(cached)
+            if (
+                payload.get("status") == PRESSURE_PAUSED_HEARTBEAT_STATUS
+                and observer.parse_time(payload.get("updated_at")) is not None
+            ):
+                result["maintenance_status"] = PRESSURE_PAUSED_HEARTBEAT_STATUS
+                result["maintenance_last_refresh_at"] = result.get("last_refresh_at")
+                result["last_refresh_at"] = payload["updated_at"]
+            return result
     return _status_from_state(state or load_state(), observed)
 
 
