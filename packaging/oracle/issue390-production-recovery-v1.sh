@@ -157,82 +157,6 @@ for kind in ("io","memory"):
 PY
 }
 
-process_tree() {
-  local tag=$1 root=$2
-  "$APP_PY" - "$tag" "$root" <<'PY'
-import os
-import pathlib
-import re
-import sys
-
-tag=sys.argv[1]
-root=int(sys.argv[2])
-page=os.sysconf("SC_PAGE_SIZE")
-
-def clean(v):
-    return re.sub(r"[^A-Za-z0-9_.:/=-]", "", str(v))[:80] or "unknown"
-
-def text(path):
-    try:
-        return pathlib.Path(path).read_text("utf-8",errors="replace")
-    except Exception:
-        return ""
-
-def swap_bytes(pid):
-    for line in text(f"/proc/{pid}/status").splitlines():
-        if line.startswith("VmSwap:"):
-            parts=line.split()
-            return int(parts[1])*1024 if len(parts)>1 else 0
-    return 0
-
-procs={}
-children={}
-for entry in pathlib.Path("/proc").iterdir():
-    if not entry.name.isdigit():
-        continue
-    pid=int(entry.name)
-    raw=text(entry/"stat")
-    if not raw:
-        continue
-    right=raw.rfind(")")
-    if right < 0:
-        continue
-    rest=raw[right+2:].split()
-    if len(rest)<22:
-        continue
-    try:
-        ppid=int(rest[1])
-        state=rest[0]
-        ticks=int(rest[11])+int(rest[12])
-        rss=int(rest[21])*page
-    except Exception:
-        continue
-    comm=clean(raw[raw.find("(")+1:right])
-    wchan=clean(text(entry/"wchan").strip())
-    procs[pid]=(ppid,state,ticks,rss,swap_bytes(pid),comm,wchan)
-    children.setdefault(ppid,[]).append(pid)
-
-seen=set()
-stack=[root]
-while stack:
-    parent=stack.pop()
-    for child in children.get(parent,[]):
-        if child not in seen:
-            seen.add(child)
-            stack.append(child)
-
-for pid in [root]+sorted(seen):
-    if pid not in procs:
-        continue
-    ppid,state,ticks,rss,swap,comm,wchan=procs[pid]
-    role="MAIN" if pid==root else "CHILD"
-    print(
-        f"{tag}_RESIDENT_{role} pid={pid} ppid={ppid} comm={comm} "
-        f"state={state} cpu_ticks={ticks} rss_bytes={rss} swap_bytes={swap} wchan={wchan}"
-    )
-PY
-}
-
 echo '--- PRE REPO ---'
 HEAD=$(git -C "$APP" rev-parse HEAD 2>/dev/null || true)
 BRANCH=$(git -C "$APP" branch --show-current 2>/dev/null || true)
@@ -285,7 +209,6 @@ if [[ -z "$PRE_MEM" || "$PRE_MEM" -lt "$MIN_MEM_AVAILABLE_BYTES" ]]; then
   echo 'PROD390V1=STOP:mem_too_low_for_restart'
   exit 0
 fi
-process_tree PRE "$EXPECTED_RES_PID"
 
 echo '--- TARGET FETCH / AUTHORITY ---'
 if ! git -C "$APP" fetch --quiet origin main; then
@@ -485,7 +408,6 @@ echo "SERVICE=METADATA_BLOCK ACTIVE=$META_ACTIVE RESULT=$META_RESULT"
 FINAL_STATE=$(read_state)
 printf '%s\n' "$FINAL_STATE" | sed 's/^/FINAL_/'
 pressure POST
-process_tree POST "$NEW_RES_PID"
 echo "POST_PROGRESS=$POST_PROGRESS"
 
 FINAL_EVENTS=$(printf '%s\n' "$FINAL_STATE" | awk -F= '$1=="CORE_EVENTS"{print $2}')
