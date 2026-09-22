@@ -47,11 +47,85 @@ def test_maintenance_process_runs_cycle_and_uses_positive_nice(monkeypatch):
     stop = _OneCycleStop()
     monkeypatch.setattr(observer_resident_isolation.os, "nice", lambda value: calls.append(f"nice:{value}"))
     monkeypatch.setattr(observer_resident_isolation, "maintenance_cycle", lambda: calls.append("cycle"))
+    monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: False)
     monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 30})
 
     observer_resident_isolation._maintenance_process(stop)
 
     assert calls == ["nice:10", "cycle"]
+
+
+def test_maintenance_pressure_guard_thresholds(monkeypatch):
+    monkeypatch.setattr(
+        observer_resident_isolation,
+        "_mem_available_bytes",
+        lambda: 512 * 1024 * 1024,
+    )
+
+    values = {"memory": 0.0, "io": 0.0}
+    monkeypatch.setattr(
+        observer_resident_isolation,
+        "_psi_full_avg10",
+        lambda kind: values[kind],
+    )
+
+    assert observer_resident_isolation._maintenance_pressure_high() is False
+
+    monkeypatch.setattr(
+        observer_resident_isolation,
+        "_mem_available_bytes",
+        lambda: 128 * 1024 * 1024,
+    )
+    assert observer_resident_isolation._maintenance_pressure_high() is True
+
+    monkeypatch.setattr(
+        observer_resident_isolation,
+        "_mem_available_bytes",
+        lambda: 512 * 1024 * 1024,
+    )
+    values["memory"] = 6.0
+    assert observer_resident_isolation._maintenance_pressure_high() is True
+
+    values["memory"] = 0.0
+    values["io"] = 11.0
+    assert observer_resident_isolation._maintenance_pressure_high() is True
+
+
+def test_maintenance_pressure_guard_fails_closed_when_meminfo_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        observer_resident_isolation,
+        "_mem_available_bytes",
+        lambda: None,
+    )
+    assert observer_resident_isolation._maintenance_pressure_high() is True
+
+
+def test_maintenance_process_skips_cycle_under_pressure(monkeypatch):
+    calls: list[str] = []
+    waits: list[float] = []
+
+    class StopAfterPressureWait:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, seconds):
+            waits.append(seconds)
+            self.stopped = True
+            return True
+
+    stop = StopAfterPressureWait()
+    monkeypatch.setattr(observer_resident_isolation.os, "nice", lambda value: calls.append(f"nice:{value}"))
+    monkeypatch.setattr(observer_resident_isolation, "maintenance_cycle", lambda: calls.append("cycle"))
+    monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: True)
+    monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 30})
+
+    observer_resident_isolation._maintenance_process(stop)
+
+    assert calls == ["nice:10"]
+    assert waits == [observer_resident_isolation._PRESSURE_RECHECK_SECONDS]
 
 
 class _FakeProcess:
