@@ -47,7 +47,7 @@ for path in "$APP/.git" "$APP_PY" "$OBS" "$OBHB" "$RESHB" "$CAP_DB"; do
   fi
 done
 
-for cmd in stat df timeout sha256sum; do
+for cmd in stat df timeout sha256sum install nice awk sed cat; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ISSUE390_CAPSNAPV1=STOP:missing_command:$cmd"
     exit 0
@@ -257,7 +257,8 @@ import sqlite3
 import sys
 
 import httpx
-from flop_agent import core
+
+BASE_URL="https://technocore.chat"
 
 snapshot=sys.argv[1]
 observer_cursor=int(sys.argv[2])
@@ -332,10 +333,11 @@ try:
     invalid=0
     status="ERROR"
     error_kind="NONE"
+    server_complete=False
     try:
         timeout=httpx.Timeout(30.0,connect=5.0,pool=5.0)
         with httpx.Client(timeout=timeout) as client:
-            with client.stream("GET",f"{core.BASE_URL}/r/lobby/export") as response:
+            with client.stream("GET",f"{BASE_URL}/r/lobby/export") as response:
                 status=str(response.status_code)
                 response.raise_for_status()
                 buf=b""
@@ -367,16 +369,19 @@ try:
                             invalid+=1
                     except Exception:
                         invalid+=1
+                server_complete=True
     except Exception as exc:
         error_kind=type(exc).__name__
 
     server_seqs=sorted(set(server_seqs))
     server_first=server_seqs[0] if server_seqs else None
     server_last=server_seqs[-1] if server_seqs else None
-    server_set=set(server_seqs)
+    authoritative_server_seqs=server_seqs if server_complete else []
+    server_set=set(authoritative_server_seqs)
     server_next=(observer_cursor+1) in server_set
 
     print(f"SERVER_EXPORT_HTTP_STATUS={safe(status)}")
+    print("SERVER_EXPORT_COMPLETE="+("YES" if server_complete else "NO"))
     print(f"SERVER_EXPORT_ERROR_KIND={safe(error_kind)}")
     print(f"SERVER_EXPORT_BYTES={total_bytes}")
     print(f"SERVER_EXPORT_LIMIT_BYTES={export_limit}")
@@ -387,7 +392,7 @@ try:
     print(f"SERVER_EXPORT_LAST_SEQ={server_last if server_last is not None else 'NONE'}")
     print("SERVER_HAS_CURSOR_NEXT="+("YES" if server_next else "NO"))
 
-    server_iter=iter(server_seqs)
+    server_iter=iter(authoritative_server_seqs)
     server_current=next(server_iter,None)
     expected=observer_cursor+1
     union_end=observer_cursor
