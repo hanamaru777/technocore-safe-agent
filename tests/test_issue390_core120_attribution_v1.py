@@ -59,7 +59,7 @@ def test_core120_v1_exposes_exact_gap_fields_without_text() -> None:
     ):
         assert token in text
     assert "text_excerpt" not in text
-    assert "item.get(\"text\"" not in text
+    assert 'item.get("text"' not in text
 
 
 def test_core120_v1_reads_recovery_metrics() -> None:
@@ -124,8 +124,8 @@ def test_core120_v1_pressure_and_heartbeat_are_read_only_context() -> None:
         "OBSERVER_HEARTBEAT_AGE=",
         "RESIDENT_HEARTBEAT_AGE=",
         "STATE_HEALTH_CURRENT=",
-        "CURSOR_LOBBY=",
-        "CURSOR_EVENTS=",
+        'for room in ("lobby","events")',
+        'CURSOR_{room.upper()}=',
     ):
         assert token in text
 
