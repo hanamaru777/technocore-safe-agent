@@ -39,7 +39,7 @@ def test_issue364_pressure_v2_samples_memory_psi_vmstat_and_process_trees() -> N
         'read_text("/proc/meminfo")',
         'read_text(f"/proc/pressure/{kind}")',
         'read_text("/proc/vmstat")',
-        'read_text("/proc/loadavg")',
+        "read_text('/proc/loadavg')",
         'read_text(f"/proc/{pid}/status")',
         'read_text(f"/proc/{pid}/io")',
         'read_text(entry/"wchan")',
