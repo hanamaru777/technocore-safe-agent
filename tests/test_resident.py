@@ -220,8 +220,8 @@ def test_notifications_are_rate_limited_and_status_is_cached(monkeypatch, tmp_pa
 def test_pressure_heartbeat_preserves_true_maintenance_refresh(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     state = resident.default_state()
-    true_refresh = "2026-09-22T14:00:00+00:00"
-    supervisor_refresh = "2026-09-22T14:05:00+00:00"
+    true_refresh = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    supervisor_refresh = datetime.now(UTC).isoformat()
     state["daemon"]["last_refresh_at"] = true_refresh
     resident.save_state(state)
 
@@ -237,6 +237,11 @@ def test_pressure_heartbeat_preserves_true_maintenance_refresh(monkeypatch, tmp_
     assert status["last_refresh_at"] == supervisor_refresh
     assert status["maintenance_last_refresh_at"] == true_refresh
     assert status["maintenance_status"] == resident.PRESSURE_PAUSED_HEARTBEAT_STATUS
+
+    # Operator health uses supervisor liveness while pressure-paused, so the
+    # intentionally old maintenance refresh is not misclassified as Resident death.
+    snapshot = discord_control._health_snapshot()
+    assert not any(problem.startswith("最終監視 ") for problem in snapshot["problems"])
 
     # Persisted Resident state keeps the last real maintenance refresh; the
     # supervisor heartbeat must not manufacture a successful maintenance cycle.
