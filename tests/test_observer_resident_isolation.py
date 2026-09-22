@@ -45,7 +45,7 @@ def test_maintenance_cycle_uses_only_persisted_local_state(monkeypatch):
 def test_maintenance_process_runs_cycle_and_uses_positive_nice(monkeypatch):
     calls: list[str] = []
     stop = _OneCycleStop()
-    monkeypatch.setattr(observer_resident_isolation.os, "nice", lambda value: calls.append(f"nice:{value}"))
+    monkeypatch.setattr(observer_resident_isolation.os, "nice", lambda value: calls.append(f"nice:{value}"), raising=False)
     monkeypatch.setattr(observer_resident_isolation, "maintenance_cycle", lambda: calls.append("cycle"))
     monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: False)
     monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 30})
@@ -117,7 +117,7 @@ def test_maintenance_process_skips_cycle_under_pressure(monkeypatch):
             return True
 
     stop = StopAfterPressureWait()
-    monkeypatch.setattr(observer_resident_isolation.os, "nice", lambda value: calls.append(f"nice:{value}"))
+    monkeypatch.setattr(observer_resident_isolation.os, "nice", lambda value: calls.append(f"nice:{value}"), raising=False)
     monkeypatch.setattr(observer_resident_isolation, "maintenance_cycle", lambda: calls.append("cycle"))
     monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: True)
     monkeypatch.setattr(resident, "load_config", lambda: {"refresh_interval_seconds": 30})
@@ -177,6 +177,7 @@ class _FakeContext:
 
 
 def test_worker_supervises_only_maintenance_process(monkeypatch):
+    monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: False)
     context = _FakeContext()
     monkeypatch.setattr(
         observer_resident_isolation.multiprocessing,
@@ -203,6 +204,7 @@ def test_worker_supervises_only_maintenance_process(monkeypatch):
 
 
 def test_unexpected_maintenance_exit_fails_closed(monkeypatch):
+    monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: False)
     context = _FakeContext()
     original_process = context.Process
 
@@ -222,6 +224,78 @@ def test_unexpected_maintenance_exit_fails_closed(monkeypatch):
             )
 
     asyncio.run(run())
+
+
+def test_parent_pressure_lifecycle_preempts_and_restarts_fresh_child(monkeypatch):
+    context = _FakeContext()
+    monkeypatch.setattr(observer_resident_isolation.multiprocessing, "get_context", lambda _: context)
+    # Advance one supervisor turn at a time, without wall-clock pressure timing.
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_RECHECK_SECONDS", 0)
+    monkeypatch.setattr(observer_resident_isolation, "CHECK_INTERVAL_SECONDS", 0)
+
+    async def run():
+        stop = asyncio.Event()
+        checks = []
+
+        def pressure():
+            turn = len(checks)
+            checks.append(turn)
+            if turn in (0, 1, 2):
+                assert not context.processes  # entry and sustained pressure
+                return turn < 2
+            if turn == 3:
+                assert len(context.processes) == 1
+                assert not context.stops[0].value
+                return True  # pressure rises during a running cycle
+            if turn in (4, 5, 6):
+                assert len(context.processes) == 1
+                assert context.stops[0].value and context.processes[0].joined
+                return turn < 6
+            assert len(context.processes) == 2
+            assert context.stops[1] is not context.stops[0]
+            assert context.processes[1].started
+            stop.set()
+            return False
+
+        monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", pressure)
+        await observer_resident_isolation.resident_worker({}, stop)
+        assert len(checks) == 8
+
+    asyncio.run(run())
+    assert context.stops[1].value and context.processes[1].joined
+
+
+def test_pressure_preemption_uses_bounded_terminate_and_never_overlaps(monkeypatch):
+    context = _FakeContext()
+    monkeypatch.setattr(observer_resident_isolation.multiprocessing, "get_context", lambda _: context)
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_RECHECK_SECONDS", 0)
+    monkeypatch.setattr(observer_resident_isolation, "CHECK_INTERVAL_SECONDS", 0)
+
+    async def run():
+        stop = asyncio.Event()
+        checks = []
+
+        def pressure():
+            turn = len(checks)
+            checks.append(turn)
+            if turn == 0:
+                return False
+            process = context.processes[0]
+            if turn == 1:
+                process.is_alive = lambda: True
+                return True
+            assert len(context.processes) == 1 and process.terminated
+            if turn == 2:
+                return False  # even cleared pressure cannot overlap a stuck child
+            process.is_alive = lambda: False
+            stop.set()
+            return False
+
+        monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", pressure)
+        await observer_resident_isolation.resident_worker({}, stop)
+
+    asyncio.run(run())
+    assert len(context.processes) == 1
 
 
 def test_overlay_has_no_capture_child_or_untrusted_execution_surface():
