@@ -28,6 +28,7 @@ _MIN_MEM_AVAILABLE_BYTES = 256 * 1024 * 1024
 _MAX_MEMORY_FULL_AVG10 = 5.0
 _MAX_IO_FULL_AVG10 = 10.0
 _PRESSURE_RECHECK_SECONDS = 15.0
+_PRESSURE_HEARTBEAT_SECONDS = 60.0
 _INSTALLED = False
 
 
@@ -117,6 +118,16 @@ async def _stop_process(process, process_stop) -> None:
         await asyncio.to_thread(process.join, _JOIN_TIMEOUT_SECONDS)
 
 
+async def _write_pressure_heartbeat() -> bool:
+    """Refresh only the tiny supervisor heartbeat while maintenance is pressure-paused."""
+    from . import resident
+
+    try:
+        return bool(await asyncio.to_thread(resident.write_pressure_heartbeat))
+    except (OSError, RuntimeError):
+        return False
+
+
 async def resident_worker(
     config: dict,
     stop: asyncio.Event,
@@ -131,6 +142,7 @@ async def resident_worker(
     preempted = False
     loop = asyncio.get_running_loop()
     next_pressure_check = 0.0
+    next_pressure_heartbeat = 0.0
     try:
         while not stop.is_set():
             if maintenance is not None and not preempted and maintenance.exitcode is not None:
@@ -148,6 +160,12 @@ async def resident_worker(
                         maintenance = None
                         maintenance_stop = None
                         preempted = False
+                if pressured:
+                    if loop.time() >= next_pressure_heartbeat:
+                        await _write_pressure_heartbeat()
+                        next_pressure_heartbeat = loop.time() + _PRESSURE_HEARTBEAT_SECONDS
+                else:
+                    next_pressure_heartbeat = 0.0
                 if maintenance is None and not pressured and not stop.is_set():
                     maintenance_stop = context.Event()
                     maintenance = context.Process(
