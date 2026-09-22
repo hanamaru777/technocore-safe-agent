@@ -146,6 +146,7 @@ def test_snapshot_proven_missing_prefix_is_accounted_exactly_once(monkeypatch):
         return []
 
     monkeypatch.setattr(capture, "read_range", fake_read_range)
+    monkeypatch.setattr(capture, "first_available_seq", lambda start, end=None: 13)
 
     recovered, retry, error, local_resume = asyncio.run(
         bridge._stream_until_local_resume(
@@ -160,6 +161,68 @@ def test_snapshot_proven_missing_prefix_is_accounted_exactly_once(monkeypatch):
     assert state["last_unrecoverable_gap"]["missing_from"] == 11
     assert state["last_unrecoverable_gap"]["missing_to"] == 12
     assert state["last_unrecoverable_gap"]["recovery_reason"] == "not_in_retained_export"
+
+
+def test_server_gap_prefers_surviving_local_suffix_before_loss(monkeypatch):
+    state = resilience.default_state()
+    state["cursors"]["lobby"] = 10
+    budget = Budget()
+
+    def fake_read_range(start, end, path=None):
+        if start == end and 12 <= start <= 19:
+            return [msg(start)]
+        return []
+
+    monkeypatch.setattr(capture, "read_range", fake_read_range)
+    monkeypatch.setattr(
+        capture,
+        "first_available_seq",
+        lambda start, end=None: 12 if start <= 12 <= int(end or 12) else None,
+    )
+
+    recovered, retry, error, local_resume = asyncio.run(
+        bridge._stream_until_local_resume(
+            Client([msg(20)]), budget, state, cfg(), None, None, Stop()
+        )
+    )
+
+    assert (recovered, retry, error, local_resume) == (0, None, None, True)
+    assert state["cursors"]["lobby"] == 11
+    assert state["metrics"]["unrecoverable_core_gap_events"] == 1
+    assert state["metrics"]["unrecoverable_core_gap_messages"] == 1
+    assert state["metrics"]["lobby_startup_bridge_unrecoverable_events"] == 1
+    assert state["metrics"]["lobby_startup_bridge_unrecoverable_messages"] == 1
+    assert state["metrics"]["lobby_startup_bridge_local_suffix_handoffs"] == 1
+    assert state["metrics"]["lobby_startup_bridge_avoided_unrecoverable_messages"] == 8
+    assert state["last_unrecoverable_gap"]["missing_from"] == 11
+    assert state["last_unrecoverable_gap"]["missing_to"] == 11
+    assert state["last_unrecoverable_gap"]["recovery_reason"] == "not_in_retained_export"
+
+
+def test_server_gap_records_full_prefix_only_without_local_suffix(monkeypatch):
+    state = resilience.default_state()
+    state["cursors"]["lobby"] = 10
+    budget = Budget()
+
+    monkeypatch.setattr(capture, "read_range", lambda *args, **kwargs: [])
+    monkeypatch.setattr(capture, "first_available_seq", lambda *args, **kwargs: None)
+
+    recovered, retry, error, local_resume = asyncio.run(
+        bridge._stream_until_local_resume(
+            Client([msg(20)]), budget, state, cfg(), None, None, Stop()
+        )
+    )
+
+    assert (recovered, retry, error, local_resume) == (1, None, None, False)
+    assert state["cursors"]["lobby"] == 20
+    assert state["metrics"]["unrecoverable_core_gap_events"] == 1
+    assert state["metrics"]["unrecoverable_core_gap_messages"] == 9
+    assert state["metrics"]["lobby_startup_bridge_unrecoverable_events"] == 1
+    assert state["metrics"]["lobby_startup_bridge_unrecoverable_messages"] == 9
+    assert state["metrics"]["lobby_startup_bridge_local_suffix_handoffs"] == 0
+    assert state["metrics"]["lobby_startup_bridge_avoided_unrecoverable_messages"] == 0
+    assert state["last_unrecoverable_gap"]["missing_from"] == 11
+    assert state["last_unrecoverable_gap"]["missing_to"] == 19
 
 
 def test_bridge_transport_error_never_invents_cursor_progress(monkeypatch):
