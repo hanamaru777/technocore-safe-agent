@@ -183,7 +183,7 @@ def _tclk_best_message() -> str:
     if status.get("ready") is not True:
         return f"🔴 tclk runtime unavailable/degraded ({status.get('reason', 'unknown')}). No offer state was changed."
     try:
-        items = tclk_watch.opportunities(_periodic_tclk_state())
+        items = tclk_watch.opportunities(observer.load_state())
     except RuntimeError:
         items = []
     rows = tclk_triage.review_candidates(items)
@@ -209,7 +209,7 @@ def _baseline_tclk_notices() -> None:
     """Suppress startup backlog; notify only offers first seen after this Discord process starts."""
     global _TCLK_NOTICE_BASELINED, _TCLK_NOTICE_SEEN
     try:
-        items = tclk_watch.opportunities(observer.load_state())
+        items = tclk_watch.opportunities(_periodic_tclk_state())
     except RuntimeError:
         return
     _TCLK_NOTICE_SEEN = {
@@ -238,7 +238,7 @@ def _new_tclk_review_notices() -> list[str]:
     """Return one-shot notices for new review-worthy offers; no network or state write."""
     global _TCLK_NOTICE_BASELINED, _TCLK_NOTICE_SEEN
     try:
-        items = tclk_watch.opportunities(observer.load_state())
+        items = tclk_watch.opportunities(_periodic_tclk_state())
     except RuntimeError:
         return []
     active_ids = {
