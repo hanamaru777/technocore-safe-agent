@@ -44,7 +44,7 @@ stop_post() {
 }
 
 if [[ $EUID -ne 0 ]]; then stop_pre not_root; fi
-for cmd in git systemctl stat runuser cut sort sleep; do
+for cmd in git systemctl stat runuser cut sort sleep seq; do
   command -v "$cmd" >/dev/null 2>&1 || stop_pre "missing_command:$cmd"
 done
 [[ -x "$APP_PY" && -f "$OBS" && -d "$APP/.git" && -r /proc/uptime ]] || stop_pre required_path_missing
