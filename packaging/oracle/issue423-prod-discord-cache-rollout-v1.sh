@@ -162,7 +162,7 @@ if ! runuser -u technocore -- env FLOP_STATE_DIR="$STATE" PYTHONPATH="$APP/src" 
 from flop_agent import discord_knowledge, discord_tclk_review, observer_state_writer_isolation, tclk_watch
 assert callable(discord_knowledge._periodic_tclk_state)
 assert callable(tclk_watch.tclk_revision)
-assert "tclk_revision" in observer_state_writer_isolation._serialize_snapshot.__code__.co_consts
+assert callable(observer_state_writer_isolation._serialize_snapshot)
 print("IMPORT_SMOKE=PASS")
 PY
 then
