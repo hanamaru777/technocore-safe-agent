@@ -162,12 +162,13 @@ echo "REMOTE_MAIN=$REMOTE_MAIN"
 [[ "$REMOTE_MAIN" == "$TARGET" ]] || stop_pre remote_main_moved
 git_owner merge-base --is-ancestor "$PRE" "$TARGET" || stop_pre target_not_descendant
 
-EXPECTED=$(printf '%s
-'   'docs/FIELD_REPORT_2026-09-23.md'   'src/flop_agent/airdrop_challenge.py'   'tests/test_airdrop_campaign_replay.py' | sort)
+EXPECTED=$(printf '%s\n' \
+  'docs/FIELD_REPORT_2026-09-23.md' \
+  'src/flop_agent/airdrop_challenge.py' \
+  'tests/test_airdrop_campaign_replay.py' | sort)
 ACTUAL=$(git_owner diff --name-only "$PRE" "$TARGET" | sort)
 echo 'TARGET_DIFF_BEGIN'
-printf '%s
-' "$ACTUAL"
+printf '%s\n' "$ACTUAL"
 echo 'TARGET_DIFF_END'
 [[ "$ACTUAL" == "$EXPECTED" ]] || stop_pre target_diff_not_exact
 
