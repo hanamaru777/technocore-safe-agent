@@ -11,6 +11,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -22,6 +23,7 @@ from . import airdrop_ledger
 SCHEMA_VERSION = 1
 MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
 MAX_REDIRECTS = 5
+DEFAULT_ARTIFACT_ATTEMPTS = 3
 CHALLENGE_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 REQUEST_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 ROUTE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
@@ -561,7 +563,7 @@ def pin_artifact_bytes(
     return index["artifacts"][name]
 
 
-def _read_official_bytes(url: str) -> bytes:
+def _read_official_bytes_once(url: str) -> bytes:
     current = _validate_public_url(url)
     headers = {"User-Agent": "technocore-safe-agent-challenge-runner/1"}
     with httpx.Client(timeout=20, headers=headers, follow_redirects=False) as client:
@@ -594,6 +596,37 @@ def _read_official_bytes(url: str) -> bytes:
 
     raise RuntimeError("challenge_redirect_limit")
 
+
+def _read_official_bytes(
+    url: str,
+    *,
+    attempts: int = DEFAULT_ARTIFACT_ATTEMPTS,
+    sleeper=time.sleep,
+) -> bytes:
+    """Read one official artifact with bounded retry for transient read failures."""
+    if attempts < 1 or attempts > 5:
+        raise ValueError("challenge_artifact_attempts_out_of_range")
+
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _read_official_bytes_once(url)
+        except httpx.HTTPStatusError as error:
+            last_error = error
+            status = error.response.status_code
+            if status != 429 and status < 500:
+                raise
+            if attempt == attempts:
+                raise
+        except (httpx.TimeoutException, httpx.TransportError, TimeoutError) as error:
+            last_error = error
+            if attempt == attempts:
+                raise
+
+        if attempt < attempts:
+            sleeper(0.25 * (2 ** (attempt - 1)))
+
+    raise RuntimeError("challenge_artifact_retry_exhausted") from last_error
 
 def fetch_and_pin_artifact(
     challenge_id: str,
