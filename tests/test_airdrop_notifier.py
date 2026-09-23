@@ -313,8 +313,8 @@ def test_digest_humanizes_structured_github_activity() -> None:
 
     assert selected == ["github-structured-event-123456"]
     assert "GitHub重要repo更新" in rendered
-    assert "flop-node @ 2026-09-23T06:00 (main)" in rendered
-    assert "flop-node @ 2026-09-23T09:30 (main)" in rendered
+    assert "flop-node ＠ 2026-09-23T06:00 (main)" in rendered
+    assert "flop-node ＠ 2026-09-23T09:30 (main)" in rendered
     assert '{"' not in rendered
     assert "event github-struc…" in rendered
 
