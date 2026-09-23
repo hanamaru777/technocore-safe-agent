@@ -273,6 +273,52 @@ def test_rendered_alert_neutralizes_mentions_and_is_bounded() -> None:
     assert "＠everyone" in rendered
 
 
+def test_digest_humanizes_structured_github_activity() -> None:
+    row = _alert(
+        "github-structured-event-123456",
+        route="digest",
+        severity="MEDIUM",
+        key="github_critical_repo_activity",
+        before={
+            "value": [
+                {
+                    "name": "flop-node",
+                    "pushed_at": "2026-09-23T06:00:00Z",
+                    "default_branch": "main",
+                    "archived": False,
+                }
+            ],
+            "source": "github_org",
+            "authority": "engineering",
+            "status": "engineering",
+            "conflict": False,
+        },
+        after={
+            "value": [
+                {
+                    "name": "flop-node",
+                    "pushed_at": "2026-09-23T09:30:00Z",
+                    "default_branch": "main",
+                    "archived": False,
+                }
+            ],
+            "source": "github_org",
+            "authority": "engineering",
+            "status": "engineering",
+            "conflict": False,
+        },
+    )
+
+    rendered, selected = airdrop_notifier.render_digest([row])
+
+    assert selected == ["github-structured-event-123456"]
+    assert "GitHub重要repo更新" in rendered
+    assert "flop-node @ 2026-09-23T06:00 (main)" in rendered
+    assert "flop-node @ 2026-09-23T09:30 (main)" in rendered
+    assert '{"' not in rendered
+    assert "event github-struc…" in rendered
+
+
 class _FakeDiscordResponse:
     status_code = 201
 
