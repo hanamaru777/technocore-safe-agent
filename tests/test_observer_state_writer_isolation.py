@@ -36,7 +36,9 @@ def test_serialize_snapshot_skips_full_compaction_when_within_bounds(monkeypatch
 
     assert generation == 1
     assert json.loads(state_text)["schema_version"] == observer.SCHEMA_VERSION
-    assert json.loads(heartbeat_text)["agent_count"] == 1
+    heartbeat = json.loads(heartbeat_text)
+    assert heartbeat["agent_count"] == 1
+    assert heartbeat["tclk_revision"] == 0
     assert json.loads(safety_text) == {
         "schema_version": 1,
         "updated_at": state["updated_at"],
@@ -123,6 +125,7 @@ def test_successful_flush_clears_dirty_and_writes_valid_files(monkeypatch, tmp_p
     safety = json.loads(safety_path.read_text("utf-8"))
     assert saved["schema_version"] == observer.SCHEMA_VERSION
     assert heartbeat["schema_version"] == 1
+    assert heartbeat["tclk_revision"] == 0
     assert safety == {
         "schema_version": 1,
         "updated_at": saved["updated_at"],
@@ -174,3 +177,21 @@ def test_run_sets_stop_on_persistence_failure(monkeypatch, tmp_path):
         assert stop.is_set()
 
     asyncio.run(run())
+
+
+def test_heartbeat_exports_tclk_revision_without_offer_payload(monkeypatch, tmp_path):
+    state, writer = _setup(monkeypatch, tmp_path)
+    state["tclk"] = {
+        "schema_version": 1,
+        "offers": {"offer": {"terms_full": "large-untrusted-payload"}},
+        "seen_offer_ids": ["offer"],
+        "revision": 7,
+    }
+    observer_state_writer_isolation.mark_dirty(writer)
+
+    _generation, _state_text, heartbeat_text, _safety_text = observer_state_writer_isolation._serialize_snapshot(writer)
+    heartbeat = json.loads(heartbeat_text)
+
+    assert heartbeat["tclk_revision"] == 7
+    assert "tclk" not in heartbeat
+    assert "large-untrusted-payload" not in heartbeat_text
