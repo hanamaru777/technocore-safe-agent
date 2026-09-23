@@ -273,7 +273,7 @@ def _new_auto_review_notices() -> list[str]:
     """Resolve new or restart-surviving reviewable offers; retry transient read failures."""
     global _AUTO_FAILURE_NOTIFIED
     try:
-        items = tclk_watch.opportunities(observer.load_state())
+        items = tclk_watch.opportunities(app._periodic_tclk_state())
     except RuntimeError:
         return []
     active_ids = {
