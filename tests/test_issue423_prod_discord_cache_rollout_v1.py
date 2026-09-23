@@ -123,8 +123,8 @@ def test_prod423_cache_v1_warms_up_then_measures_same_baseline_window() -> None:
         "pswpin",
         "pswpout",
         "TCLK_REVISION=",
-        "PSI_IO_",
-        "PSI_MEMORY_",
+        "/proc/pressure/",
+        'for kind in ("io","memory")',
     ):
         assert token in text
     assert text.index("--- WARMUP 60S ---") < text.index("sample B0")
