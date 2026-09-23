@@ -91,7 +91,22 @@ def signal_label(value: object, *, noise: bool = False) -> str | None:
 
 def ui_state_path() -> Path: return resident.resident_dir() / UI_STATE_FILE
 def default_ui_state() -> dict:
-    return {"schema_version": 1, "digest_baseline": None, "last_gap_count": None, "pending_gap_delta": 0, "last_gap_notice_at": None, "last_health_problem": None, "health_incident_keys": [], "observer_degraded_since": None, "observer_degraded_alerted": False, "interactions": [], "notified_interactions": []}
+    return {
+        "schema_version": 1,
+        "digest_baseline": None,
+        "last_gap_count": None,
+        "pending_gap_delta": 0,
+        "last_gap_notice_at": None,
+        "last_core_gap_count": None,
+        "last_optional_gap_count": None,
+        "pending_optional_gap_delta": 0,
+        "last_health_problem": None,
+        "health_incident_keys": [],
+        "observer_degraded_since": None,
+        "observer_degraded_alerted": False,
+        "interactions": [],
+        "notified_interactions": [],
+    }
 def load_ui_state() -> dict:
     path = ui_state_path()
     if not path.exists(): return default_ui_state()
@@ -122,6 +137,26 @@ def _observer_metrics() -> dict:
     try: state = observer.load_state()
     except RuntimeError: return {"unique_dids_discovered": 0, "returning_did_encounters": 0, "message_gaps": 0}
     metrics = state.get("metrics", {}); return {"unique_dids_discovered": int(metrics.get("unique_dids_discovered", 0)), "returning_did_encounters": int(metrics.get("returning_did_encounters", 0)), "message_gaps": int(metrics.get("message_gaps", 0))}
+
+
+def _gap_breakdown() -> dict | None:
+    """Read rich state only when a gap changed or a six-hour digest is rendered."""
+    try:
+        state = observer.load_state()
+    except RuntimeError:
+        return None
+    metrics = state.get("metrics", {})
+    if not isinstance(metrics, dict):
+        return None
+    try:
+        return {
+            "core_events": int(metrics.get("unrecoverable_core_gap_events", 0) or 0),
+            "core_messages": int(metrics.get("unrecoverable_core_gap_messages", 0) or 0),
+            "optional_events": int(metrics.get("unrecoverable_optional_gap_events", 0) or 0),
+            "optional_messages": int(metrics.get("unrecoverable_optional_gap_messages", 0) or 0),
+        }
+    except (TypeError, ValueError):
+        return None
 
 
 def _find_message(observed: dict, fingerprint: str, room: object, seq: object) -> dict | None:
@@ -613,32 +648,172 @@ class Control:
         if changed: resident.save_state(state)
         return notices
     def ensure_baseline(self) -> None:
-        interactions = sync_interactions(); ui = load_ui_state()
-        if ui.get("digest_baseline") is None: ui["digest_baseline"] = {**_observer_metrics(), "at": datetime.now(UTC).isoformat()}
-        if ui.get("last_gap_count") is None: ui["last_gap_count"] = _observer_metrics()["message_gaps"]
-        if not ui.get("notified_interactions"): ui["notified_interactions"] = [item["id"] for item in interactions if item.get("direction") == "送信"][-INTERACTION_HISTORY_LIMIT:]
+        interactions = sync_interactions()
+        ui = load_ui_state()
+        metrics = _observer_metrics()
+        breakdown = _gap_breakdown()
+        if ui.get("digest_baseline") is None:
+            baseline = {**metrics, "at": datetime.now(UTC).isoformat()}
+            if breakdown is not None:
+                baseline.update(breakdown)
+            ui["digest_baseline"] = baseline
+        if ui.get("last_gap_count") is None:
+            ui["last_gap_count"] = metrics["message_gaps"]
+        if breakdown is not None:
+            lane_baseline_missing = (
+                ui.get("last_core_gap_count") is None
+                or ui.get("last_optional_gap_count") is None
+            )
+            if ui.get("last_core_gap_count") is None:
+                ui["last_core_gap_count"] = breakdown["core_events"]
+            if ui.get("last_optional_gap_count") is None:
+                ui["last_optional_gap_count"] = breakdown["optional_events"]
+            if lane_baseline_missing:
+                # Legacy aggregate pending-gap state cannot be classified after
+                # migration. Baseline the authoritative lane counters and discard
+                # only the presentation-only pending delta to avoid a stale alert.
+                ui["pending_gap_delta"] = 0
+                ui["pending_optional_gap_delta"] = 0
+        if not ui.get("notified_interactions"):
+            ui["notified_interactions"] = [
+                item["id"] for item in interactions if item.get("direction") == "送信"
+            ][-INTERACTION_HISTORY_LIMIT:]
         save_ui_state(ui)
+
     def system_notices(self) -> list[str]:
-        snapshot = _health_snapshot(); metrics = _observer_metrics(); ui = load_ui_state(); notices = []; current_gap = metrics["message_gaps"]; previous_gap = ui.get("last_gap_count"); now_value = datetime.now(UTC)
-        if previous_gap is None: ui["last_gap_count"] = current_gap
-        elif current_gap > previous_gap: ui["pending_gap_delta"] = int(ui.get("pending_gap_delta", 0)) + (current_gap - previous_gap); ui["last_gap_count"] = current_gap
-        elif current_gap < previous_gap: ui["last_gap_count"] = current_gap; ui["pending_gap_delta"] = 0
-        pending_gap = int(ui.get("pending_gap_delta", 0)); last_gap_notice = _parse_time(ui.get("last_gap_notice_at"))
-        if last_gap_notice and last_gap_notice.tzinfo is None: last_gap_notice = last_gap_notice.replace(tzinfo=UTC)
-        cooldown_elapsed = not last_gap_notice or (now_value - last_gap_notice.astimezone(UTC)).total_seconds() >= GAP_NOTICE_COOLDOWN_SECONDS
+        snapshot = _health_snapshot()
+        metrics = _observer_metrics()
+        ui = load_ui_state()
+        notices: list[str] = []
+        current_gap = metrics["message_gaps"]
+        previous_gap = ui.get("last_gap_count")
+        now_value = datetime.now(UTC)
+
+        if previous_gap is None:
+            ui["last_gap_count"] = current_gap
+        elif current_gap > previous_gap:
+            aggregate_delta = current_gap - int(previous_gap)
+            breakdown = _gap_breakdown()
+            classified_delta = 0
+            if breakdown is not None:
+                previous_core = ui.get("last_core_gap_count")
+                previous_optional = ui.get("last_optional_gap_count")
+                if isinstance(previous_core, int) and isinstance(previous_optional, int):
+                    core_delta = max(0, breakdown["core_events"] - previous_core)
+                    optional_delta = max(0, breakdown["optional_events"] - previous_optional)
+                    classified_delta = min(aggregate_delta, core_delta + optional_delta)
+                    if core_delta:
+                        notices.append(
+                            "🔴 FLOP Agent core通信の未回復欠落を検出\n\n"
+                            f"新しいcore gap: +{core_delta}件\n"
+                            f"core累計: {breakdown['core_events']}件 / "
+                            f"{breakdown['core_messages']} messages\n"
+                            f"最終監視: {snapshot['last_refresh_age']}\n\n"
+                            "次にやること: /status"
+                        )
+                    if optional_delta:
+                        ui["pending_optional_gap_delta"] = int(
+                            ui.get("pending_optional_gap_delta", 0)
+                        ) + optional_delta
+                ui["last_core_gap_count"] = breakdown["core_events"]
+                ui["last_optional_gap_count"] = breakdown["optional_events"]
+
+            unexplained_delta = max(0, aggregate_delta - classified_delta)
+            if unexplained_delta:
+                # Migration / unreadable / partially-classified fallback: never
+                # suppress an aggregate gap that the lane counters cannot explain.
+                ui["pending_gap_delta"] = int(ui.get("pending_gap_delta", 0)) + unexplained_delta
+            ui["last_gap_count"] = current_gap
+        elif current_gap < int(previous_gap or 0):
+            ui["last_gap_count"] = current_gap
+            ui["pending_gap_delta"] = 0
+            ui["pending_optional_gap_delta"] = 0
+            breakdown = _gap_breakdown()
+            if breakdown is not None:
+                ui["last_core_gap_count"] = breakdown["core_events"]
+                ui["last_optional_gap_count"] = breakdown["optional_events"]
+
+        pending_gap = int(ui.get("pending_gap_delta", 0))
+        last_gap_notice = _parse_time(ui.get("last_gap_notice_at"))
+        if last_gap_notice and last_gap_notice.tzinfo is None:
+            last_gap_notice = last_gap_notice.replace(tzinfo=UTC)
+        cooldown_elapsed = (
+            not last_gap_notice
+            or (now_value - last_gap_notice.astimezone(UTC)).total_seconds()
+            >= GAP_NOTICE_COOLDOWN_SECONDS
+        )
         if pending_gap >= GAP_NOTICE_THRESHOLD and cooldown_elapsed:
-            notices.append("🟡 FLOP Agent 通信欠落を複数検出\n\n" f"未通知gap: +{pending_gap}\n" f"最終監視: {snapshot['last_refresh_age']}\n" "単発gapは6時間レポートへ集約し、連続時だけ通知しています。\n\n" "次にやること: /status"); ui["pending_gap_delta"] = 0; ui["last_gap_notice_at"] = now_value.isoformat()
-        incidents = immediate_health_incidents(snapshot); current_keys = set(incidents); observer_degraded = snapshot["health"] == "degraded"; observer_since = _parse_time(ui.get("observer_degraded_since")); observer_alerted = ui.get("observer_degraded_alerted") is True; observer_recovered = False
+            notices.append(
+                "🟡 FLOP Agent 通信欠落を複数検出（lane判定不能）\n\n"
+                f"未通知gap: +{pending_gap}\n"
+                f"最終監視: {snapshot['last_refresh_age']}\n"
+                "core/optionalを判定できなかったため安全側で通知しています。\n\n"
+                "次にやること: /status"
+            )
+            ui["pending_gap_delta"] = 0
+            ui["last_gap_notice_at"] = now_value.isoformat()
+
+        incidents = immediate_health_incidents(snapshot)
+        current_keys = set(incidents)
+        observer_degraded = snapshot["health"] == "degraded"
+        observer_since = _parse_time(ui.get("observer_degraded_since"))
+        observer_alerted = ui.get("observer_degraded_alerted") is True
+        observer_recovered = False
         if observer_degraded:
-            if observer_since is None: ui["observer_degraded_since"] = now_value.isoformat()
-            elif not observer_alerted and (now_value - observer_since.astimezone(UTC)).total_seconds() >= OBSERVER_DEGRADED_NOTICE_SECONDS:
-                notices.append("🔴 FLOP Agent 異常\n\n監視状態 degraded が5分以上継続しています。\n" f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n次にやること: /status"); ui["observer_degraded_alerted"] = True
-        else: observer_recovered = observer_alerted; ui["observer_degraded_since"] = None; ui["observer_degraded_alerted"] = False
-        previous_keys = {key for key in ui.get("health_incident_keys", []) if key in HEALTH_INCIDENT_LABELS}; new_keys = current_keys - previous_keys; resolved_keys = previous_keys - current_keys
+            if observer_since is None:
+                ui["observer_degraded_since"] = now_value.isoformat()
+            elif (
+                not observer_alerted
+                and (now_value - observer_since.astimezone(UTC)).total_seconds()
+                >= OBSERVER_DEGRADED_NOTICE_SECONDS
+            ):
+                notices.append(
+                    "🔴 FLOP Agent 異常\n\n"
+                    "監視状態 degraded が5分以上継続しています。\n"
+                    f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n"
+                    "次にやること: /status"
+                )
+                ui["observer_degraded_alerted"] = True
+        else:
+            observer_recovered = observer_alerted
+            ui["observer_degraded_since"] = None
+            ui["observer_degraded_alerted"] = False
+
+        previous_keys = {
+            key for key in ui.get("health_incident_keys", [])
+            if key in HEALTH_INCIDENT_LABELS
+        }
+        new_keys = current_keys - previous_keys
+        resolved_keys = previous_keys - current_keys
         if new_keys:
-            problem = " / ".join(incidents[key] for key in sorted(new_keys)); notices.append("🔴 FLOP Agent 異常\n\n" f"{problem}\n" f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n次にやること: /status")
-        if (resolved_keys or observer_recovered) and not current_keys and not observer_degraded: notices.append("🟢 FLOP Agent 監視復旧\n\nObserver監視状態が正常へ戻りました。\n結論: 対応不要。そのまま稼働中。" if observer_recovered and not resolved_keys else "🟢 FLOP Agent 復旧\n\n監視とAutopilotが正常状態へ戻りました。\n結論: 対応不要。そのまま稼働中。")
-        ui["health_incident_keys"] = sorted(current_keys); ui["last_health_problem"] = " / ".join(incidents[key] for key in sorted(current_keys)) or None; save_ui_state(ui); return notices
+            problem = " / ".join(incidents[key] for key in sorted(new_keys))
+            notices.append(
+                "🔴 FLOP Agent 異常\n\n"
+                f"{problem}\n"
+                f"最終正常監視の確認: {snapshot['last_refresh_age']}\n\n"
+                "次にやること: /status"
+            )
+        if (
+            (resolved_keys or observer_recovered)
+            and not current_keys
+            and not observer_degraded
+        ):
+            notices.append(
+                "🟢 FLOP Agent 監視復旧\n\n"
+                "Observer監視状態が正常へ戻りました。\n"
+                "結論: 対応不要。そのまま稼働中。"
+                if observer_recovered and not resolved_keys
+                else
+                "🟢 FLOP Agent 復旧\n\n"
+                "監視とAutopilotが正常状態へ戻りました。\n"
+                "結論: 対応不要。そのまま稼働中。"
+            )
+        ui["health_incident_keys"] = sorted(current_keys)
+        ui["last_health_problem"] = (
+            " / ".join(incidents[key] for key in sorted(current_keys)) or None
+        )
+        save_ui_state(ui)
+        return notices
     def interaction_notices(self) -> list[str]:
         interactions = sync_interactions(); ui = load_ui_state(); notified = set(ui.get("notified_interactions", [])); notices = []
         for item in interactions:
@@ -647,12 +822,100 @@ class Control:
             notified.add(identifier); inbound = next((record for record in interactions if record.get("direction") == "受信" and record.get("conversation_id") == item.get("conversation_id")), None); notices.append(outbound_interaction_message(item, inbound))
         ordered_ids = [item.get("id") for item in interactions if item.get("id") in notified]; ui["notified_interactions"] = ordered_ids[-INTERACTION_HISTORY_LIMIT:]; save_ui_state(ui); return notices
     def digest(self) -> str:
-        activity = activity_snapshot(); snapshot = activity["snapshot"]; current_metrics = _observer_metrics(); ui = load_ui_state(); baseline = ui.get("digest_baseline") or {**current_metrics, "at": datetime.now(UTC).isoformat()}; new_agents = max(0, current_metrics["unique_dids_discovered"] - int(baseline.get("unique_dids_discovered", 0))); returning = max(0, current_metrics["returning_did_encounters"] - int(baseline.get("returning_did_encounters", 0))); new_gaps = max(0, current_metrics["message_gaps"] - int(baseline.get("message_gaps", 0))); interactions = activity["interactions"]; recent = interactions[-3:]; ui["digest_baseline"] = {**current_metrics, "at": datetime.now(UTC).isoformat()}; ui["pending_gap_delta"] = 0; save_ui_state(ui); attention = snapshot["critical"] + snapshot["direct"]
-        if snapshot["problems"]: icon, title, conclusion = "🔴", "異常", "対応が必要です。/status を確認してください。"
-        elif attention or new_gaps: icon, title, conclusion = "🟡", "確認あり", "確認事項があります。/status を確認してください。"
-        else: icon, title, conclusion = "🟢", "正常", "対応不要。そのまま稼働中。"
-        interaction_line = "直近のやりとり: " + " / ".join(f"{short_fingerprint(item.get('fingerprint'))} {item.get('direction')} {safe_excerpt(item.get('summary', ''), 60)}" for item in recent) + "\n詳細: /history\n" if recent else "直近の直接やりとり: なし（詳細: /history）\n"
-        return f"{icon} FLOP Agent 6時間レポート（{title}）\n直近6時間: 新規Agent +{new_agents} / 再会 +{returning}\n活動: 直近24h 自動投稿 {activity['posts']}/6（上限・目標ではありません） / 直接受信 {len(activity['received'])}\n要対応: {attention} / 新しいgap +{new_gaps} / queue {snapshot['auto'].get('queued', 0)}\n最終監視: {snapshot['last_refresh_age']}\n投稿しなかった主因: {activity['zero_reason'] or '投稿あり'}\n" + interaction_line + f"結論: {conclusion}"
+        activity = activity_snapshot()
+        snapshot = activity["snapshot"]
+        current_metrics = _observer_metrics()
+        breakdown = _gap_breakdown()
+        ui = load_ui_state()
+        baseline = ui.get("digest_baseline") or {
+            **current_metrics,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        new_agents = max(
+            0,
+            current_metrics["unique_dids_discovered"]
+            - int(baseline.get("unique_dids_discovered", 0)),
+        )
+        returning = max(
+            0,
+            current_metrics["returning_did_encounters"]
+            - int(baseline.get("returning_did_encounters", 0)),
+        )
+        aggregate_gaps = max(
+            0,
+            current_metrics["message_gaps"] - int(baseline.get("message_gaps", 0)),
+        )
+        if breakdown is not None:
+            new_core_gaps = max(
+                0,
+                breakdown["core_events"] - int(
+                    baseline.get("core_events", breakdown["core_events"])
+                ),
+            )
+            new_optional_gaps = max(
+                0,
+                breakdown["optional_events"] - int(
+                    baseline.get("optional_events", breakdown["optional_events"])
+                ),
+            )
+        else:
+            new_core_gaps = 0
+            new_optional_gaps = 0
+
+        interactions = activity["interactions"]
+        recent = interactions[-3:]
+        next_baseline = {**current_metrics, "at": datetime.now(UTC).isoformat()}
+        if breakdown is not None:
+            next_baseline.update(breakdown)
+        ui["digest_baseline"] = next_baseline
+        ui["pending_gap_delta"] = 0
+        ui["pending_optional_gap_delta"] = 0
+        save_ui_state(ui)
+        attention = snapshot["critical"] + snapshot["direct"]
+
+        if snapshot["problems"] or new_core_gaps:
+            icon, title = "🔴", "要確認"
+            conclusion = "core監視またはAgent状態に確認事項があります。/status を確認してください。"
+        elif attention:
+            icon, title = "🟡", "確認あり"
+            conclusion = "確認事項があります。/status を確認してください。"
+        else:
+            icon, title = "🟢", "正常"
+            conclusion = "対応不要。そのまま稼働中。"
+
+        if breakdown is not None:
+            gap_line = (
+                f"通信: core未回復 +{new_core_gaps} / "
+                f"optional lane未回復 +{new_optional_gaps}"
+            )
+        else:
+            gap_line = f"通信: lane判定不能 gap +{aggregate_gaps}"
+
+        interaction_line = (
+            "直近のやりとり: "
+            + " / ".join(
+                f"{short_fingerprint(item.get('fingerprint'))} "
+                f"{item.get('direction')} "
+                f"{safe_excerpt(item.get('summary', ''), 60)}"
+                for item in recent
+            )
+            + "\n詳細: /history\n"
+            if recent
+            else "直近の直接やりとり: なし（詳細: /history）\n"
+        )
+        return (
+            f"{icon} FLOP Agent 6時間レポート（{title}）\n"
+            f"直近6時間: 新規Agent +{new_agents} / 再会 +{returning}\n"
+            f"活動: 直近24h 自動投稿 {activity['posts']}/6"
+            "（上限・目標ではありません）"
+            f" / 直接受信 {len(activity['received'])}\n"
+            f"要対応: {attention} / queue {snapshot['auto'].get('queued', 0)}\n"
+            f"{gap_line}\n"
+            f"最終監視: {snapshot['last_refresh_age']}\n"
+            f"投稿しなかった主因: {activity['zero_reason'] or '投稿あり'}\n"
+            + interaction_line
+            + f"結論: {conclusion}"
+        )
 
 
 def validate_environment() -> tuple[str, str, set[str]]:

@@ -188,7 +188,12 @@ def test_transient_auto_resolution_failure_backs_off_then_recovers(monkeypatch):
     monkeypatch.setattr(discord_review.tclk_review_evidence, "capture", transient)
 
     first = discord_review._new_auto_review_notices()
-    assert len(first) == 1 and "自動で再試行" in first[0]
+    assert len(first) == 1
+    assert "自動確認中（操作不要）" in first[0]
+    assert "自動再試行" in first[0]
+    assert "full spec読取一時失敗" in first[0]
+    assert item["id"] not in first[0]
+    assert item["id"][:12] in first[0]
     assert calls["count"] == 1
     assert discord_review._AUTO_RETRY_ATTEMPTS[item["id"]] == 1
     assert discord_review._AUTO_RETRY_AFTER[item["id"]] == 1060.0
@@ -230,8 +235,12 @@ def test_missing_full_spec_uses_longer_backoff_and_can_recover(monkeypatch):
 
     first = discord_review._new_auto_review_notices()
     assert len(first) == 1
-    assert "full_spec_not_found" in first[0]
-    assert "自動で再試行" in first[0]
+    assert "自動確認中（操作不要）" in first[0]
+    assert "full spec未取得" in first[0]
+    assert "自動再試行" in first[0]
+    assert "full_spec_not_found" not in first[0]
+    assert item["id"] not in first[0]
+    assert item["id"][:12] in first[0]
     assert calls["count"] == 1
     assert discord_review._AUTO_RETRY_AFTER[item["id"]] == 2300.0
 
@@ -268,7 +277,8 @@ def test_non_transient_review_failure_is_terminal_without_retry_state(monkeypatc
 
     first = discord_review._new_auto_review_notices()
     assert len(first) == 1
-    assert "fail-closedで見送ります" in first[0]
+    assert "fail-closedで見送り" in first[0]
+    assert "unsupported_note_reference" in first[0]
     assert calls["count"] == 1
     assert item["id"] in knowledge_app._TCLK_NOTICE_SEEN
     assert item["id"] not in discord_review._AUTO_RETRY_AFTER

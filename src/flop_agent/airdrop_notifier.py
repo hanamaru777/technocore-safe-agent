@@ -154,6 +154,97 @@ def _preview(value: object, limit: int = 320) -> str:
     return _safe_text(rendered, limit)
 
 
+
+DIGEST_KEY_LABELS = {
+    "github_critical_repo_activity": "GitHub重要repo更新",
+    "github_interest_repo_activity": "GitHub関連repo更新",
+    "github_interest_repo_names": "GitHub関連repo一覧",
+    "genesis_agent_airdrop": "Agent配分",
+    "genesis_supply": "Genesis供給量",
+    "genesis_reserve": "Reserve",
+    "testnet_status": "Testnet状態",
+    "faucet_status": "Faucet状態",
+    "registration_status": "登録状態",
+    "claim_status": "Claim状態",
+    "claim_path_status": "Claim経路",
+    "testnet_to_mainnet_conversion_status": "Testnet→Mainnet変換",
+    "official_airdrop_x_handle": "公式Airdrop X",
+    "testnet_window": "Testnet期間",
+    "mainnet_window": "Mainnet期間",
+    "airdrop_vesting_duration_blocks": "Airdrop vesting",
+    "kol_application_status": "KOL応募",
+    "kol_compensation_guaranteed": "KOL報酬保証",
+    "kol_program_terms_status": "KOLプログラム条件",
+}
+
+
+def _display_key(value: object) -> str:
+    key = _safe_text(value, 120)
+    return DIGEST_KEY_LABELS.get(key, key.replace("_", " "))
+
+
+def _operator_preview(value: object, limit: int = 180) -> str:
+    """Render structured evidence for humans while raw evidence stays in the Ledger."""
+    if isinstance(value, dict) and "value" in value:
+        return _operator_preview(value.get("value"), limit)
+
+    if isinstance(value, list):
+        if not value:
+            return "なし"
+        repo_rows = [
+            row for row in value
+            if isinstance(row, dict) and isinstance(row.get("name"), str)
+        ]
+        if len(repo_rows) == len(value):
+            parts = []
+            for row in repo_rows[:3]:
+                detail = row["name"]
+                pushed = row.get("pushed_at")
+                branch = row.get("default_branch")
+                if isinstance(pushed, str) and pushed:
+                    detail += f" @ {pushed[:16]}"
+                if isinstance(branch, str) and branch:
+                    detail += f" ({branch})"
+                parts.append(detail)
+            if len(repo_rows) > 3:
+                parts.append(f"ほか{len(repo_rows) - 3}件")
+            return _safe_text(" / ".join(parts), limit)
+        scalar = [
+            _safe_text(item, 48)
+            for item in value[:4]
+            if not isinstance(item, (dict, list))
+        ]
+        if scalar:
+            suffix = f" / ほか{len(value) - len(scalar)}件" if len(value) > len(scalar) else ""
+            return _safe_text(" / ".join(scalar) + suffix, limit)
+        return f"{len(value)}件"
+
+    if isinstance(value, dict):
+        preferred = []
+        for key, label in (
+            ("status", "status"),
+            ("source", "source"),
+            ("authority", "authority"),
+            ("conflict", "conflict"),
+            ("version", "version"),
+            ("name", "name"),
+        ):
+            if key in value and value.get(key) is not None:
+                preferred.append(f"{label}={_safe_text(value.get(key), 48)}")
+        if preferred:
+            return _safe_text(" / ".join(preferred), limit)
+        return f"{len(value)}項目"
+
+    return _preview(value, limit)
+
+
+def _short_event_id(value: object) -> str:
+    event_id = _safe_text(value, 40)
+    if len(event_id) <= 14:
+        return event_id
+    return event_id[:12] + "…"
+
+
 def _event_icon(severity: object) -> str:
     if severity == "ACTION_NOW":
         return "🔴"
@@ -165,12 +256,12 @@ def _event_icon(severity: object) -> str:
 def render_alert(payload: dict) -> str:
     severity = _safe_text(payload.get("severity"), 20) or "UNKNOWN"
     event_id = _safe_text(payload.get("event_id"), 40)
-    key = _safe_text(payload.get("key"), 180)
+    key = _display_key(payload.get("key"))
     source = _safe_text(payload.get("source"), 80) or "official source"
     tier = _safe_text(payload.get("tier"), 20)
     authority = _safe_text(payload.get("authority"), 80)
-    before = _preview(payload.get("before"))
-    after = _preview(payload.get("after"))
+    before = _operator_preview(payload.get("before"), 320)
+    after = _operator_preview(payload.get("after"), 320)
     step = _safe_text(payload.get("safe_next_step"), 360)
 
     lines = [
@@ -206,12 +297,15 @@ def render_digest(items: list[dict]) -> tuple[str, list[str]]:
         if not isinstance(payload, dict):
             continue
         event_id = _safe_text(payload.get("event_id"), 40)
+        severity = _safe_text(payload.get("severity"), 16)
+        key = _display_key(payload.get("key"))
+        source = _safe_text(payload.get("source"), 50) or "official source"
+        before = _operator_preview(payload.get("before"), 150)
+        after = _operator_preview(payload.get("after"), 150)
         line = (
-            f"・[{_safe_text(payload.get('severity'), 16)}] "
-            f"{_safe_text(payload.get('key'), 90)} | "
-            f"{_safe_text(payload.get('source'), 50)} | "
-            f"{_preview(payload.get('before'), 90)} → {_preview(payload.get('after'), 90)} "
-            f"| {event_id}"
+            f"・[{severity}] {key}\n"
+            f"  {before} → {after}\n"
+            f"  根拠: {source} / event {_short_event_id(event_id)}"
         )
         candidate = "\n".join([*lines, line])
         if len(candidate) > MAX_CONTENT:
