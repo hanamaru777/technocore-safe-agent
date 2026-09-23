@@ -80,7 +80,7 @@ service_snapshot() {
   age_s=$(( UPTIME_SECONDS - (start_us / 1000000) ))
   (( age_s >= MIN_SERVICE_AGE_SECONDS )) || return 2
 
-  printf '%s|%s|%s|%s|%s|%s|%s\n' "$active" "$sub" "$pid" "$nr" "$result" "$start_us" "$age_s"
+  printf '%s|%s|%s|%s|%s|%s\n' "$active" "$sub" "$pid" "$nr" "$result" "$start_us"
 }
 
 capture_service() {
