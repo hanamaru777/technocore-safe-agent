@@ -284,7 +284,10 @@ def render_alert(payload: dict) -> str:
     lines.append(f"event: {event_id}")
 
     rendered = "\n".join(lines)
-    return def render_digest(items: list[dict]) -> tuple[str, list[str]]:
+    return rendered[:MAX_CONTENT]
+
+
+def render_digest(items: list[dict]) -> tuple[str, list[str]]:
     if not items:
         raise ValueError("airdrop_notifier_digest_empty")
     lines = ["🟡 FLOP Airdrop Radar まとめ"]
