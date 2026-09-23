@@ -128,8 +128,8 @@ for pair in \
   "MONITOR_TIMER:$MON_TIMER" \
   "NOTIFIER_TIMER:$NOT_TIMER"
 do
-  label=\${pair%%:*}
-  unit=\${pair#*:}
+  label=${pair%%:*}
+  unit=${pair#*:}
   active=$(systemctl is-active "$unit" 2>/dev/null || true)
   enabled=$(systemctl is-enabled "$unit" 2>/dev/null || true)
   next=$(systemctl show "$unit" -p NextElapseUSecRealtime --value 2>/dev/null || true)
@@ -140,8 +140,8 @@ for pair in \
   "MONITOR_SERVICE:$MON_SERVICE" \
   "NOTIFIER_SERVICE:$NOT_SERVICE"
 do
-  label=\${pair%%:*}
-  unit=\${pair#*:}
+  label=${pair%%:*}
+  unit=${pair#*:}
   result=$(systemctl show "$unit" -p Result --value 2>/dev/null || true)
   rc=$(systemctl show "$unit" -p ExecMainStatus --value 2>/dev/null || true)
   started=$(systemctl show "$unit" -p ExecMainStartTimestamp --value 2>/dev/null || true)
