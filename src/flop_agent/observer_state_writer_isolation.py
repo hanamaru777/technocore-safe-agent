@@ -29,7 +29,7 @@ import json
 import os
 import tempfile
 
-from . import core, observer
+from . import core, observer, tclk_watch
 
 _INSTALLED = False
 _BASE_MARK_DIRTY = observer.StateWriter.mark_dirty
@@ -109,6 +109,7 @@ def _serialize_snapshot(writer) -> tuple[int, str, str, str]:
         "updated_at": writer.state["updated_at"],
         "status": writer.state.get("health", {}).get("current", "degraded"),
         "agent_count": len(writer.state.get("agents", {})),
+        "tclk_revision": tclk_watch.tclk_revision(writer.state),
         "metrics": {
             "unique_dids_discovered": int(metrics.get("unique_dids_discovered", 0)),
             "returning_did_encounters": int(metrics.get("returning_did_encounters", 0)),
