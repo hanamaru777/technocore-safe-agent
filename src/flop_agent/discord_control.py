@@ -660,10 +660,20 @@ class Control:
         if ui.get("last_gap_count") is None:
             ui["last_gap_count"] = metrics["message_gaps"]
         if breakdown is not None:
+            lane_baseline_missing = (
+                ui.get("last_core_gap_count") is None
+                or ui.get("last_optional_gap_count") is None
+            )
             if ui.get("last_core_gap_count") is None:
                 ui["last_core_gap_count"] = breakdown["core_events"]
             if ui.get("last_optional_gap_count") is None:
                 ui["last_optional_gap_count"] = breakdown["optional_events"]
+            if lane_baseline_missing:
+                # Legacy aggregate pending-gap state cannot be classified after
+                # migration. Baseline the authoritative lane counters and discard
+                # only the presentation-only pending delta to avoid a stale alert.
+                ui["pending_gap_delta"] = 0
+                ui["pending_optional_gap_delta"] = 0
         if not ui.get("notified_interactions"):
             ui["notified_interactions"] = [
                 item["id"] for item in interactions if item.get("direction") == "送信"
