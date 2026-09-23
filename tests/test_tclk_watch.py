@@ -43,6 +43,7 @@ def test_valid_signed_paper_offer_is_read_only_opportunity(monkeypatch, tmp_path
     observer.process_message(state, observer.DEFAULT_CONFIG, tclk_watch.OFFER_ROOM, signed_offer_message(monkeypatch), None, None)
     rows = tclk_watch.opportunities(state)
     assert len(rows) == 1
+    assert tclk_watch.tclk_revision(state) == 1
     item = rows[0]
     assert item["frame_type"] == "offer" and item["rail"] == "paper"
     assert item["role"] == "payer"
@@ -91,8 +92,10 @@ def test_unsigned_malformed_mismatched_replay_and_unsupported_frames_fail_closed
     observer.process_message(state, observer.DEFAULT_CONFIG, "lobby", valid, None, None)
     assert tclk_watch.opportunities(state) == []
     observer.process_message(state, observer.DEFAULT_CONFIG, tclk_watch.OFFER_ROOM, valid, None, None)
+    assert tclk_watch.tclk_revision(state) == 1
     observer.process_message(state, observer.DEFAULT_CONFIG, tclk_watch.OFFER_ROOM, valid, None, None)
     assert len(tclk_watch.opportunities(state)) == 1
+    assert tclk_watch.tclk_revision(state) == 1
 
 
 def test_discord_tclk_views_sanitize_and_never_write_state(monkeypatch, tmp_path):
@@ -137,3 +140,12 @@ def test_tclk_bridge_scrubs_process_environment(monkeypatch):
     monkeypatch.setattr(tclk_watch.subprocess, "run", lambda *args, **kwargs: captured.setdefault("env", kwargs["env"]) and Result())
     assert tclk_watch.official_offer("tclk1 {}") is None
     assert "SIGN_SEED" not in captured["env"] and "TCLK_PAYMENT_KEY" not in captured["env"]
+
+
+def test_tclk_revision_accepts_legacy_missing_revision_and_rejects_invalid_value():
+    state = {"tclk": {"schema_version": 1, "offers": {}, "seen_offer_ids": []}}
+    assert tclk_watch.tclk_revision(state) == 0
+    assert tclk_watch._tclk_state(state)["revision"] == 0
+    state["tclk"]["revision"] = -1
+    assert tclk_watch._tclk_state(state) is None
+    assert tclk_watch.tclk_revision(state) == 0

@@ -16,6 +16,8 @@ def _reset_auto_retry_runtime(monkeypatch):
     monkeypatch.setattr(discord_review, "_AUTO_FAILURE_NOTIFIED", set())
     monkeypatch.setattr(discord_review, "_AUTO_RETRY_AFTER", {})
     monkeypatch.setattr(discord_review, "_AUTO_RETRY_ATTEMPTS", {})
+    monkeypatch.setattr(knowledge_app, "_TCLK_STATE_CACHE_REVISION", None)
+    monkeypatch.setattr(knowledge_app, "_TCLK_STATE_CACHE", None)
 
 
 def _offer(index: int = 1, *, job_id: str = "job-safe-open") -> dict:
@@ -136,6 +138,39 @@ def test_new_candidate_auto_resolves_and_notice_requires_no_chatgpt_relay(monkey
     assert len(notices[0]) <= 2000
 
 
+def test_auto_review_poll_uses_revision_cached_tclk_state(monkeypatch):
+    item = _offer()
+    monkeypatch.setattr(
+        knowledge_app,
+        "_periodic_tclk_state",
+        lambda: {
+            "tclk": {
+                "schema_version": 1,
+                "offers": {item["id"]: item},
+                "seen_offer_ids": [item["id"]],
+                "revision": 3,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        discord_review.observer,
+        "load_state",
+        lambda: (_ for _ in ()).throw(AssertionError("periodic poll must use revision cache")),
+    )
+    monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_BASELINED", True)
+    monkeypatch.setattr(knowledge_app, "_TCLK_NOTICE_SEEN", set())
+    monkeypatch.setattr(
+        discord_review.tclk_review_evidence,
+        "capture",
+        lambda _item: _resolved_record(item),
+    )
+
+    notices = discord_review._new_auto_review_notices()
+
+    assert len(notices) == 1
+    assert "AUTO-RESOLVE: PASS" in notices[0]
+
+
 def test_transient_auto_resolution_failure_backs_off_then_recovers(monkeypatch):
     item = _offer()
     clock = {"now": 1000.0}
@@ -243,6 +278,82 @@ def test_non_transient_review_failure_is_terminal_without_retry_state(monkeypatc
     assert second == []
     assert calls["count"] == 1
 
+
+
+def test_periodic_tclk_state_full_loads_only_when_heartbeat_revision_changes(monkeypatch):
+    item = _offer()
+    revision = {"value": 4}
+    calls = {"count": 0}
+
+    monkeypatch.setattr(knowledge_app, "_observer_tclk_revision", lambda: revision["value"])
+
+    def load_state():
+        calls["count"] += 1
+        return {
+            "agents": {"large": {"payload": "must-not-stay-cached"}},
+            "tclk": {
+                "schema_version": 1,
+                "offers": {item["id"]: item},
+                "seen_offer_ids": [item["id"]],
+                "revision": revision["value"],
+            },
+        }
+
+    monkeypatch.setattr(knowledge_app.observer, "load_state", load_state)
+
+    first = knowledge_app._periodic_tclk_state()
+    second = knowledge_app._periodic_tclk_state()
+
+    assert calls["count"] == 1
+    assert first is second
+    assert set(first) == {"tclk"}
+    assert "agents" not in first
+    assert knowledge_app.tclk_watch.opportunities(first)[0]["id"] == item["id"]
+
+    revision["value"] = 5
+    third = knowledge_app._periodic_tclk_state()
+    assert calls["count"] == 2
+    assert third is not first
+
+
+def test_periodic_tclk_state_revision_mismatch_fails_closed_and_does_not_cache(monkeypatch):
+    item = _offer()
+    calls = {"count": 0}
+    monkeypatch.setattr(knowledge_app, "_observer_tclk_revision", lambda: 8)
+
+    def load_state():
+        calls["count"] += 1
+        return {
+            "tclk": {
+                "schema_version": 1,
+                "offers": {item["id"]: item},
+                "seen_offer_ids": [item["id"]],
+                "revision": 7,
+            }
+        }
+
+    monkeypatch.setattr(knowledge_app.observer, "load_state", load_state)
+
+    assert knowledge_app._periodic_tclk_state() == {}
+    assert knowledge_app._periodic_tclk_state() == {}
+    assert calls["count"] == 2
+    assert knowledge_app._TCLK_STATE_CACHE is None
+
+
+def test_periodic_tclk_state_missing_revision_preserves_legacy_full_load(monkeypatch):
+    calls = {"count": 0}
+    monkeypatch.setattr(knowledge_app, "_observer_tclk_revision", lambda: None)
+
+    def load_state():
+        calls["count"] += 1
+        return {"tclk": {"schema_version": 1, "offers": {}, "seen_offer_ids": []}}
+
+    monkeypatch.setattr(knowledge_app.observer, "load_state", load_state)
+
+    knowledge_app._periodic_tclk_state()
+    knowledge_app._periodic_tclk_state()
+    assert calls["count"] == 2
+    assert knowledge_app._TCLK_STATE_CACHE is None
 
 def test_stored_evidence_command_works_without_live_offer(monkeypatch):
     item = _offer()
