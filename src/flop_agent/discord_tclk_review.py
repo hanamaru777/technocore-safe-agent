@@ -254,18 +254,42 @@ def _auto_success_notice(item: dict, verdict: dict, record: dict) -> str:
     return "\n".join(lines)
 
 
+def _short_offer_id(value: object) -> str:
+    rendered = app.base.base.safe_excerpt(value or "-", 70)
+    return rendered if len(rendered) <= 14 else rendered[:12] + "…"
+
+
+def _retry_reason_label(reason: str) -> str:
+    return {
+        "full_spec_not_found": "full spec未取得",
+        "material_not_found": "material未取得",
+        "full_spec_read_failed": "full spec読取一時失敗",
+        "material_read_failed": "material読取一時失敗",
+    }.get(reason, app.base.base.safe_excerpt(reason, 80))
+
+
 def _auto_failure_notice(item: dict, verdict: dict, reason: str, *, retrying: bool) -> str:
-    offer_id = app.base.base.safe_excerpt(item.get("id") or "-", 70)
+    offer_id = _short_offer_id(item.get("id"))
     job_id = app.base.base.safe_excerpt(item.get("job_id") or "-", 64)
     minutes = max(1, verdict["seconds_left"] // 60)
-    tail = "期限内は自動で再試行します。" if retrying else "この候補はfail-closedで見送ります。"
+    reason_label = _retry_reason_label(reason)
+
+    if retrying:
+        return "\n".join([
+            "⚪ tclk/1 候補を自動確認中（操作不要）",
+            f"job: a2a/{job_id} | 残り約{minutes}分",
+            f"保留理由: {reason_label}",
+            "期限内はBOTが自動再試行します。",
+            f"ID: {offer_id}",
+            "accept・署名・投稿はしていません。",
+        ])
+
     return "\n".join([
-        "🟡 tclk/1 協業候補 — 自動確認はfail-closed",
+        "🟡 tclk/1 協業候補 — fail-closedで見送り",
         f"job: a2a/{job_id} | 残り約{minutes}分",
-        f"AUTO-RESOLVE: BLOCKED / {app.base.base.safe_excerpt(reason, 80)}",
-        tail,
+        f"理由: {reason_label}",
         f"ID: {offer_id}",
-        "あなたがChatGPTへ貼る必要はありません。accept・署名・投稿はしていません。",
+        "accept・署名・投稿はしていません。",
     ])
 
 
