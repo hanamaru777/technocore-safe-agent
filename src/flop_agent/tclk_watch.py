@@ -67,10 +67,30 @@ def official_offer(text: object) -> dict | None:
 
 
 def _tclk_state(state: dict) -> dict | None:
-    data = state.setdefault("tclk", {"schema_version": 1, "offers": {}, "seen_offer_ids": []})
-    if not isinstance(data, dict) or data.get("schema_version") != 1 or not isinstance(data.get("offers"), dict) or not isinstance(data.get("seen_offer_ids"), list):
+    data = state.setdefault(
+        "tclk",
+        {"schema_version": 1, "offers": {}, "seen_offer_ids": [], "revision": 0},
+    )
+    if (
+        not isinstance(data, dict)
+        or data.get("schema_version") != 1
+        or not isinstance(data.get("offers"), dict)
+        or not isinstance(data.get("seen_offer_ids"), list)
+    ):
+        return None
+    data.setdefault("revision", 0)
+    if type(data.get("revision")) is not int or data["revision"] < 0:
         return None
     return data
+
+
+def tclk_revision(state: dict) -> int:
+    """Return the monotonic retained-offer revision; old states safely start at zero."""
+    data = state.get("tclk")
+    if not isinstance(data, dict):
+        return 0
+    value = data.get("revision", 0)
+    return value if type(value) is int and value >= 0 else 0
 
 
 def observe_offer(state: dict, message: dict, transport_from: str | None) -> dict | None:
@@ -116,6 +136,7 @@ def observe_offer(state: dict, message: dict, transport_from: str | None) -> dic
     if len(data["offers"]) > 250:
         oldest = next(iter(data["offers"]))
         del data["offers"][oldest]
+    data["revision"] += 1
     return record
 
 
