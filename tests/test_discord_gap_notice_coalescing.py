@@ -126,6 +126,26 @@ def test_unclassified_gap_falls_back_to_legacy_coalescing(monkeypatch, tmp_path)
     assert not any("lane判定不能" in notice for notice in control.system_notices())
 
 
+def test_lane_baseline_migration_drops_only_legacy_pending_presentation(monkeypatch, tmp_path):
+    control = setup_runtime(monkeypatch, tmp_path)
+    ui = discord_control.default_ui_state()
+    ui["last_gap_count"] = 7
+    ui["pending_gap_delta"] = 6
+    ui["last_core_gap_count"] = None
+    ui["last_optional_gap_count"] = None
+    discord_control.save_ui_state(ui)
+
+    set_gap_counts(7, core=2, optional=5, core_messages=20, optional_messages=50)
+    control.ensure_baseline()
+
+    migrated = discord_control.load_ui_state()
+    assert migrated["last_core_gap_count"] == 2
+    assert migrated["last_optional_gap_count"] == 5
+    assert migrated["pending_gap_delta"] == 0
+    assert migrated["pending_optional_gap_delta"] == 0
+    assert control.system_notices() == []
+
+
 def test_empty_history_explains_that_passive_observation_is_excluded(monkeypatch, tmp_path):
     setup_runtime(monkeypatch, tmp_path)
     message = discord_control.history_message()
