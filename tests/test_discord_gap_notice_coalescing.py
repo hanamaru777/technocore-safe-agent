@@ -126,6 +126,21 @@ def test_unclassified_gap_falls_back_to_legacy_coalescing(monkeypatch, tmp_path)
     assert not any("lane判定不能" in notice for notice in control.system_notices())
 
 
+def test_partial_lane_classification_keeps_unexplained_gap_fail_safe(monkeypatch, tmp_path):
+    control = setup_runtime(monkeypatch, tmp_path)
+    control.ensure_baseline()
+
+    # Aggregate says four new unrecoverable gap events while lane counters
+    # explain only one optional event. The other three must not disappear.
+    set_gap_counts(4, optional=1, optional_messages=7)
+    notices = control.system_notices()
+
+    assert any("lane判定不能" in notice and "未通知gap: +3" in notice for notice in notices)
+    assert not any("core通信" in notice for notice in notices)
+    ui = discord_control.load_ui_state()
+    assert ui["pending_optional_gap_delta"] == 1
+
+
 def test_lane_baseline_migration_drops_only_legacy_pending_presentation(monkeypatch, tmp_path):
     control = setup_runtime(monkeypatch, tmp_path)
     ui = discord_control.default_ui_state()
