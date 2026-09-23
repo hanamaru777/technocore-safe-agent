@@ -178,6 +178,7 @@ class _FakeContext:
 
 def test_worker_supervises_only_maintenance_process(monkeypatch):
     monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: False)
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_CLEAR_STABLE_SECONDS", 0)
     context = _FakeContext()
     monkeypatch.setattr(
         observer_resident_isolation.multiprocessing,
@@ -205,6 +206,7 @@ def test_worker_supervises_only_maintenance_process(monkeypatch):
 
 def test_unexpected_maintenance_exit_fails_closed(monkeypatch):
     monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", lambda: False)
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_CLEAR_STABLE_SECONDS", 0)
     context = _FakeContext()
     original_process = context.Process
 
@@ -234,6 +236,7 @@ def test_parent_pressure_lifecycle_preempts_and_restarts_fresh_child(monkeypatch
         return True
 
     monkeypatch.setattr(observer_resident_isolation, "_write_pressure_heartbeat", pressure_heartbeat)
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_CLEAR_STABLE_SECONDS", 0)
     # Advance one supervisor turn at a time, without wall-clock pressure timing.
     monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_RECHECK_SECONDS", 0)
     monkeypatch.setattr(observer_resident_isolation, "CHECK_INTERVAL_SECONDS", 0)
@@ -278,6 +281,7 @@ def test_pressure_preemption_uses_bounded_terminate_and_never_overlaps(monkeypat
         return True
 
     monkeypatch.setattr(observer_resident_isolation, "_write_pressure_heartbeat", pressure_heartbeat)
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_CLEAR_STABLE_SECONDS", 0)
     monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_RECHECK_SECONDS", 0)
     monkeypatch.setattr(observer_resident_isolation, "CHECK_INTERVAL_SECONDS", 0)
 
@@ -306,6 +310,39 @@ def test_pressure_preemption_uses_bounded_terminate_and_never_overlaps(monkeypat
 
     asyncio.run(run())
     assert len(context.processes) == 1
+
+
+def test_brief_pressure_clear_does_not_admit_maintenance(monkeypatch):
+    context = _FakeContext()
+    monkeypatch.setattr(observer_resident_isolation.multiprocessing, "get_context", lambda _: context)
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_RECHECK_SECONDS", 0)
+    monkeypatch.setattr(observer_resident_isolation, "_PRESSURE_CLEAR_STABLE_SECONDS", 3600)
+    monkeypatch.setattr(observer_resident_isolation, "CHECK_INTERVAL_SECONDS", 0)
+
+    async def pressure_heartbeat():
+        return True
+
+    monkeypatch.setattr(observer_resident_isolation, "_write_pressure_heartbeat", pressure_heartbeat)
+
+    async def run():
+        stop = asyncio.Event()
+        values = iter([True, False, True, False])
+
+        def pressure():
+            try:
+                value = next(values)
+            except StopIteration:
+                stop.set()
+                return True
+            if value is True and context.processes:
+                pytest.fail("brief clear must not admit maintenance before pressure returns")
+            return value
+
+        monkeypatch.setattr(observer_resident_isolation, "_maintenance_pressure_high", pressure)
+        await observer_resident_isolation.resident_worker({}, stop)
+
+    asyncio.run(run())
+    assert context.processes == []
 
 
 def test_pressure_heartbeat_delegates_to_lightweight_resident_writer(monkeypatch):

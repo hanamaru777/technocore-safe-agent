@@ -29,6 +29,7 @@ _MAX_MEMORY_FULL_AVG10 = 5.0
 _MAX_IO_FULL_AVG10 = 10.0
 _PRESSURE_RECHECK_SECONDS = 15.0
 _PRESSURE_HEARTBEAT_SECONDS = 60.0
+_PRESSURE_CLEAR_STABLE_SECONDS = 60.0
 _INSTALLED = False
 
 
@@ -143,6 +144,7 @@ async def resident_worker(
     loop = asyncio.get_running_loop()
     next_pressure_check = 0.0
     next_pressure_heartbeat = 0.0
+    pressure_clear_since = None
     try:
         while not stop.is_set():
             if maintenance is not None and not preempted and maintenance.exitcode is not None:
@@ -161,12 +163,21 @@ async def resident_worker(
                         maintenance_stop = None
                         preempted = False
                 if pressured:
+                    pressure_clear_since = None
                     if loop.time() >= next_pressure_heartbeat:
                         await _write_pressure_heartbeat()
                         next_pressure_heartbeat = loop.time() + _PRESSURE_HEARTBEAT_SECONDS
                 else:
                     next_pressure_heartbeat = 0.0
-                if maintenance is None and not pressured and not stop.is_set():
+                    if pressure_clear_since is None:
+                        pressure_clear_since = loop.time()
+                if (
+                    maintenance is None
+                    and not pressured
+                    and pressure_clear_since is not None
+                    and loop.time() - pressure_clear_since >= _PRESSURE_CLEAR_STABLE_SECONDS
+                    and not stop.is_set()
+                ):
                     maintenance_stop = context.Event()
                     maintenance = context.Process(
                         target=_maintenance_process,
