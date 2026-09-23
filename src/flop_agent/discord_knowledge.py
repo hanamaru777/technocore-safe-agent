@@ -1,6 +1,7 @@
 """Discord overlay for versioned source-backed onboarding knowledge."""
 from __future__ import annotations
 
+import json
 import time
 
 from . import discord_collaboration as base
@@ -14,6 +15,54 @@ _LAST_AUDIT_SYNC = 0.0
 _LAST_TCLK_NOTICE_POLL = 0.0
 _TCLK_NOTICE_BASELINED = False
 _TCLK_NOTICE_SEEN: set[str] = set()
+_TCLK_STATE_CACHE_REVISION: int | None = None
+_TCLK_STATE_CACHE: dict | None = None
+
+
+def _observer_tclk_revision() -> int | None:
+    """Read only the tiny Observer heartbeat; missing revision falls back safely."""
+    try:
+        payload = json.loads(observer.heartbeat_path().read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        return None
+    value = payload.get("tclk_revision")
+    return value if type(value) is int and value >= 0 else None
+
+
+def _periodic_tclk_state() -> dict:
+    """Cache only the small tclk subtree and full-load Observer state on revision change."""
+    global _TCLK_STATE_CACHE_REVISION, _TCLK_STATE_CACHE
+    revision = _observer_tclk_revision()
+    if (
+        revision is not None
+        and _TCLK_STATE_CACHE is not None
+        and _TCLK_STATE_CACHE_REVISION == revision
+    ):
+        return _TCLK_STATE_CACHE
+
+    try:
+        observed = observer.load_state()
+    except RuntimeError:
+        return {}
+
+    data = observed.get("tclk")
+    snapshot = {"tclk": data} if isinstance(data, dict) else {}
+
+    # Old/missing heartbeat revision must retain the legacy full-load behavior so
+    # a stale cache can never hide a new validated offer during rolling upgrade.
+    if revision is None:
+        return snapshot
+
+    # Observer persists the full state before its tiny heartbeat. If a read races
+    # those two atomic writes, fail closed for this poll and retry next interval.
+    if tclk_watch.tclk_revision(observed) != revision:
+        return {}
+
+    _TCLK_STATE_CACHE_REVISION = revision
+    _TCLK_STATE_CACHE = snapshot
+    return snapshot
 
 
 def _summary_message() -> str:
@@ -134,7 +183,7 @@ def _tclk_best_message() -> str:
     if status.get("ready") is not True:
         return f"🔴 tclk runtime unavailable/degraded ({status.get('reason', 'unknown')}). No offer state was changed."
     try:
-        items = tclk_watch.opportunities(observer.load_state())
+        items = tclk_watch.opportunities(_periodic_tclk_state())
     except RuntimeError:
         items = []
     rows = tclk_triage.review_candidates(items)
