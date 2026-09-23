@@ -112,10 +112,11 @@ def test_issue423_pressure_v1_keeps_continuity_gate() -> None:
 
 def test_issue423_pressure_v1_no_raw_cmdline_or_env_output() -> None:
     text = _text()
+    lower = text.lower()
     assert "RAW_CMDLINE_OUTPUT=NO" in text
     assert "PROCESS_ENV_OUTPUT=NO" in text
-    assert "cmdline" not in text.lower()
-    assert "environ" not in text.lower()
+    assert "/cmdline" not in lower
+    assert "/environ" not in lower
 
 
 def test_issue423_pressure_v1_safety_tail() -> None:
