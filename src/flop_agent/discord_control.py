@@ -694,35 +694,35 @@ class Control:
         elif current_gap > previous_gap:
             aggregate_delta = current_gap - int(previous_gap)
             breakdown = _gap_breakdown()
-            lane_classified = False
+            classified_delta = 0
             if breakdown is not None:
                 previous_core = ui.get("last_core_gap_count")
                 previous_optional = ui.get("last_optional_gap_count")
                 if isinstance(previous_core, int) and isinstance(previous_optional, int):
                     core_delta = max(0, breakdown["core_events"] - previous_core)
                     optional_delta = max(0, breakdown["optional_events"] - previous_optional)
-                    if core_delta or optional_delta:
-                        lane_classified = True
-                        if core_delta:
-                            notices.append(
-                                "🔴 FLOP Agent core通信の未回復欠落を検出\n\n"
-                                f"新しいcore gap: +{core_delta}件\n"
-                                f"core累計: {breakdown['core_events']}件 / "
-                                f"{breakdown['core_messages']} messages\n"
-                                f"最終監視: {snapshot['last_refresh_age']}\n\n"
-                                "次にやること: /status"
-                            )
-                        if optional_delta:
-                            ui["pending_optional_gap_delta"] = int(
-                                ui.get("pending_optional_gap_delta", 0)
-                            ) + optional_delta
+                    classified_delta = min(aggregate_delta, core_delta + optional_delta)
+                    if core_delta:
+                        notices.append(
+                            "🔴 FLOP Agent core通信の未回復欠落を検出\n\n"
+                            f"新しいcore gap: +{core_delta}件\n"
+                            f"core累計: {breakdown['core_events']}件 / "
+                            f"{breakdown['core_messages']} messages\n"
+                            f"最終監視: {snapshot['last_refresh_age']}\n\n"
+                            "次にやること: /status"
+                        )
+                    if optional_delta:
+                        ui["pending_optional_gap_delta"] = int(
+                            ui.get("pending_optional_gap_delta", 0)
+                        ) + optional_delta
                 ui["last_core_gap_count"] = breakdown["core_events"]
                 ui["last_optional_gap_count"] = breakdown["optional_events"]
 
-            if not lane_classified:
-                # Migration / unreadable rich-state fallback: retain the proven
-                # legacy coalescing behavior rather than silently suppressing gaps.
-                ui["pending_gap_delta"] = int(ui.get("pending_gap_delta", 0)) + aggregate_delta
+            unexplained_delta = max(0, aggregate_delta - classified_delta)
+            if unexplained_delta:
+                # Migration / unreadable / partially-classified fallback: never
+                # suppress an aggregate gap that the lane counters cannot explain.
+                ui["pending_gap_delta"] = int(ui.get("pending_gap_delta", 0)) + unexplained_delta
             ui["last_gap_count"] = current_gap
         elif current_gap < int(previous_gap or 0):
             ui["last_gap_count"] = current_gap
