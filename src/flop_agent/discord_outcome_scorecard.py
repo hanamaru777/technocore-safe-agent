@@ -320,8 +320,16 @@ def _digest(_control) -> str:
             0,
             breakdown["optional_events"] - int(baseline["optional_events"]),
         )
-        classified = min(aggregate_gaps, new_core_gaps + new_optional_gaps)
-        unexplained_gaps = max(0, aggregate_gaps - classified)
+        # Authoritative unrecoverable lane counters decide user-facing severity.
+        # Aggregate message_gaps can contain legacy/recoverable presentation noise
+        # and must not be re-labeled "lane unknown" when the lane state is readable.
+        unexplained_gaps = 0
+    elif breakdown is not None:
+        # Readable lane state with no lane baseline is a presentation migration.
+        # Baseline it below without replaying aggregate history as a fresh alert.
+        new_core_gaps = 0
+        new_optional_gaps = 0
+        unexplained_gaps = 0
     else:
         new_core_gaps = 0
         new_optional_gaps = 0
