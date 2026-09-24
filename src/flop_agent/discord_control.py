@@ -694,14 +694,12 @@ class Control:
         elif current_gap > previous_gap:
             aggregate_delta = current_gap - int(previous_gap)
             breakdown = _gap_breakdown()
-            classified_delta = 0
             if breakdown is not None:
                 previous_core = ui.get("last_core_gap_count")
                 previous_optional = ui.get("last_optional_gap_count")
                 if isinstance(previous_core, int) and isinstance(previous_optional, int):
                     core_delta = max(0, breakdown["core_events"] - previous_core)
                     optional_delta = max(0, breakdown["optional_events"] - previous_optional)
-                    classified_delta = min(aggregate_delta, core_delta + optional_delta)
                     if core_delta:
                         notices.append(
                             "🔴 FLOP Agent core通信の未回復欠落を検出\n\n"
@@ -715,14 +713,21 @@ class Control:
                         ui["pending_optional_gap_delta"] = int(
                             ui.get("pending_optional_gap_delta", 0)
                         ) + optional_delta
+                else:
+                    # Readable authoritative lane counters with no prior lane
+                    # baseline means presentation migration, not a proven new
+                    # unrecoverable event. Baseline them without replaying legacy
+                    # aggregate history as a user-facing warning.
+                    ui["pending_gap_delta"] = 0
+                    ui["pending_optional_gap_delta"] = 0
                 ui["last_core_gap_count"] = breakdown["core_events"]
                 ui["last_optional_gap_count"] = breakdown["optional_events"]
-
-            unexplained_delta = max(0, aggregate_delta - classified_delta)
-            if unexplained_delta:
-                # Migration / unreadable / partially-classified fallback: never
-                # suppress an aggregate gap that the lane counters cannot explain.
-                ui["pending_gap_delta"] = int(ui.get("pending_gap_delta", 0)) + unexplained_delta
+            elif aggregate_delta:
+                # Only fall back to the aggregate counter when the authoritative
+                # lane breakdown itself is unavailable. This remains fail-safe for
+                # unreadable rich state without treating recoverable/legacy
+                # aggregate-only movement as an unrecoverable-lane incident.
+                ui["pending_gap_delta"] = int(ui.get("pending_gap_delta", 0)) + aggregate_delta
             ui["last_gap_count"] = current_gap
         elif current_gap < int(previous_gap or 0):
             ui["last_gap_count"] = current_gap
