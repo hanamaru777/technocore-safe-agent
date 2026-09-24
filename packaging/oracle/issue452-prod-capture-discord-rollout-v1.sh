@@ -73,6 +73,7 @@ print('|'.join([
 PY
 }
 
+STATE_CURSOR=''
 require_state() {
   local phase=$1 line ce cm be bm cursor health age
   line=$(state_line)
@@ -80,13 +81,15 @@ require_state() {
   echo "STATE=$phase CORE=$ce/$cm BRIDGE=$be/$bm LOBBY_CURSOR=$cursor HEALTH=$health AGE=$age"
   [[ "$ce" == "$EXPECTED_CORE_EVENTS" && "$cm" == "$EXPECTED_CORE_MESSAGES" ]] || stop_rollout "${phase}_protected_core_changed"
   [[ "$be" == "$EXPECTED_BRIDGE_EVENTS" && "$bm" == "$EXPECTED_BRIDGE_MESSAGES" ]] || stop_rollout "${phase}_startup_bridge_changed"
-  "$APP_PY" - "$age" <<'PY' || exit 41
+  if ! "$APP_PY" - "$age" <<'PY'
 import sys
 age=float(sys.argv[1])
 raise SystemExit(0 if 0 <= age <= 120 else 1)
 PY
-  [[ $? -eq 0 ]] || stop_rollout "${phase}_observer_stale"
-  printf '%s\n' "$cursor"
+  then
+    stop_rollout "${phase}_observer_stale"
+  fi
+  STATE_CURSOR=$cursor
 }
 
 echo '--- PRE REPO / SERVICES ---'
@@ -111,7 +114,8 @@ echo "PRE_SERVICE=DISCORD SNAPSHOT=$DIS_PRE"
 [[ "$SIG_PRE" == "active|running|$PRE_SIGNER_PID|0|success" ]] || stop_rollout signer_baseline_changed
 [[ "$DIS_PRE" == "active|running|$PRE_DISCORD_PID|0|success" ]] || stop_rollout discord_baseline_changed
 
-PRE_CURSOR=$(require_state PRE | tail -n1)
+require_state PRE
+PRE_CURSOR=$STATE_CURSOR
 
 echo '--- FETCH / TARGET GATES ---'
 git_owner fetch --no-tags origin main
@@ -199,7 +203,8 @@ for phase in T0 T30 T60 T90 T120; do
   [[ "$(snapshot technocore-safe-agent-signer.service)" == "$SIG_PRE" ]] || stop_rollout "${phase}_signer_changed"
   [[ "$(snapshot technocore-safe-agent-lobby-capture.service)" == "active|running|$NEW_CAPTURE_PID|0|success" ]] || stop_rollout "${phase}_capture_unstable"
   [[ "$(snapshot technocore-safe-agent-discord.service)" == "active|running|$NEW_DISCORD_PID|0|success" ]] || stop_rollout "${phase}_discord_unstable"
-  CURSOR=$(require_state "$phase" | tail -n1)
+  require_state "$phase"
+  CURSOR=$STATE_CURSOR
   [[ "$CURSOR" -ge "$LAST_CURSOR" ]] || stop_rollout "${phase}_lobby_cursor_regressed"
   LAST_CURSOR=$CURSOR
 done
@@ -210,10 +215,16 @@ IFS='|' read -r _ _ _ _ _ FINAL_HEALTH FINAL_AGE <<<"$FINAL_LINE"
 [[ "$FINAL_HEALTH" == ok ]] || stop_rollout final_observer_not_ok
 
 echo '--- FINAL AUXILIARY HEALTH ---'
-echo "AIRDROP_MONITOR_TIMER_ACTIVE=$(systemctl is-active technocore-safe-agent-airdrop-monitor.timer 2>/dev/null || true)"
-echo "AIRDROP_MONITOR_TIMER_ENABLED=$(systemctl is-enabled technocore-safe-agent-airdrop-monitor.timer 2>/dev/null || true)"
-echo "AIRDROP_NOTIFIER_TIMER_ACTIVE=$(systemctl is-active technocore-safe-agent-airdrop-notifier.timer 2>/dev/null || true)"
-echo "AIRDROP_NOTIFIER_TIMER_ENABLED=$(systemctl is-enabled technocore-safe-agent-airdrop-notifier.timer 2>/dev/null || true)"
+MON_ACTIVE=$(systemctl is-active technocore-safe-agent-airdrop-monitor.timer 2>/dev/null || true)
+MON_ENABLED=$(systemctl is-enabled technocore-safe-agent-airdrop-monitor.timer 2>/dev/null || true)
+NOT_ACTIVE=$(systemctl is-active technocore-safe-agent-airdrop-notifier.timer 2>/dev/null || true)
+NOT_ENABLED=$(systemctl is-enabled technocore-safe-agent-airdrop-notifier.timer 2>/dev/null || true)
+echo "AIRDROP_MONITOR_TIMER_ACTIVE=$MON_ACTIVE"
+echo "AIRDROP_MONITOR_TIMER_ENABLED=$MON_ENABLED"
+echo "AIRDROP_NOTIFIER_TIMER_ACTIVE=$NOT_ACTIVE"
+echo "AIRDROP_NOTIFIER_TIMER_ENABLED=$NOT_ENABLED"
+[[ "$MON_ACTIVE" == active && "$MON_ENABLED" == enabled ]] || stop_rollout airdrop_monitor_timer_not_ready
+[[ "$NOT_ACTIVE" == active && "$NOT_ENABLED" == enabled ]] || stop_rollout airdrop_notifier_timer_not_ready
 
 echo 'CAPTURE_RESTARTS_AUTHORIZED=1'
 echo 'DISCORD_RESTARTS_AUTHORIZED=1'
