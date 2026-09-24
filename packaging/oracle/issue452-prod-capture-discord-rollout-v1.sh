@@ -25,6 +25,15 @@ stop_rollout() {
   exit 0
 }
 
+on_error() {
+  local rc=$?
+  trap - ERR
+  echo "PROD452V1=ERROR:rc_$rc"
+  echo 'DO_NOT_RERUN=YES'
+  exit 0
+}
+trap on_error ERR
+
 [[ $EUID -eq 0 ]] || stop_rollout not_root
 [[ -d "$APP/.git" && -x "$APP_PY" && -f "$OBS" ]] || stop_rollout required_path_missing
 OWNER=$(stat -c %U "$APP/.git" 2>/dev/null || true)
@@ -109,6 +118,10 @@ echo "PRE_SERVICE=RESIDENT SNAPSHOT=$RES_PRE"
 echo "PRE_SERVICE=CAPTURE SNAPSHOT=$CAP_PRE"
 echo "PRE_SERVICE=SIGNER SNAPSHOT=$SIG_PRE"
 echo "PRE_SERVICE=DISCORD SNAPSHOT=$DIS_PRE"
+META_ACTIVE=$(systemctl show technocore-safe-agent-metadata-block.service -p ActiveState --value 2>/dev/null || true)
+META_RESULT=$(systemctl show technocore-safe-agent-metadata-block.service -p Result --value 2>/dev/null || true)
+echo "PRE_METADATA_BLOCK ACTIVE=$META_ACTIVE RESULT=$META_RESULT"
+[[ "$META_ACTIVE" == active && "$META_RESULT" == success ]] || stop_rollout metadata_block_baseline_changed
 [[ "$RES_PRE" == "active|running|$PRE_RESIDENT_PID|0|success" ]] || stop_rollout resident_baseline_changed
 [[ "$CAP_PRE" == "active|running|$PRE_CAPTURE_PID|0|success" ]] || stop_rollout capture_baseline_changed
 [[ "$SIG_PRE" == "active|running|$PRE_SIGNER_PID|0|success" ]] || stop_rollout signer_baseline_changed
@@ -215,6 +228,10 @@ IFS='|' read -r _ _ _ _ _ FINAL_HEALTH FINAL_AGE <<<"$FINAL_LINE"
 [[ "$FINAL_HEALTH" == ok ]] || stop_rollout final_observer_not_ok
 
 echo '--- FINAL AUXILIARY HEALTH ---'
+FINAL_META_ACTIVE=$(systemctl show technocore-safe-agent-metadata-block.service -p ActiveState --value 2>/dev/null || true)
+FINAL_META_RESULT=$(systemctl show technocore-safe-agent-metadata-block.service -p Result --value 2>/dev/null || true)
+echo "FINAL_METADATA_BLOCK ACTIVE=$FINAL_META_ACTIVE RESULT=$FINAL_META_RESULT"
+[[ "$FINAL_META_ACTIVE" == active && "$FINAL_META_RESULT" == success ]] || stop_rollout metadata_block_changed
 MON_ACTIVE=$(systemctl is-active technocore-safe-agent-airdrop-monitor.timer 2>/dev/null || true)
 MON_ENABLED=$(systemctl is-enabled technocore-safe-agent-airdrop-monitor.timer 2>/dev/null || true)
 NOT_ACTIVE=$(systemctl is-active technocore-safe-agent-airdrop-notifier.timer 2>/dev/null || true)
