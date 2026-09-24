@@ -197,7 +197,7 @@ def test_activity_message_surfaces_public_artifact(monkeypatch):
     assert "公開artifact: 1" in rendered
 
 
-def test_digest_keeps_gap_visibility_but_reports_non_action_reason(monkeypatch):
+def test_digest_marks_new_core_gap_abnormal_and_lane_explicit(monkeypatch):
     activity = {
         **BASE_ACTIVITY,
         "signed_direct_requests": 2,
@@ -214,24 +214,116 @@ def test_digest_keeps_gap_visibility_but_reports_non_action_reason(monkeypatch):
         "returning_did_encounters": 3,
         "message_gaps": 12,
     })
+    monkeypatch.setattr(score.base, "_gap_breakdown", lambda: {
+        "core_events": 5,
+        "core_messages": 55,
+        "optional_events": 7,
+        "optional_messages": 70,
+    })
     monkeypatch.setattr(score.base, "load_ui_state", lambda: {
         "digest_baseline": {
             "unique_dids_discovered": 10,
             "returning_did_encounters": 1,
             "message_gaps": 10,
+            "core_events": 4,
+            "optional_events": 6,
         },
-        "pending_gap_delta": 5,
+        "pending_gap_delta": 0,
+        "pending_optional_gap_delta": 0,
     })
     saved = {}
     monkeypatch.setattr(score.base, "save_ui_state", lambda state: saved.update(state))
     rendered = score._digest(None)
-    assert "6時間アウトカム" in rendered
-    assert "新しいgap +2" in rendered
+    assert "🔴 FLOP Agent 6時間アウトカム（異常）" in rendered
+    assert "通信: core未回復 +1 / optional lane未回復 +1" in rendered
     assert "主な非アクション理由: 初回DIDのためreview-only" in rendered
     assert "協業完了 2 / 公開artifact 1" in rendered
     assert saved["pending_gap_delta"] == 0
+    assert saved["pending_optional_gap_delta"] == 0
     assert saved["digest_baseline"]["message_gaps"] == 12
+    assert saved["digest_baseline"]["core_events"] == 5
     assert "投稿あり" not in rendered
+
+
+def test_digest_optional_only_gap_stays_normal(monkeypatch):
+    activity = {
+        **BASE_ACTIVITY,
+        "signed_direct_requests": 0,
+        "acked_replies": 0,
+        "active_trusted": 1,
+        "collaboration_active": 0,
+        "collaboration_completed": 0,
+        "public_artifacts": 1,
+        "oldest_unresolved_direct": None,
+    }
+    monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
+    monkeypatch.setattr(score.base, "_observer_metrics", lambda: {
+        "unique_dids_discovered": 20,
+        "returning_did_encounters": 3,
+        "message_gaps": 11,
+    })
+    monkeypatch.setattr(score.base, "_gap_breakdown", lambda: {
+        "core_events": 4,
+        "core_messages": 40,
+        "optional_events": 7,
+        "optional_messages": 70,
+    })
+    monkeypatch.setattr(score.base, "load_ui_state", lambda: {
+        "digest_baseline": {
+            "unique_dids_discovered": 20,
+            "returning_did_encounters": 3,
+            "message_gaps": 10,
+            "core_events": 4,
+            "optional_events": 6,
+        },
+        "pending_gap_delta": 0,
+        "pending_optional_gap_delta": 1,
+    })
+    saved = {}
+    monkeypatch.setattr(score.base, "save_ui_state", lambda state: saved.update(state))
+    rendered = score._digest(None)
+    assert "🟢 FLOP Agent 6時間アウトカム（正常）" in rendered
+    assert "通信: core未回復 +0 / optional lane未回復 +1" in rendered
+    assert "結論: 対応不要。そのまま稼働中。" in rendered
+
+
+def test_digest_unclassified_gap_remains_visible(monkeypatch):
+    activity = {
+        **BASE_ACTIVITY,
+        "signed_direct_requests": 0,
+        "acked_replies": 0,
+        "active_trusted": 1,
+        "collaboration_active": 0,
+        "collaboration_completed": 0,
+        "public_artifacts": 1,
+        "oldest_unresolved_direct": None,
+    }
+    monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
+    monkeypatch.setattr(score.base, "_observer_metrics", lambda: {
+        "unique_dids_discovered": 20,
+        "returning_did_encounters": 3,
+        "message_gaps": 15,
+    })
+    monkeypatch.setattr(score.base, "_gap_breakdown", lambda: {
+        "core_events": 4,
+        "core_messages": 40,
+        "optional_events": 6,
+        "optional_messages": 60,
+    })
+    monkeypatch.setattr(score.base, "load_ui_state", lambda: {
+        "digest_baseline": {
+            "unique_dids_discovered": 20,
+            "returning_did_encounters": 3,
+            "message_gaps": 10,
+        },
+        "pending_gap_delta": 5,
+        "pending_optional_gap_delta": 0,
+    })
+    monkeypatch.setattr(score.base, "save_ui_state", lambda _state: None)
+    rendered = score._digest(None)
+    assert "🟡 FLOP Agent 6時間アウトカム（確認あり）" in rendered
+    assert "通信: lane判定不能 +5" in rendered
+    assert "確認事項があります。/status を確認してください。" in rendered
 
 
 def test_scorecard_has_no_network_signing_or_protocol_write_surface():

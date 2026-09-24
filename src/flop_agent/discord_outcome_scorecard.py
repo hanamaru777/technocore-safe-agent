@@ -295,26 +295,80 @@ def _digest(_control) -> str:
     activity = _activity_snapshot()
     snapshot = activity["snapshot"]
     current_metrics = base._observer_metrics()
+    breakdown = base._gap_breakdown()
     ui = base.load_ui_state()
     baseline = ui.get("digest_baseline") or {
         **current_metrics,
         "at": datetime.now(UTC).isoformat(),
     }
-    new_gaps = max(
+    aggregate_gaps = max(
         0,
         current_metrics["message_gaps"] - int(baseline.get("message_gaps", 0)),
     )
-    ui["digest_baseline"] = {**current_metrics, "at": datetime.now(UTC).isoformat()}
+
+    lane_baseline_available = (
+        breakdown is not None
+        and isinstance(baseline.get("core_events"), int)
+        and isinstance(baseline.get("optional_events"), int)
+    )
+    if lane_baseline_available:
+        new_core_gaps = max(
+            0,
+            breakdown["core_events"] - int(baseline["core_events"]),
+        )
+        new_optional_gaps = max(
+            0,
+            breakdown["optional_events"] - int(baseline["optional_events"]),
+        )
+        classified = min(aggregate_gaps, new_core_gaps + new_optional_gaps)
+        unexplained_gaps = max(0, aggregate_gaps - classified)
+    else:
+        new_core_gaps = 0
+        new_optional_gaps = 0
+        unexplained_gaps = aggregate_gaps
+
+    next_baseline = {
+        **current_metrics,
+        "at": datetime.now(UTC).isoformat(),
+    }
+    if breakdown is not None:
+        next_baseline.update(breakdown)
+    ui["digest_baseline"] = next_baseline
     ui["pending_gap_delta"] = 0
+    ui["pending_optional_gap_delta"] = 0
     base.save_ui_state(ui)
 
-    attention = snapshot["critical"] + int(activity.get("oldest_unresolved_direct") is not None)
-    if snapshot["problems"]:
-        icon, title, conclusion = "🔴", "異常", "対応が必要です。/status を確認してください。"
-    elif attention or new_gaps:
-        icon, title, conclusion = "🟡", "確認あり", "確認事項があります。/status を確認してください。"
+    attention = snapshot["critical"] + int(
+        activity.get("oldest_unresolved_direct") is not None
+    )
+    if snapshot["problems"] or new_core_gaps:
+        icon, title, conclusion = (
+            "🔴",
+            "異常",
+            "core監視またはAgent状態に確認事項があります。/status を確認してください。",
+        )
+    elif attention or unexplained_gaps:
+        icon, title, conclusion = (
+            "🟡",
+            "確認あり",
+            "確認事項があります。/status を確認してください。",
+        )
     else:
-        icon, title, conclusion = "🟢", "正常", "対応不要。そのまま稼働中。"
+        icon, title, conclusion = (
+            "🟢",
+            "正常",
+            "対応不要。そのまま稼働中。",
+        )
+
+    if lane_baseline_available:
+        gap_line = (
+            f"通信: core未回復 +{new_core_gaps} / "
+            f"optional lane未回復 +{new_optional_gaps}"
+        )
+        if unexplained_gaps:
+            gap_line += f" / lane判定不能 +{unexplained_gaps}"
+    else:
+        gap_line = f"通信: lane判定不能 +{unexplained_gaps}"
 
     recent = activity.get("interactions", [])[-3:]
     if recent:
@@ -335,7 +389,8 @@ def _digest(_control) -> str:
         f"{_relationship_line(activity)}\n"
         f"{_durable_line(activity)}\n"
         f"自動投稿 {activity['posts']}（24h / safety cap 6、目標ではありません） / "
-        f"新しいgap +{new_gaps} / queue {snapshot['auto'].get('queued', 0)}\n"
+        f"queue {snapshot['auto'].get('queued', 0)}\n"
+        f"{gap_line}\n"
         f"{_oldest_line(activity)}\n"
         f"主な非アクション理由: {_non_action_reason(activity)}\n"
         f"最終監視: {snapshot['last_refresh_age']}\n"
