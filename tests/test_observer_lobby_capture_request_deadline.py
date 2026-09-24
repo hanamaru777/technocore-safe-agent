@@ -104,3 +104,55 @@ def test_deadline_overlay_remains_get_only_and_seedless():
     assert ".post(" not in source
     assert "subprocess" not in source
     assert "SIGN_SEED" not in source
+
+
+
+def test_export_deadline_preserves_complete_rows_as_partial(monkeypatch):
+    response = FakeResponse([
+        b'{"seq":11,"text":"a"}\n',
+        b'{"seq":12,"text":"b"}\n',
+    ])
+    client = FakeClient(response)
+    times = iter([0.0, 1.0, deadline.TOTAL_REQUEST_SECONDS + 0.1])
+    monkeypatch.setattr(deadline.time, "monotonic", lambda: next(times))
+
+    rows, retry, complete = deadline.bounded_fetch_export(client)
+
+    assert retry is None
+    assert complete is False
+    assert [row["seq"] for row in rows] == [11, 12]
+
+
+def test_export_deadline_without_complete_row_still_fails_closed(monkeypatch):
+    response = FakeResponse([b'{"seq":11,"text":"partial"'])
+    client = FakeClient(response)
+    times = iter([0.0, deadline.TOTAL_REQUEST_SECONDS + 0.1])
+    monkeypatch.setattr(deadline.time, "monotonic", lambda: next(times))
+
+    with pytest.raises(RuntimeError, match="capture_total_timeout"):
+        deadline.bounded_fetch_export(client)
+
+
+def test_export_complete_snapshot_is_marked_complete(monkeypatch):
+    response = FakeResponse([
+        b'{"seq":11,"text":"a"}\n{"seq":12,"text":"b"}\n',
+    ])
+    client = FakeClient(response)
+    monkeypatch.setattr(deadline.time, "monotonic", lambda: 0.0)
+
+    rows, retry, complete = deadline.bounded_fetch_export(client)
+
+    assert retry is None
+    assert complete is True
+    assert [row["seq"] for row in rows] == [11, 12]
+
+
+def test_export_rejects_non_monotonic_stream(monkeypatch):
+    response = FakeResponse([
+        b'{"seq":12,"text":"b"}\n{"seq":11,"text":"a"}\n',
+    ])
+    client = FakeClient(response)
+    monkeypatch.setattr(deadline.time, "monotonic", lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match="capture_invalid_export_order"):
+        deadline.bounded_fetch_export(client)

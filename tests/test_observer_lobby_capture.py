@@ -185,3 +185,56 @@ def test_capture_checks_protected_capacity_before_network_fetch():
     assert source.index("if row_count >= MAX_PROTECTED_ROWS") < source.index("_fetch_live(client, cursor)")
     assert "row_count = _prune(connection)" in source
     assert "protected_backlog_capacity" in source
+
+
+
+def test_normalize_export_result_supports_legacy_and_partial_shapes():
+    rows = [{"seq": 11, "text": "a"}]
+    assert capture._normalize_export_result((rows, None)) == (rows, None, True)
+    assert capture._normalize_export_result((rows, None, False)) == (rows, None, False)
+
+
+def test_incomplete_export_does_not_prove_hole_until_retained_start_is_past_gap():
+    cursor = 10
+    assert capture._export_proves_permanent_capture_hole(
+        cursor,
+        [{"seq": 9, "text": "old"}],
+        False,
+    ) is False
+    assert capture._export_proves_permanent_capture_hole(
+        cursor,
+        [],
+        False,
+    ) is False
+
+    # The first ordered retained row being past cursor+1 proves the missing prefix
+    # has already fallen out of the server snapshot even if we stop streaming later.
+    assert capture._export_proves_permanent_capture_hole(
+        cursor,
+        [{"seq": 15, "text": "retained-start"}],
+        False,
+    ) is True
+
+
+def test_complete_export_can_prove_permanent_hole():
+    assert capture._export_proves_permanent_capture_hole(
+        10,
+        [{"seq": 1, "text": "old"}],
+        True,
+    ) is True
+    assert capture._export_proves_permanent_capture_hole(10, [], True) is True
+
+
+def test_capture_runtime_error_label_preserves_semantic_reason():
+    assert capture._capture_error_label(RuntimeError("capture_total_timeout")) == "capture_total_timeout"
+    assert capture._capture_error_label(RuntimeError("capture_invalid_export")) == "capture_invalid_export"
+
+
+def test_capture_process_requires_export_proof_before_permanent_skip():
+    import inspect
+
+    source = inspect.getsource(capture.capture_process)
+    assert source.index("_export_proves_permanent_capture_hole") < source.index(
+        "_skip_permanent_capture_hole"
+    )
+    assert "capture_export_partial_before_gap" in source
