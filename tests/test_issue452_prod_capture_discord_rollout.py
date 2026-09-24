@@ -57,3 +57,15 @@ def test_issue452_uses_ff_only_and_exact_remote_main():
     assert 'git_owner merge --ff-only "$TARGET"' in source
     assert 'remote_main_moved' in source
     assert 'target_diff_unexpected' in source
+
+
+def test_issue452_consumes_unexpected_errors_and_preserves_metadata_block():
+    source = _source()
+    assert "set -Eeuo pipefail" in source
+    assert "trap on_error ERR" in source
+    assert "DO_NOT_RERUN=YES" in source
+    assert "PRE_METADATA_BLOCK" in source
+    assert "FINAL_METADATA_BLOCK" in source
+    assert "metadata_block_baseline_changed" in source
+    assert "metadata_block_changed" in source
+    assert "state_read_failed" in source
