@@ -27,6 +27,12 @@ LIVE_LIMIT = 200
 CAPTURE_READS_PER_MINUTE = 250
 CAPTURE_INTERVAL_SECONDS = 60.0 / CAPTURE_READS_PER_MINUTE
 MAX_ROWS = 300_000
+# The soft target above keeps the normal spool compact, but it must never cause
+# unread Rich-Observer rows to be deleted. During a prolonged catch-up, allow a
+# larger bounded protected backlog. At the hard ceiling the capture lane pauses
+# fail-closed until the Rich Observer advances enough for a safe prune.
+MAX_PROTECTED_ROWS = 2_000_000
+CAPACITY_RECHECK_SECONDS = 1.0
 PRUNE_EVERY_INSERTS = 5_000
 MAX_EXPORT_BYTES = 12 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 2.0
@@ -173,18 +179,56 @@ def _skip_permanent_capture_hole(connection: sqlite3.Connection, cursor: int) ->
     return first - 1
 
 
-def _prune(connection: sqlite3.Connection) -> None:
+def _row_count(connection: sqlite3.Connection) -> int:
     row = connection.execute("SELECT COUNT(*) FROM messages").fetchone()
-    count = int(row[0]) if row else 0
+    return int(row[0]) if row else 0
+
+
+def _prune(
+    connection: sqlite3.Connection,
+    observer_cursor: int | None = None,
+) -> int:
+    """Soft-prune only rows the Rich Observer has already consumed.
+
+    The old policy always kept only the newest MAX_ROWS rows. During a long
+    startup catch-up the independent capture can be hundreds of thousands of rows
+    ahead of the Rich Observer, so that policy could delete the exact next unread
+    row and turn a recoverable local suffix into an unrecoverable core gap.
+
+    Keep the normal 300k-row target when it is safe, but never cross the persisted
+    Rich Observer cursor. A failed or unknown cursor read is fail-closed: keep rows.
+    The returned count lets the caller enforce the separate hard capacity without
+    silently deleting unread evidence.
+    """
+    count = _row_count(connection)
     if count <= MAX_ROWS:
-        return
+        return count
+
     cutoff = connection.execute(
         "SELECT seq FROM messages ORDER BY seq DESC LIMIT 1 OFFSET ?",
         (MAX_ROWS - 1,),
     ).fetchone()
-    if cutoff:
-        connection.execute("DELETE FROM messages WHERE seq<?", (int(cutoff[0]),))
-        connection.commit()
+    if not cutoff:
+        return count
+
+    observed = _observer_cursor() if observer_cursor is None else int(observer_cursor)
+    if observed <= 0:
+        return count
+
+    target_cutoff = int(cutoff[0])
+    safe_cutoff = min(target_cutoff, observed + 1)
+    connection.execute("DELETE FROM messages WHERE seq<?", (safe_cutoff,))
+    connection.commit()
+    return _row_count(connection)
+
+
+def _protected_backlog_full(
+    connection: sqlite3.Connection,
+    observer_cursor: int | None = None,
+) -> bool:
+    """Return true only when safe pruning cannot get below the hard row ceiling."""
+    count = _prune(connection, observer_cursor)
+    return count >= MAX_PROTECTED_ROWS
 
 
 def range_complete(start: int, end: int, path: Path | None = None) -> bool:
@@ -370,9 +414,21 @@ def capture_process(stop) -> None:
     cursor = initialize_cursor(connection)
     pacer = _Pacer()
     inserted_since_prune = 0
+    row_count = _row_count(connection)
     client = httpx.Client()
     try:
         while not stop.is_set():
+            # Avoid a COUNT(*) on every 240 ms capture poll. Track successful new
+            # inserts in memory and only touch SQLite for capacity recovery when the
+            # hard ceiling is actually reached.
+            if row_count >= MAX_PROTECTED_ROWS:
+                row_count = _prune(connection)
+                if row_count >= MAX_PROTECTED_ROWS:
+                    _meta_set(connection, "last_error", "protected_backlog_capacity")
+                    connection.commit()
+                    stop.wait(CAPACITY_RECHECK_SECONDS)
+                    continue
+
             if not pacer.wait(stop):
                 break
             try:
@@ -382,7 +438,9 @@ def capture_process(stop) -> None:
                     connection.commit()
                     stop.wait(retry)
                     continue
-                inserted_since_prune += store_rows(connection, live)
+                inserted = store_rows(connection, live)
+                inserted_since_prune += inserted
+                row_count += inserted
                 new_cursor = _advance_contiguous(connection, cursor)
                 first_live = live[0]["seq"] if live else None
 
@@ -395,7 +453,9 @@ def capture_process(stop) -> None:
                         connection.commit()
                         stop.wait(retry)
                         continue
-                    inserted_since_prune += store_rows(connection, exported)
+                    inserted = store_rows(connection, exported)
+                    inserted_since_prune += inserted
+                    row_count += inserted
                     new_cursor = _advance_contiguous(connection, cursor)
                     if new_cursor == cursor:
                         cursor = _skip_permanent_capture_hole(connection, cursor)
@@ -407,7 +467,7 @@ def capture_process(stop) -> None:
                 _meta_set(connection, "last_error", "")
                 connection.commit()
                 if inserted_since_prune >= PRUNE_EVERY_INSERTS:
-                    _prune(connection)
+                    row_count = _prune(connection)
                     inserted_since_prune = 0
             except (httpx.HTTPError, OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
                 _meta_set(connection, "last_error", type(error).__name__)
