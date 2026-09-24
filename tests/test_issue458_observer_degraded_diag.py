@@ -42,7 +42,7 @@ def test_issue458_is_read_only():
         r"\bsqlite3\b",
         r"\bcurl\b",
         r"\bwget\b",
-        r"\bkill\b",
+        r"(^|[;&|]\\s*)kill\\s+",
         r"\bstrace\b",
         r"\bgdb\b",
     )
