@@ -81,3 +81,106 @@ def test_capture_is_get_only_source():
     assert ".post(" not in source
     assert "subprocess" not in source
     assert "SIGN_SEED" not in source
+
+
+
+def _seqs(path):
+    connection = sqlite3.connect(path)
+    try:
+        return [
+            int(row[0])
+            for row in connection.execute("SELECT seq FROM messages ORDER BY seq").fetchall()
+        ]
+    finally:
+        connection.close()
+
+
+def test_prune_never_deletes_unread_rows(tmp_path, monkeypatch):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": str(seq)} for seq in range(1, 7)],
+        )
+        monkeypatch.setattr(capture, "MAX_ROWS", 3)
+
+        # Latest-three policy alone would keep only 4..6. Rich Observer has consumed
+        # through 2, so seq 3 is still protected and must survive.
+        assert capture._prune(connection, observer_cursor=2) == 4
+    finally:
+        connection.close()
+
+    assert _seqs(path) == [3, 4, 5, 6]
+
+
+def test_prune_returns_to_soft_target_after_observer_advances(tmp_path, monkeypatch):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": str(seq)} for seq in range(1, 7)],
+        )
+        monkeypatch.setattr(capture, "MAX_ROWS", 3)
+
+        assert capture._prune(connection, observer_cursor=5) == 3
+    finally:
+        connection.close()
+
+    assert _seqs(path) == [4, 5, 6]
+
+
+def test_prune_fails_closed_when_observer_cursor_is_unknown(tmp_path, monkeypatch):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": str(seq)} for seq in range(1, 7)],
+        )
+        monkeypatch.setattr(capture, "MAX_ROWS", 3)
+
+        assert capture._prune(connection, observer_cursor=0) == 6
+    finally:
+        connection.close()
+
+    assert _seqs(path) == [1, 2, 3, 4, 5, 6]
+
+
+def test_hard_capacity_pauses_until_safe_prune_can_free_rows(tmp_path, monkeypatch):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": str(seq)} for seq in range(1, 9)],
+        )
+        monkeypatch.setattr(capture, "MAX_ROWS", 3)
+        monkeypatch.setattr(capture, "MAX_PROTECTED_ROWS", 5)
+
+        # Observer is too far behind: safe pruning can remove consumed 1..2 only,
+        # leaving six protected rows, so capture must pause rather than delete them.
+        assert capture._protected_backlog_full(connection, observer_cursor=2) is True
+        assert [
+            int(row[0])
+            for row in connection.execute("SELECT seq FROM messages ORDER BY seq")
+        ] == [3, 4, 5, 6, 7, 8]
+
+        # Once Observer advances, the same safe prune can return to the normal
+        # three-row target and capture may resume automatically.
+        assert capture._protected_backlog_full(connection, observer_cursor=6) is False
+        assert [
+            int(row[0])
+            for row in connection.execute("SELECT seq FROM messages ORDER BY seq")
+        ] == [6, 7, 8]
+    finally:
+        connection.close()
+
+
+def test_capture_checks_protected_capacity_before_network_fetch():
+    import inspect
+
+    source = inspect.getsource(capture.capture_process)
+    assert source.index("_protected_backlog_full(connection)") < source.index("_fetch_live(client, cursor)")
+    assert "protected_backlog_capacity" in source
