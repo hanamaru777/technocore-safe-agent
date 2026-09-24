@@ -182,5 +182,6 @@ def test_capture_checks_protected_capacity_before_network_fetch():
     import inspect
 
     source = inspect.getsource(capture.capture_process)
-    assert source.index("_protected_backlog_full(connection)") < source.index("_fetch_live(client, cursor)")
+    assert source.index("if row_count >= MAX_PROTECTED_ROWS") < source.index("_fetch_live(client, cursor)")
+    assert "row_count = _prune(connection)" in source
     assert "protected_backlog_capacity" in source
