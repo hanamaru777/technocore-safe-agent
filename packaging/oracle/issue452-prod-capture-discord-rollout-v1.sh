@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 022
 
 APP=/opt/technocore-safe-agent
@@ -85,7 +85,9 @@ PY
 STATE_CURSOR=''
 require_state() {
   local phase=$1 line ce cm be bm cursor health age
-  line=$(state_line)
+  if ! line=$(state_line); then
+    stop_rollout "${phase}_state_read_failed"
+  fi
   IFS='|' read -r ce cm be bm cursor health age <<<"$line"
   echo "STATE=$phase CORE=$ce/$cm BRIDGE=$be/$bm LOBBY_CURSOR=$cursor HEALTH=$health AGE=$age"
   [[ "$ce" == "$EXPECTED_CORE_EVENTS" && "$cm" == "$EXPECTED_CORE_MESSAGES" ]] || stop_rollout "${phase}_protected_core_changed"
@@ -223,7 +225,9 @@ for phase in T0 T30 T60 T90 T120; do
 done
 
 [[ "$LAST_CURSOR" -gt "$PRE_CURSOR" ]] || stop_rollout lobby_cursor_not_advancing
-FINAL_LINE=$(state_line)
+if ! FINAL_LINE=$(state_line); then
+  stop_rollout final_state_read_failed
+fi
 IFS='|' read -r _ _ _ _ _ FINAL_HEALTH FINAL_AGE <<<"$FINAL_LINE"
 [[ "$FINAL_HEALTH" == ok ]] || stop_rollout final_observer_not_ok
 
