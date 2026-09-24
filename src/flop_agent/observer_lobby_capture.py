@@ -408,6 +408,42 @@ def _fetch_export(client: httpx.Client) -> tuple[list[dict], float | None]:
     return sorted(rows, key=lambda item: item["seq"]), None
 
 
+def _normalize_export_result(result):
+    if not isinstance(result, tuple):
+        raise RuntimeError("capture_invalid_export_result")
+    if len(result) == 2:
+        rows, retry = result
+        complete = True
+    elif len(result) == 3:
+        rows, retry, complete = result
+    else:
+        raise RuntimeError("capture_invalid_export_result")
+    if not isinstance(rows, list):
+        raise RuntimeError("capture_invalid_export_result")
+    return rows, retry, bool(complete)
+
+
+def _export_proves_permanent_capture_hole(
+    cursor: int,
+    exported: list[dict],
+    complete: bool,
+) -> bool:
+    if complete:
+        return True
+    if not exported:
+        return False
+    first = exported[0].get("seq")
+    return isinstance(first, int) and first > int(cursor) + 1
+
+
+def _capture_error_label(error: BaseException) -> str:
+    if isinstance(error, RuntimeError):
+        message = str(error).strip()
+        if message:
+            return message[:120]
+    return type(error).__name__
+
+
 def capture_process(stop) -> None:
     """Run a bounded GET-only lobby capture lane in a separate process."""
     connection = _connect()
@@ -447,7 +483,9 @@ def capture_process(stop) -> None:
                 if first_live is not None and first_live > cursor + 1 and new_cursor == cursor:
                     if not pacer.wait(stop):
                         break
-                    exported, retry = _fetch_export(client)
+                    exported, retry, export_complete = _normalize_export_result(
+                        _fetch_export(client)
+                    )
                     if retry is not None:
                         _meta_set(connection, "last_error", "export_rate_limited")
                         connection.commit()
@@ -458,8 +496,25 @@ def capture_process(stop) -> None:
                     row_count += inserted
                     new_cursor = _advance_contiguous(connection, cursor)
                     if new_cursor == cursor:
-                        cursor = _skip_permanent_capture_hole(connection, cursor)
-                        new_cursor = _advance_contiguous(connection, cursor)
+                        if _export_proves_permanent_capture_hole(
+                            cursor,
+                            exported,
+                            export_complete,
+                        ):
+                            cursor = _skip_permanent_capture_hole(connection, cursor)
+                            new_cursor = _advance_contiguous(connection, cursor)
+                        else:
+                            # A deadline-bounded partial export that has not reached
+                            # the exact missing sequence is uncertainty, not proof
+                            # that the retained server snapshot lacks it. Preserve
+                            # any complete rows already stored and retry next cycle.
+                            _meta_set(
+                                connection,
+                                "last_error",
+                                "capture_export_partial_before_gap",
+                            )
+                            connection.commit()
+                            continue
 
                 cursor = max(cursor, new_cursor)
                 _meta_set(connection, "capture_cursor", cursor)
@@ -470,7 +525,7 @@ def capture_process(stop) -> None:
                     row_count = _prune(connection)
                     inserted_since_prune = 0
             except (httpx.HTTPError, OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
-                _meta_set(connection, "last_error", type(error).__name__)
+                _meta_set(connection, "last_error", _capture_error_label(error))
                 connection.commit()
                 stop.wait(0.5)
     finally:
