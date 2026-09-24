@@ -129,6 +129,11 @@ def bounded_fetch_export(client) -> tuple[list[dict], float | None, bool]:
                     return rows, None, False
                 raise RuntimeError("capture_total_timeout")
 
+        if time.monotonic() - started > TOTAL_REQUEST_SECONDS:
+            if rows:
+                return rows, None, False
+            raise RuntimeError("capture_total_timeout")
+
         if buffer.strip():
             item = _parse_export_line(buffer)
             seq = int(item["seq"])
