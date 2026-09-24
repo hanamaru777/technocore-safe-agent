@@ -414,18 +414,20 @@ def capture_process(stop) -> None:
     cursor = initialize_cursor(connection)
     pacer = _Pacer()
     inserted_since_prune = 0
+    row_count = _row_count(connection)
     client = httpx.Client()
     try:
         while not stop.is_set():
-            # Never satisfy the normal retention target by deleting rows the Rich
-            # Observer has not consumed yet. If even safe pruning cannot get the
-            # spool below the larger hard ceiling, pause GET capture visibly until
-            # Observer progress makes space again.
-            if _protected_backlog_full(connection):
-                _meta_set(connection, "last_error", "protected_backlog_capacity")
-                connection.commit()
-                stop.wait(CAPACITY_RECHECK_SECONDS)
-                continue
+            # Avoid a COUNT(*) on every 240 ms capture poll. Track successful new
+            # inserts in memory and only touch SQLite for capacity recovery when the
+            # hard ceiling is actually reached.
+            if row_count >= MAX_PROTECTED_ROWS:
+                row_count = _prune(connection)
+                if row_count >= MAX_PROTECTED_ROWS:
+                    _meta_set(connection, "last_error", "protected_backlog_capacity")
+                    connection.commit()
+                    stop.wait(CAPACITY_RECHECK_SECONDS)
+                    continue
 
             if not pacer.wait(stop):
                 break
@@ -436,7 +438,9 @@ def capture_process(stop) -> None:
                     connection.commit()
                     stop.wait(retry)
                     continue
-                inserted_since_prune += store_rows(connection, live)
+                inserted = store_rows(connection, live)
+                inserted_since_prune += inserted
+                row_count += inserted
                 new_cursor = _advance_contiguous(connection, cursor)
                 first_live = live[0]["seq"] if live else None
 
@@ -449,7 +453,9 @@ def capture_process(stop) -> None:
                         connection.commit()
                         stop.wait(retry)
                         continue
-                    inserted_since_prune += store_rows(connection, exported)
+                    inserted = store_rows(connection, exported)
+                    inserted_since_prune += inserted
+                    row_count += inserted
                     new_cursor = _advance_contiguous(connection, cursor)
                     if new_cursor == cursor:
                         cursor = _skip_permanent_capture_hole(connection, cursor)
@@ -461,7 +467,7 @@ def capture_process(stop) -> None:
                 _meta_set(connection, "last_error", "")
                 connection.commit()
                 if inserted_since_prune >= PRUNE_EVERY_INSERTS:
-                    _prune(connection)
+                    row_count = _prune(connection)
                     inserted_since_prune = 0
             except (httpx.HTTPError, OSError, ValueError, RuntimeError, json.JSONDecodeError) as error:
                 _meta_set(connection, "last_error", type(error).__name__)
