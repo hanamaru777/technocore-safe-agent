@@ -668,11 +668,12 @@ class Control:
                 ui["last_core_gap_count"] = breakdown["core_events"]
             if ui.get("last_optional_gap_count") is None:
                 ui["last_optional_gap_count"] = breakdown["optional_events"]
+            # A readable authoritative lane snapshot supersedes any aggregate-only
+            # fail-safe backlog from a prior unreadable/legacy presentation cycle.
+            # Clear only that stale presentation counter; preserve optional-lane
+            # pending state unless this is a first-time lane migration.
+            ui["pending_gap_delta"] = 0
             if lane_baseline_missing:
-                # Legacy aggregate pending-gap state cannot be classified after
-                # migration. Baseline the authoritative lane counters and discard
-                # only the presentation-only pending delta to avoid a stale alert.
-                ui["pending_gap_delta"] = 0
                 ui["pending_optional_gap_delta"] = 0
         if not ui.get("notified_interactions"):
             ui["notified_interactions"] = [

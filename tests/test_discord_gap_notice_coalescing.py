@@ -182,3 +182,22 @@ def test_empty_history_explains_that_passive_observation_is_excluded(monkeypatch
     message = discord_control.history_message()
     assert "まだ直接のやりとり記録はありません" in message
     assert "監視しただけの他Agent会話は含めず" in message
+
+
+def test_ensure_baseline_clears_stale_aggregate_pending_when_lane_state_is_readable(monkeypatch, tmp_path):
+    control = setup_runtime(monkeypatch, tmp_path)
+    ui = discord_control.default_ui_state()
+    ui["last_gap_count"] = 80
+    ui["last_core_gap_count"] = 0
+    ui["last_optional_gap_count"] = 0
+    ui["pending_gap_delta"] = 12
+    ui["pending_optional_gap_delta"] = 2
+    discord_control.save_ui_state(ui)
+
+    set_gap_counts(80, core=0, optional=0)
+    control.ensure_baseline()
+
+    migrated = discord_control.load_ui_state()
+    assert migrated["pending_gap_delta"] == 0
+    assert migrated["pending_optional_gap_delta"] == 2
+    assert control.system_notices() == []
