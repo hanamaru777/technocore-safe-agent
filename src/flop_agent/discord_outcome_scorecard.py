@@ -349,11 +349,33 @@ def _digest(_control) -> str:
     attention = snapshot["critical"] + int(
         activity.get("oldest_unresolved_direct") is not None
     )
-    if snapshot["problems"] or new_core_gaps:
+
+    health_incidents = base.immediate_health_incidents(snapshot)
+    persistent_degraded = False
+    if snapshot.get("health") == "degraded":
+        observer_since = base._parse_time(ui.get("observer_degraded_since"))
+        observer_alerted = ui.get("observer_degraded_alerted") is True
+        if observer_alerted:
+            persistent_degraded = True
+        elif observer_since is not None:
+            if observer_since.tzinfo is None:
+                observer_since = observer_since.replace(tzinfo=UTC)
+            persistent_degraded = (
+                datetime.now(UTC) - observer_since.astimezone(UTC)
+            ).total_seconds() >= base.OBSERVER_DEGRADED_NOTICE_SECONDS
+
+    red_reasons: list[str] = []
+    if new_core_gaps:
+        red_reasons.append(f"core未回復 +{new_core_gaps}")
+    red_reasons.extend(health_incidents.values())
+    if persistent_degraded:
+        red_reasons.append("監視状態 degraded が5分以上継続")
+
+    if red_reasons:
         icon, title, conclusion = (
             "🔴",
             "異常",
-            "core監視またはAgent状態に確認事項があります。/status を確認してください。",
+            "対応が必要です。/status を確認してください。",
         )
     elif attention or unexplained_gaps:
         icon, title, conclusion = (
@@ -399,7 +421,8 @@ def _digest(_control) -> str:
         f"自動投稿 {activity['posts']}（24h / safety cap 6、目標ではありません） / "
         f"queue {snapshot['auto'].get('queued', 0)}\n"
         f"{gap_line}\n"
-        f"{_oldest_line(activity)}\n"
+        + (f"異常理由: {' / '.join(red_reasons)}\n" if red_reasons else "")
+        + f"{_oldest_line(activity)}\n"
         f"主な非アクション理由: {_non_action_reason(activity)}\n"
         f"最終監視: {snapshot['last_refresh_age']}\n"
         + interaction_line
