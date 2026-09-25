@@ -384,3 +384,154 @@ def test_scorecard_has_no_network_signing_or_protocol_write_surface():
         "with_vault_seed",
     )
     assert all(token not in source for token in forbidden_write_symbols)
+
+
+
+def test_digest_transient_degraded_with_optional_only_stays_normal(monkeypatch):
+    activity = {
+        **BASE_ACTIVITY,
+        "snapshot": {
+            **BASE_ACTIVITY["snapshot"],
+            "health": "degraded",
+            "problems": ["監視状態 degraded"],
+        },
+        "signed_direct_requests": 0,
+        "acked_replies": 0,
+        "active_trusted": 1,
+        "collaboration_active": 0,
+        "collaboration_completed": 0,
+        "public_artifacts": 1,
+        "oldest_unresolved_direct": None,
+    }
+    monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
+    monkeypatch.setattr(score.base, "_observer_metrics", lambda: {
+        "unique_dids_discovered": 20,
+        "returning_did_encounters": 3,
+        "message_gaps": 12,
+    })
+    monkeypatch.setattr(score.base, "_gap_breakdown", lambda: {
+        "core_events": 124,
+        "core_messages": 5651120,
+        "optional_events": 9,
+        "optional_messages": 90,
+    })
+    monkeypatch.setattr(score.base, "load_ui_state", lambda: {
+        "digest_baseline": {
+            "unique_dids_discovered": 20,
+            "returning_did_encounters": 3,
+            "message_gaps": 10,
+            "core_events": 124,
+            "optional_events": 7,
+        },
+        "pending_gap_delta": 0,
+        "pending_optional_gap_delta": 2,
+        "observer_degraded_since": None,
+        "observer_degraded_alerted": False,
+    })
+    monkeypatch.setattr(score.base, "save_ui_state", lambda _state: None)
+
+    rendered = score._digest(None)
+
+    assert "🟢 FLOP Agent 6時間アウトカム（正常）" in rendered
+    assert "通信: core未回復 +0 / optional lane未回復 +2" in rendered
+    assert "異常理由:" not in rendered
+    assert "結論: 対応不要。そのまま稼働中。" in rendered
+
+
+def test_digest_persistent_degraded_is_red_and_names_reason(monkeypatch):
+    activity = {
+        **BASE_ACTIVITY,
+        "snapshot": {
+            **BASE_ACTIVITY["snapshot"],
+            "health": "degraded",
+            "problems": ["監視状態 degraded"],
+        },
+        "signed_direct_requests": 0,
+        "acked_replies": 0,
+        "active_trusted": 1,
+        "collaboration_active": 0,
+        "collaboration_completed": 0,
+        "public_artifacts": 1,
+        "oldest_unresolved_direct": None,
+    }
+    monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
+    monkeypatch.setattr(score.base, "_observer_metrics", lambda: {
+        "unique_dids_discovered": 20,
+        "returning_did_encounters": 3,
+        "message_gaps": 10,
+    })
+    monkeypatch.setattr(score.base, "_gap_breakdown", lambda: {
+        "core_events": 124,
+        "core_messages": 5651120,
+        "optional_events": 7,
+        "optional_messages": 70,
+    })
+    monkeypatch.setattr(score.base, "load_ui_state", lambda: {
+        "digest_baseline": {
+            "unique_dids_discovered": 20,
+            "returning_did_encounters": 3,
+            "message_gaps": 10,
+            "core_events": 124,
+            "optional_events": 7,
+        },
+        "pending_gap_delta": 0,
+        "pending_optional_gap_delta": 0,
+        "observer_degraded_since": None,
+        "observer_degraded_alerted": True,
+    })
+    monkeypatch.setattr(score.base, "save_ui_state", lambda _state: None)
+
+    rendered = score._digest(None)
+
+    assert "🔴 FLOP Agent 6時間アウトカム（異常）" in rendered
+    assert "異常理由: 監視状態 degraded が5分以上継続" in rendered
+    assert "結論: 対応が必要です。/status を確認してください。" in rendered
+
+
+def test_digest_autopilot_paused_is_red_and_names_reason(monkeypatch):
+    activity = {
+        **BASE_ACTIVITY,
+        "snapshot": {
+            **BASE_ACTIVITY["snapshot"],
+            "auto": {"enabled": True, "paused": True, "queued": 0},
+            "problems": ["Autopilot 一時停止"],
+        },
+        "signed_direct_requests": 0,
+        "acked_replies": 0,
+        "active_trusted": 1,
+        "collaboration_active": 0,
+        "collaboration_completed": 0,
+        "public_artifacts": 1,
+        "oldest_unresolved_direct": None,
+    }
+    monkeypatch.setattr(score, "_activity_snapshot", lambda **_kwargs: activity)
+    monkeypatch.setattr(score.base, "_observer_metrics", lambda: {
+        "unique_dids_discovered": 20,
+        "returning_did_encounters": 3,
+        "message_gaps": 10,
+    })
+    monkeypatch.setattr(score.base, "_gap_breakdown", lambda: {
+        "core_events": 124,
+        "core_messages": 5651120,
+        "optional_events": 7,
+        "optional_messages": 70,
+    })
+    monkeypatch.setattr(score.base, "load_ui_state", lambda: {
+        "digest_baseline": {
+            "unique_dids_discovered": 20,
+            "returning_did_encounters": 3,
+            "message_gaps": 10,
+            "core_events": 124,
+            "optional_events": 7,
+        },
+        "pending_gap_delta": 0,
+        "pending_optional_gap_delta": 0,
+        "observer_degraded_since": None,
+        "observer_degraded_alerted": False,
+    })
+    monkeypatch.setattr(score.base, "save_ui_state", lambda _state: None)
+
+    rendered = score._digest(None)
+
+    assert "🔴 FLOP Agent 6時間アウトカム（異常）" in rendered
+    assert "異常理由: Autopilot 一時停止" in rendered
