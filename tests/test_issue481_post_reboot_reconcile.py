@@ -53,3 +53,12 @@ def test_prod481_is_compact_read_only():
         r'\bwget\b',
     ):
         assert re.search(pattern,s) is None
+
+
+def test_prod481_stable_requires_fresh_heartbeat_and_zero_restarts():
+    s=_source()
+    assert "age <= 180" in s
+    assert "HB_FINAL_FRESH" in s
+    assert "NR_TOTAL=$((RES_NR+CAP_NR+SIG_NR+DIS_NR))" in s
+    assert '\"$NR_TOTAL\" -eq 0' in s
+    assert "REBOOT_STATE_REGRESSION" in s
