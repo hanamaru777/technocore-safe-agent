@@ -150,15 +150,26 @@ BRIDGE_DE=$((BE-BASE_BRIDGE_E))
 BRIDGE_DM=$((BM-BASE_BRIDGE_M))
 CURSOR_DELTA=$((LAST_CURSOR-START_CURSOR))
 
-if (( CORE_DE > 0 || CORE_DM > 0 || BRIDGE_DE > 0 || BRIDGE_DM > 0 )); then
+HB_FINAL_FRESH=$("$PY" - "$HB_AGE" <<'PY'
+import sys
+age=float(sys.argv[1])
+print("YES" if 0 <= age <= 180 else "NO")
+PY
+)
+
+NR_TOTAL=$((RES_NR+CAP_NR+SIG_NR+DIS_NR))
+
+if (( CORE_DE < 0 || CORE_DM < 0 || BRIDGE_DE < 0 || BRIDGE_DM < 0 )); then
+  CLASS=REBOOT_STATE_REGRESSION
+elif (( CORE_DE > 0 || CORE_DM > 0 || BRIDGE_DE > 0 || BRIDGE_DM > 0 )); then
   CLASS=REBOOT_RECOVERED_WITH_NEW_GAP
-elif [[ "$FINAL_HEALTH" == ok && "$HB_STATUS" =~ ^(ok|pressure_paused)$ ]]; then
+elif [[ "$FINAL_HEALTH" == ok && "$HB_STATUS" =~ ^(ok|pressure_paused)$ && "$HB_FINAL_FRESH" == YES && "$NR_TOTAL" -eq 0 ]]; then
   CLASS=REBOOT_RECOVERED_STABLE
 else
   CLASS=REBOOT_HEALTH_UNSTABLE
 fi
 
-echo "RESULT=$CLASS core:$CE/$CM delta:+$CORE_DE/+$CORE_DM bridge:$BE/$BM delta:+$BRIDGE_DE/+$BRIDGE_DM cursor_delta:$CURSOR_DELTA final_health:$FINAL_HEALTH hb:$HB_STATUS/${HB_AGE}s max_hb_age:${MAX_HB_AGE}s"
+echo "RESULT=$CLASS core:$CE/$CM delta:$CORE_DE/$CORE_DM bridge:$BE/$BM delta:$BRIDGE_DE/$BRIDGE_DM cursor_delta:$CURSOR_DELTA final_health:$FINAL_HEALTH hb:$HB_STATUS/${HB_AGE}s hb_fresh:$HB_FINAL_FRESH max_hb_age:${MAX_HB_AGE}s nr_total:$NR_TOTAL"
 echo "SAFETY=mutation:NO restart:NO sqlite:NO network:NO journal:NO signer:NO external_write:NO"
 echo "PROD481V1=PASS"
 echo "DO_NOT_RERUN=YES"
