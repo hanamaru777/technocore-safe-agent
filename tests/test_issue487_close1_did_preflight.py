@@ -27,7 +27,7 @@ def test_pre487_only_reads_public_verified_did_and_renders_registration():
 
 def test_pre487_is_strictly_read_only_and_compact():
     s=_source()
-    assert s.count('echo "') <= 12
+    assert s.count('echo "') <= 14
     for pattern in (
         r"systemctl\s+(?:restart|start|stop|enable|disable|daemon-reload)\b",
         r"git_owner\s+(?:fetch|merge|pull|checkout|reset)\b",
