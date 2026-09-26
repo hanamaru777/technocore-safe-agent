@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -266,3 +267,58 @@ def test_candidate_signal_requires_ready_gate(monkeypatch, tmp_path):
         candidate_fetcher=lambda: candidate_scan(move="0.010", gate="leader_coverage_incomplete"),
     )
     assert notices == []
+
+
+class _FakeChannel:
+    def __init__(self, *, fail_first=False):
+        self.fail_first = fail_first
+        self.calls = 0
+        self.messages = []
+
+    async def send(self, message, *, suppress_embeds=True):
+        self.calls += 1
+        if self.fail_first and self.calls == 1:
+            raise RuntimeError("simulated-discord-send")
+        self.messages.append(message)
+
+
+def test_close1_progress_once_contains_poll_exception_and_recovers():
+    calls = []
+
+    def fail_once():
+        calls.append("poll")
+        if len(calls) == 1:
+            raise RuntimeError("simulated-poll")
+        return ["recovered"]
+
+    channel = _FakeChannel()
+    first = asyncio.run(discord_control._close1_progress_once(channel, poller=fail_once))
+    second = asyncio.run(discord_control._close1_progress_once(channel, poller=fail_once))
+
+    assert first is False
+    assert second is True
+    assert channel.messages == ["recovered"]
+
+
+def test_close1_progress_once_contains_send_exception_and_recovers():
+    channel = _FakeChannel(fail_first=True)
+
+    first = asyncio.run(
+        discord_control._close1_progress_once(channel, poller=lambda: ["first"])
+    )
+    second = asyncio.run(
+        discord_control._close1_progress_once(channel, poller=lambda: ["second"])
+    )
+
+    assert first is False
+    assert second is True
+    assert channel.messages == ["second"]
+
+
+def test_close1_worker_backoff_is_bounded_and_resets():
+    assert discord_control._close1_worker_delay(0) == 15
+    assert discord_control._close1_worker_delay(1) == 15
+    assert discord_control._close1_worker_delay(2) == 30
+    assert discord_control._close1_worker_delay(3) == 60
+    assert discord_control._close1_worker_delay(6) == 300
+    assert discord_control._close1_worker_delay(99) == 300
