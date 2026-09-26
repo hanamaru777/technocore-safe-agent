@@ -64,6 +64,7 @@ def _pnl_snapshots(pnl_room: object) -> list[dict]:
         raise ValueError("close1_scanner_pnl_room_invalid")
     snapshots = []
     for message in pnl_room["messages"]:
+        public_record.verify_signed_record("d-close1-pnl", message)
         snapshots.append(close_call._referee_payload(message, "pnl"))
     if not snapshots:
         raise ValueError("close1_scanner_pnl_room_empty")
@@ -71,7 +72,13 @@ def _pnl_snapshots(pnl_room: object) -> list[dict]:
 
 
 def _latest_price(price_room: object) -> dict:
-    return close_call._latest_message(price_room, "price")
+    if not isinstance(price_room, dict) or not isinstance(price_room.get("messages"), list):
+        raise ValueError("close1_scanner_price_room_invalid")
+    if not price_room["messages"]:
+        raise ValueError("close1_scanner_price_room_empty")
+    message = price_room["messages"][-1]
+    public_record.verify_signed_record("d-close1-price", message)
+    return close_call._referee_payload(message, "price")
 
 
 def _project_candidate_score(*, side: str, qty: Decimal, px: Decimal, fee: Decimal, final: Decimal) -> Decimal:
