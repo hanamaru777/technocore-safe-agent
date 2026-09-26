@@ -176,6 +176,28 @@ def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(mon
     assert "clawback" in candidate.warning
 
 
+def test_dynamic_top3_never_drops_below_zero_score_floor(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+    offer, _, _ = _offer(qty="4.00", px="227.40", side="sell")
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": [offer]}},
+    )
+
+    candidate = report.candidates[0]
+    assert candidate.taker_side == "buy"
+    # A 4-contract long cannot be called top3 while its own projected score is
+    # negative merely because the currently visible short leaders turn negative.
+    # Base-fee break-even is 227.40 * 1.01 = 229.674.
+    assert Decimal("229.67") <= candidate.dynamic_top3_price < Decimal("229.68")
+    assert candidate.dynamic_condition == "above"
+    assert "zero-score floor" in candidate.warning
+
+
 def test_scanner_excludes_offer_id_already_seen_as_countersigned_trade(monkeypatch):
     _verify_referee_with_fixture(monkeypatch)
     price, pnl = _rooms()
