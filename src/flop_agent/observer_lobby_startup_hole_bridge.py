@@ -18,6 +18,7 @@ introduced here.
 """
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import quote
 
 from . import (
@@ -32,6 +33,8 @@ from . import (
 
 LOBBY_ROOM = "lobby"
 BRIDGE_CHUNK_MESSAGES = spool.SPOOL_CHUNK_MESSAGES
+LOCAL_RECOVERY_GRACE_SECONDS = 8.5
+LOCAL_RECOVERY_POLL_SECONDS = 0.25
 _INSTALLED = False
 _BASE_STARTUP_CATCHUP = None
 
@@ -48,14 +51,40 @@ def _metrics(state: dict) -> dict:
         "lobby_startup_bridge_unrecoverable_messages",
         "lobby_startup_bridge_local_suffix_handoffs",
         "lobby_startup_bridge_avoided_unrecoverable_messages",
+        "lobby_startup_bridge_local_grace_attempts",
+        "lobby_startup_bridge_local_grace_recoveries",
+        "lobby_startup_bridge_local_grace_timeouts",
     ):
         metrics.setdefault(key, 0)
     return metrics
 
 
-def _local_next_present(state: dict) -> bool:
+async def _read_local_range(start: int, end: int) -> list[dict]:
+    return await asyncio.to_thread(capture.read_range, start, end)
+
+
+async def _first_local_seq(start: int, end: int) -> int | None:
+    return await asyncio.to_thread(capture.first_available_seq, start, end)
+
+
+async def _local_next_present(state: dict) -> bool:
     cursor = int(state.get("cursors", {}).get(LOBBY_ROOM, 0) or 0)
-    return bool(capture.read_range(cursor + 1, cursor + 1))
+    return bool(await _read_local_range(cursor + 1, cursor + 1))
+
+
+async def _wait_for_local_resume(start: int, end: int, stop) -> int | None:
+    """Give an already-running Capture export time to persist exact local evidence."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + LOCAL_RECOVERY_GRACE_SECONDS
+    while not stop.is_set():
+        resume = await _first_local_seq(start, end)
+        if resume is not None:
+            return resume
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return None
+        await startup._wait_or_stop(stop, min(LOCAL_RECOVERY_POLL_SECONDS, remaining))
+    return None
 
 
 def _record_missing_before(
@@ -111,6 +140,7 @@ async def _stream_until_local_resume(
     total_bytes = 0
     pending: list[dict] = []
     last_seq: int | None = None
+    local_grace_used = False
 
     async def drain_pending() -> None:
         nonlocal pending, recovered_total
@@ -166,7 +196,7 @@ async def _stream_until_local_resume(
                 # Do not consume a server row that is already available exactly in
                 # SQLite. Commit the pending bridge prefix and hand control back to
                 # the local spool instead.
-                if capture.read_range(expected, expected):
+                if await _read_local_range(expected, expected):
                     await drain_pending()
                     metrics["lobby_startup_bridge_successes"] += 1
                     metrics["lobby_startup_bridge_messages"] += recovered_total
@@ -176,7 +206,7 @@ async def _stream_until_local_resume(
                 if seq > expected:
                     await drain_pending()
                     cursor = int(state.get("cursors", {}).get(LOBBY_ROOM, 0) or 0)
-                    if capture.read_range(cursor + 1, cursor + 1):
+                    if await _read_local_range(cursor + 1, cursor + 1):
                         metrics["lobby_startup_bridge_successes"] += 1
                         metrics["lobby_startup_bridge_messages"] += recovered_total
                         metrics["lobby_startup_bridge_bytes"] += total_bytes
@@ -188,10 +218,24 @@ async def _stream_until_local_resume(
                         # window now starts later.  Prefer the earliest local resume
                         # point at or before this server row and account only the
                         # truly missing prefix before it.
-                        local_resume_seq = capture.first_available_seq(
+                        local_resume_seq = await _first_local_seq(
                             cursor + 1,
                             seq,
                         )
+                        if local_resume_seq is None and not local_grace_used:
+                            metrics["lobby_startup_bridge_local_grace_attempts"] += 1
+                            local_grace_used = True
+                            local_resume_seq = await _wait_for_local_resume(
+                                cursor + 1,
+                                seq,
+                                stop,
+                            )
+                            if stop.is_set():
+                                return recovered_total, None, "stopped_during_local_grace", False
+                            if local_resume_seq is None:
+                                metrics["lobby_startup_bridge_local_grace_timeouts"] += 1
+                            else:
+                                metrics["lobby_startup_bridge_local_grace_recoveries"] += 1
                         if local_resume_seq is not None:
                             if local_resume_seq > cursor + 1:
                                 _record_missing_before(
@@ -203,7 +247,7 @@ async def _stream_until_local_resume(
                             cursor = int(
                                 state.get("cursors", {}).get(LOBBY_ROOM, 0) or 0
                             )
-                            if capture.read_range(cursor + 1, cursor + 1):
+                            if await _read_local_range(cursor + 1, cursor + 1):
                                 metrics["lobby_startup_bridge_successes"] += 1
                                 metrics["lobby_startup_bridge_messages"] += recovered_total
                                 metrics["lobby_startup_bridge_bytes"] += total_bytes
@@ -219,7 +263,7 @@ async def _stream_until_local_resume(
                         # and from this retained-server snapshot.
                         _record_missing_before(state, seq, item, writer)
                         cursor = int(state.get("cursors", {}).get(LOBBY_ROOM, 0) or 0)
-                        if capture.read_range(cursor + 1, cursor + 1):
+                        if await _read_local_range(cursor + 1, cursor + 1):
                             metrics["lobby_startup_bridge_successes"] += 1
                             metrics["lobby_startup_bridge_messages"] += recovered_total
                             metrics["lobby_startup_bridge_bytes"] += total_bytes
@@ -232,7 +276,7 @@ async def _stream_until_local_resume(
                 pending.append(item)
                 if len(pending) >= BRIDGE_CHUNK_MESSAGES:
                     await drain_pending()
-                    if _local_next_present(state):
+                    if await _local_next_present(state):
                         metrics["lobby_startup_bridge_successes"] += 1
                         metrics["lobby_startup_bridge_messages"] += recovered_total
                         metrics["lobby_startup_bridge_bytes"] += total_bytes
@@ -253,7 +297,7 @@ async def _stream_until_local_resume(
 
     metrics["lobby_startup_bridge_messages"] += recovered_total
     metrics["lobby_startup_bridge_bytes"] += total_bytes
-    if _local_next_present(state):
+    if await _local_next_present(state):
         metrics["lobby_startup_bridge_successes"] += 1
         return recovered_total, None, None, True
 
@@ -283,7 +327,7 @@ async def startup_catchup(
         )
 
     while not stop.is_set():
-        status = capture.status()
+        status = await asyncio.to_thread(capture.status)
         if not local._capture_fresh(status, not_before=local._BOOT_AT):
             return await _BASE_STARTUP_CATCHUP(
                 client, budget, state, config, room, own_did, mailbox, stop, writer
@@ -298,7 +342,7 @@ async def startup_catchup(
             return
 
         start = current + 1
-        end = capture.contiguous_end(start)
+        end = await asyncio.to_thread(capture.contiguous_end, start)
         if end >= start:
             changed, recovered = await spool._drain_complete_spool_range(
                 state,
