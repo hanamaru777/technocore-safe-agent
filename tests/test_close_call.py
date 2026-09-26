@@ -229,7 +229,7 @@ def _sig(key: Ed25519PrivateKey, message: str) -> str:
     return base64.urlsafe_b64encode(key.sign(message.encode("utf-8"))).rstrip(b"=").decode("ascii")
 
 
-def signed_public_offer(*, bad_maker_sig: bool = False):
+def signed_public_offer(*, bad_maker_sig: bool = False, room: str = "close1", include_how: bool = False):
     maker_key = Ed25519PrivateKey.from_private_bytes(b"\x11" * 32)
     maker = _test_did(maker_key)
     terms = {
@@ -245,15 +245,15 @@ def signed_public_offer(*, bad_maker_sig: bool = False):
     if bad_maker_sig:
         other_key = Ed25519PrivateKey.from_private_bytes(b"\x22" * 32)
         maker_sig = _sig(other_key, close_call.maker_signature_preimage(terms))
-    text = json.dumps(
-        {
-            "t": "offer",
-            "season": "close-1",
-            "terms": terms,
-            "maker_sig": maker_sig,
-        },
-        separators=(",", ":"),
-    )
+    payload = {
+        "t": "offer",
+        "season": "close-1",
+        "terms": terms,
+        "maker_sig": maker_sig,
+    }
+    if include_how:
+        payload["how"] = "countersign close-1|accept|| and post t=trade"
+    text = json.dumps(payload, separators=(",", ":"))
     nonce = 123456
     return {
         "seq": 99,
@@ -261,7 +261,7 @@ def signed_public_offer(*, bad_maker_sig: bool = False):
         "from": maker,
         "text": text,
         "nonce": nonce,
-        "sig": _sig(maker_key, f"close1|{nonce}|{text}"),
+        "sig": _sig(maker_key, f"{room}|{nonce}|{text}"),
     }
 
 
@@ -278,6 +278,17 @@ def test_verified_public_offer_checks_outer_and_maker_signatures():
     assert offer.until == 190
     assert offer.taker_signature_preimage.endswith("|" + DID_B)
 
+
+def test_verified_public_offer_supports_actual_negotiation_room_and_how_metadata():
+    record = signed_public_offer(room="close1-offers", include_how=True)
+    offer = close_call.parse_verified_public_offer(
+        record,
+        current_sweep=189,
+        our_did=DID_B,
+        room="close1-offers",
+    )
+    assert offer.room == "close1-offers"
+    assert offer.maker_side == "sell"
 
 def test_verified_public_offer_rejects_bad_detached_maker_signature():
     with pytest.raises(ValueError, match="signature verification failed"):
@@ -329,4 +340,82 @@ def test_evaluate_verified_offer_as_taker_is_read_only_and_risk_aware():
             reference_price="224.55",
             reference_age_seconds=305,
             available_cash="10000",
+        )
+
+def pnl_room(points, did=DID_A):
+    messages = []
+    for n, mark, score in points:
+        messages.append(msg("pnl", {
+            "n": n,
+            "mark": mark,
+            "file": "b" * 64,
+            "top": [[did, score]],
+        }))
+    return {"messages": messages}
+
+
+def test_estimate_pnl_exposure_detects_stable_short_from_multiple_sweeps():
+    room = pnl_room([
+        (1, "222.04", "184.64"),
+        (2, "222.38", "170.45"),
+        (3, "221.48", "208.15"),
+        (4, "222.78", "153.40"),
+        (5, "221.96", "187.96"),
+        (6, "221.59", "203.30"),
+        (7, "221.42", "210.62"),
+    ])
+    estimate = close_call.estimate_pnl_exposure(room, did=DID_A)
+    assert estimate.stable is True
+    assert estimate.exposure is not None
+    assert Decimal("-44") < estimate.exposure < Decimal("-39")
+    assert estimate.consistent_intervals >= 4
+
+
+def test_estimate_pnl_exposure_ignores_tiny_moves_and_fails_closed_when_sparse():
+    room = pnl_room([
+        (1, "221.42", "210.62"),
+        (2, "221.51", "206.61"),
+        (3, "221.42", "210.29"),
+        (4, "221.41", "210.87"),
+    ])
+    estimate = close_call.estimate_pnl_exposure(room, did=DID_A)
+    assert estimate.stable is False
+    assert estimate.exposure is None
+
+
+def test_candidate_score_at_final_matches_official_fold_economics_for_fresh_open():
+    score = close_call.candidate_score_at_final(
+        side="buy",
+        qty="44.10",
+        px="224.33",
+        final_price="226.50",
+    )
+    assert score == Decimal("44.10") * (Decimal("226.50") - Decimal("224.33")) - Decimal("44.10") * Decimal("224.33") * Decimal("0.01")
+
+
+def test_dynamic_crossover_with_short_leader_reduces_required_long_hurdle():
+    result = close_call.dynamic_crossover_with_leader(
+        leader_score="210.87",
+        leader_exposure="-42",
+        current_mark="221.41",
+        candidate_side="buy",
+        qty="44.10",
+        px="224.33",
+    )
+    crossover = Decimal(result["crossover_final_price"])
+    assert Decimal("226.49") < crossover < Decimal("226.52")
+    assert result["beats_leader_if_final"] == "above"
+    assert result["candidate_exposure"] == "44.10"
+    assert "clawback" in result["warning"]
+
+
+def test_dynamic_crossover_rejects_parallel_exposure():
+    with pytest.raises(ValueError, match="parallel_exposure"):
+        close_call.dynamic_crossover_with_leader(
+            leader_score="10",
+            leader_exposure="4",
+            current_mark="220",
+            candidate_side="buy",
+            qty="4",
+            px="220",
         )
