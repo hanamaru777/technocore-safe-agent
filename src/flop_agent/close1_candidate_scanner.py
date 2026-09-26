@@ -169,6 +169,54 @@ def _nearest_dynamic_top3(
     return price, condition, (price - current_mark) / current_mark
 
 
+def _verified_trade_id(room: str, message: object) -> str | None:
+    """Return a trade id only after outer, maker and taker signatures verify."""
+    if not isinstance(message, dict):
+        return None
+    try:
+        public_record.verify_signed_record(room, message)
+    except ValueError:
+        return None
+    payload = _message_payload(message)
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"t", "season", "terms", "taker", "maker_sig", "taker_sig"}
+        or payload.get("t") != "trade"
+        or payload.get("season") != close_call.CONTEST_ID
+    ):
+        return None
+    terms = payload.get("terms")
+    try:
+        canonical = close_call.canonical_terms(terms)
+        maker = terms["maker"]
+        taker = close_call._did(payload.get("taker"), label="taker")
+        if maker == taker:
+            return None
+        named = terms["taker"]
+        if named != "any" and named != taker:
+            return None
+        public_record.verify_did_signature(
+            maker,
+            payload.get("maker_sig"),
+            close_call.maker_signature_preimage(terms),
+        )
+        public_record.verify_did_signature(
+            taker,
+            payload.get("taker_sig"),
+            close_call.taker_signature_preimage(terms, taker),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if message.get("from") not in {maker, taker}:
+        return None
+    trade_id = terms.get("id")
+    if not isinstance(trade_id, str):
+        return None
+    if canonical != close_call.canonical_terms(terms):
+        return None
+    return trade_id
+
+
 def _message_payload(message: object) -> dict | None:
     if not isinstance(message, dict):
         return None
@@ -241,13 +289,9 @@ def build_candidate_scan(
                 continue
             kind = parsed.get("t")
             if kind == "trade":
-                try:
-                    public_record.verify_signed_record(room, message)
-                except ValueError:
-                    continue
-                terms = parsed.get("terms")
-                if isinstance(terms, dict) and isinstance(terms.get("id"), str):
-                    seen_trade_ids.add(terms["id"])
+                trade_id = _verified_trade_id(room, message)
+                if trade_id is not None:
+                    seen_trade_ids.add(trade_id)
             elif kind == "offer":
                 offer_records.append((room, message))
 
