@@ -140,6 +140,11 @@ def _nearest_dynamic_top3(
         return current_mark, "at", Decimal("0")
 
     crossings: set[Decimal] = set()
+    candidate_position = qty if side == "buy" else -qty
+    zero_crossing = px + fee / candidate_position
+    if zero_crossing > 0:
+        crossings.add(zero_crossing)
+
     for leader in stable:
         try:
             cross = close1_strategy.crossover_vs_competitor(
