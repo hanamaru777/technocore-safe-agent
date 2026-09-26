@@ -100,7 +100,7 @@ def test_repeated_fetch_failure_is_fail_closed_and_bounded(monkeypatch, tmp_path
         raise RuntimeError("simulated")
 
     notices = []
-    for index in range(6):
+    for index in range(7):
         notices = close1_discord_progress.periodic_notices(
             now=NOW + timedelta(minutes=5 * index),
             fetcher=fail,
