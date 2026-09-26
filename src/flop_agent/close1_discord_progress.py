@@ -33,6 +33,7 @@ def _default_state() -> dict:
         "last_top3_cutoff": None,
         "last_sweep": None,
         "failure_count": 0,
+        "failure_started_at": None,
         "last_failure_notice_at": None,
     }
 
@@ -148,10 +149,14 @@ def periodic_notices(
         snapshot = fetch()
     except Exception as error:
         state["failure_count"] = int(state.get("failure_count", 0) or 0) + 1
+        if _parse_time(state.get("failure_started_at")) is None:
+            state["failure_started_at"] = current.isoformat()
         notices: list[str] = []
+        failure_elapsed = _elapsed(current, state.get("failure_started_at"))
         since_failure_notice = _elapsed(current, state.get("last_failure_notice_at"))
         if (
-            state["failure_count"] >= 6
+            failure_elapsed is not None
+            and failure_elapsed >= STATUS_INTERVAL_SECONDS
             and (since_failure_notice is None or since_failure_notice >= STATUS_INTERVAL_SECONDS)
         ):
             notices.append(
@@ -190,6 +195,7 @@ def periodic_notices(
         last_top3_cutoff=str(cutoff) if cutoff is not None else None,
         last_sweep=snapshot.sweep,
         failure_count=0,
+        failure_started_at=None,
     )
     _save_state(state)
     return notices
