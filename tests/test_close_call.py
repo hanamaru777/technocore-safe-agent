@@ -1,5 +1,9 @@
+import base64
 import json
 from decimal import Decimal
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import pytest
 
@@ -198,3 +202,131 @@ def test_fetch_live_snapshot_is_read_only(monkeypatch):
     snapshot = close_call.fetch_live_snapshot()
     assert snapshot.sweep == 1
     assert len(calls) == 4
+
+
+B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _b58encode(raw: bytes) -> str:
+    number = int.from_bytes(raw, "big")
+    encoded = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        encoded = B58[remainder] + encoded
+    leading = len(raw) - len(raw.lstrip(b"\x00"))
+    return "1" * leading + (encoded or "1")
+
+
+def _test_did(key: Ed25519PrivateKey) -> str:
+    public = key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return "did:key:z" + _b58encode(b"\xed\x01" + public)
+
+
+def _sig(key: Ed25519PrivateKey, message: str) -> str:
+    return base64.urlsafe_b64encode(key.sign(message.encode("utf-8"))).rstrip(b"=").decode("ascii")
+
+
+def signed_public_offer(*, bad_maker_sig: bool = False):
+    maker_key = Ed25519PrivateKey.from_private_bytes(b"\x11" * 32)
+    maker = _test_did(maker_key)
+    terms = {
+        "id": "offer1",
+        "maker": maker,
+        "side": "sell",
+        "qty": "3.00",
+        "px": "224.70",
+        "taker": "any",
+        "until": 190,
+    }
+    maker_sig = _sig(maker_key, close_call.maker_signature_preimage(terms))
+    if bad_maker_sig:
+        other_key = Ed25519PrivateKey.from_private_bytes(b"\x22" * 32)
+        maker_sig = _sig(other_key, close_call.maker_signature_preimage(terms))
+    text = json.dumps(
+        {
+            "t": "offer",
+            "season": "close-1",
+            "terms": terms,
+            "maker_sig": maker_sig,
+        },
+        separators=(",", ":"),
+    )
+    nonce = 123456
+    return {
+        "seq": 99,
+        "ts": "2026-09-26T03:45:20Z",
+        "from": maker,
+        "text": text,
+        "nonce": nonce,
+        "sig": _sig(maker_key, f"close1|{nonce}|{text}"),
+    }
+
+
+def test_verified_public_offer_checks_outer_and_maker_signatures():
+    offer = close_call.parse_verified_public_offer(
+        signed_public_offer(),
+        current_sweep=189,
+        our_did=DID_B,
+    )
+    assert offer.maker_side == "sell"
+    assert offer.taker_side == "buy"
+    assert offer.qty == Decimal("3.00")
+    assert offer.px == Decimal("224.70")
+    assert offer.until == 190
+    assert offer.taker_signature_preimage.endswith("|" + DID_B)
+
+
+def test_verified_public_offer_rejects_bad_detached_maker_signature():
+    with pytest.raises(ValueError, match="signature verification failed"):
+        close_call.parse_verified_public_offer(
+            signed_public_offer(bad_maker_sig=True),
+            current_sweep=189,
+            our_did=DID_B,
+        )
+
+
+def test_verified_public_offer_rejects_expired_and_self_trade():
+    record = signed_public_offer()
+    with pytest.raises(ValueError, match="offer_expired"):
+        close_call.parse_verified_public_offer(
+            record,
+            current_sweep=190,
+            our_did=DID_B,
+        )
+    with pytest.raises(ValueError, match="self_trade"):
+        close_call.parse_verified_public_offer(
+            record,
+            current_sweep=189,
+            our_did=record["from"],
+        )
+
+
+def test_evaluate_verified_offer_as_taker_is_read_only_and_risk_aware():
+    plan = close_call.evaluate_verified_offer_as_taker(
+        signed_public_offer(),
+        current_sweep=189,
+        our_did=DID_B,
+        reference_price="224.55",
+        reference_age_seconds=5,
+        available_cash="10000",
+    )
+    assert plan["maker_side"] == "sell"
+    assert plan["taker_side"] == "buy"
+    assert plan["reference_fresh_for_strategy"] is True
+    assert plan["enough_cash_for_base_fee_and_collateral"] is True
+    assert plan["base_fee"] == "6.741000"
+    assert plan["required_cash_before_unknown_clawback"] == "680.841000"
+    assert "clawback" in plan["warning"]
+
+    with pytest.raises(RuntimeError, match="reference_stale"):
+        close_call.evaluate_verified_offer_as_taker(
+            signed_public_offer(),
+            current_sweep=189,
+            our_did=DID_B,
+            reference_price="224.55",
+            reference_age_seconds=305,
+            available_cash="10000",
+        )
