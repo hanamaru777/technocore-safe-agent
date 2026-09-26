@@ -81,6 +81,22 @@ def test_prod511_requires_fresh_safety_and_protected_counts():
     assert "protected_counts_changed" in s
 
 
+def test_prod511_waits_for_transient_safety_recovery_before_any_mutation():
+    s = _source()
+    assert "for _ in $(seq 1 12)" in s
+    assert "sleep 10" in s
+    assert "observer_safety_not_ok_after_wait" in s
+    wait_index = s.index("for _ in $(seq 1 12)")
+    fetch_index = s.index("git_owner fetch --quiet --no-tags origin main")
+    merge_index = s.index('git_owner merge --quiet --ff-only "$TARGET"')
+    assert wait_index < fetch_index < merge_index
+    assert "resident_changed_during_safety_wait" in s
+    assert "capture_changed_during_safety_wait" in s
+    assert "signer_changed_during_safety_wait" in s
+    assert "discord_changed_during_safety_wait" in s
+    assert "protected_changed_during_safety_wait" in s
+
+
 def test_prod511_does_not_require_public_fetch_success_for_rollout_pass():
     s = _source()
     assert "FAILURES_AFTER" in s
