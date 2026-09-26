@@ -181,6 +181,7 @@ def parse_verified_public_offer(
     *,
     current_sweep: int,
     our_did: str,
+    room: str = TRADING_ROOM,
 ) -> VerifiedPublicOffer:
     """Verify one observed t=offer convention without signing or posting.
 
@@ -193,19 +194,26 @@ def parse_verified_public_offer(
         raise ValueError("close1_current_sweep_invalid")
     if not isinstance(message, dict):
         raise ValueError("close1_offer_record_invalid")
+    if not isinstance(room, str) or not room or len(room) > 128:
+        raise ValueError("close1_offer_room_invalid")
 
-    public_record.verify_signed_record(TRADING_ROOM, message)
+    public_record.verify_signed_record(room, message)
     text = message.get("text")
     try:
         payload = json.loads(text)
     except (TypeError, json.JSONDecodeError) as error:
         raise ValueError("close1_offer_json_invalid") from error
+    required = {"t", "season", "terms", "maker_sig"}
+    allowed = required | {"how"}
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"t", "season", "terms", "maker_sig"}
+        or not required.issubset(payload)
+        or not set(payload).issubset(allowed)
         or payload.get("t") != "offer"
         or payload.get("season") != CONTEST_ID
     ):
+        raise ValueError("close1_offer_shape_invalid")
+    if "how" in payload and not isinstance(payload["how"], str):
         raise ValueError("close1_offer_shape_invalid")
 
     terms = payload.get("terms")
@@ -256,6 +264,7 @@ def evaluate_verified_offer_as_taker(
     current_sweep: int,
     our_did: str,
     reference_price: str,
+    room: str = TRADING_ROOM,
     reference_age_seconds: int,
     available_cash: str | None = None,
     current_position: str = "0",
@@ -265,6 +274,7 @@ def evaluate_verified_offer_as_taker(
         message,
         current_sweep=current_sweep,
         our_did=our_did,
+        room=room,
     )
     if type(reference_age_seconds) is not int or reference_age_seconds < 0:
         raise ValueError("close1_reference_age_invalid")
