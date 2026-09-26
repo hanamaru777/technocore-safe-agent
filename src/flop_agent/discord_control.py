@@ -991,13 +991,42 @@ async def notification_worker(channel, control: Control, stop: asyncio.Event, di
             await _send_airdrop_action_notices(channel, discord)
         try: await asyncio.wait_for(stop.wait(), timeout=15)
         except TimeoutError: pass
-async def close1_progress_worker(channel, stop: asyncio.Event) -> None:
-    """Keep Close Call I/O isolated from core health/candidate notifications."""
-    while not stop.is_set():
-        for notice in await asyncio.to_thread(close1_discord_progress.periodic_notices):
-            await channel.send(notice, suppress_embeds=True)
+async def _close1_progress_once(channel, *, poller=None) -> bool:
+    """Run one isolated Close Call progress iteration without killing the worker."""
+    fetch = poller or close1_discord_progress.periodic_notices
+    try:
+        notices = await asyncio.to_thread(fetch)
+    except Exception:
+        LOG.exception("Close Call progress poll failed; worker will retry")
+        return False
+    for notice in notices:
         try:
-            await asyncio.wait_for(stop.wait(), timeout=15)
+            await channel.send(notice, suppress_embeds=True)
+        except Exception:
+            LOG.exception("Close Call progress Discord send failed; worker will retry")
+            return False
+    return True
+
+
+def _close1_worker_delay(failure_streak: int, *, base_seconds: int = 15) -> int:
+    if type(failure_streak) is not int or failure_streak < 0:
+        raise ValueError("close1_worker_failure_streak_invalid")
+    if type(base_seconds) is not int or base_seconds < 1:
+        raise ValueError("close1_worker_base_seconds_invalid")
+    if failure_streak == 0:
+        return base_seconds
+    return min(base_seconds * (2 ** min(failure_streak - 1, 5)), 300)
+
+
+async def close1_progress_worker(channel, stop: asyncio.Event) -> None:
+    """Keep Close Call monitoring alive even if one poll/send iteration fails."""
+    failure_streak = 0
+    while not stop.is_set():
+        success = await _close1_progress_once(channel)
+        failure_streak = 0 if success else failure_streak + 1
+        delay = _close1_worker_delay(failure_streak)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay)
         except TimeoutError:
             pass
 
