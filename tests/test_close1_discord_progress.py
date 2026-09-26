@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from flop_agent import close1_discord_progress, close_call, discord_control
+from flop_agent import close1_candidate_scanner, close1_discord_progress, close_call, discord_control
 
 
 DID_A = "did:key:z6MkeU5vNqNxwtmAsf8ZyeLGG5KyUSbT94cTXomQpQXZp9Ta"
@@ -21,6 +21,49 @@ def snapshot(*, sweep=192, age=10, cutoff="96.00", leader="104.00"):
         longs=26000,
         shorts=27000,
         open_notional=Decimal("1047000.00"),
+    )
+
+
+def candidate_scan(*, move="0.015", side="buy", gate="ready"):
+    leaders = tuple(
+        close1_candidate_scanner.LeaderView(
+            did=did,
+            score=Decimal("210"),
+            position=Decimal("-42"),
+            stable=True,
+            reason="stable",
+        )
+        for did in (DID_A, DID_B, DID_A)
+    )
+    candidate = close1_candidate_scanner.CandidateView(
+        room="close1-offers",
+        seq=123,
+        trade_id="watch-1",
+        taker_side=side,
+        qty=Decimal("4"),
+        px=Decimal("227.40"),
+        until=205,
+        base_fee=Decimal("9.096"),
+        required_cash=Decimal("918.696"),
+        dynamic_top3_price=Decimal("229.67"),
+        dynamic_condition="above" if side == "buy" else "below",
+        move_percent_from_mark=Decimal(move),
+        visible_leader_coverage=3,
+        visible_leaders=3,
+        warning="visible-leader projection with conservative zero-score floor; clawback",
+    )
+    return close1_candidate_scanner.CandidateScan(
+        sweep=202,
+        reference=Decimal("224.55"),
+        reference_age_seconds=10,
+        mark=Decimal("226.28"),
+        top3_cutoff=Decimal("210"),
+        visible_leaders=leaders,
+        verified_offers=1,
+        sampled_trade_ids=0,
+        rejected_offers=0,
+        candidates=(candidate,),
+        strategy_gate=gate,
     )
 
 
@@ -132,3 +175,94 @@ def test_discord_close1_command_is_authenticated_and_read_only(monkeypatch):
     denied = control.command("999", "/close1", "456")
     assert denied["ok"] is False
     assert denied["error"] == "unauthorized"
+
+
+def test_manual_status_surfaces_candidate_scanner_without_binding_action():
+    message = close1_discord_progress.status_message(
+        fetcher=lambda: snapshot(),
+        candidate_fetcher=lambda: candidate_scan(),
+    )
+    assert "strategy scanner: ready" in message
+    assert "best WATCH: BUY 4 @ 227.40" in message
+    assert "visible-top3推定" in message
+    assert "個別承認が必要" in message
+
+
+def test_candidate_near_threshold_notifies_before_thirty_minutes(monkeypatch, tmp_path):
+    isolate_state(monkeypatch, tmp_path)
+    close1_discord_progress.periodic_notices(
+        now=NOW,
+        fetcher=lambda: snapshot(),
+        candidate_fetcher=lambda: candidate_scan(move="0.030"),
+    )
+    notices = close1_discord_progress.periodic_notices(
+        now=NOW + timedelta(minutes=5),
+        fetcher=lambda: snapshot(sweep=193),
+        candidate_fetcher=lambda: candidate_scan(move="0.015"),
+    )
+    assert len(notices) == 1
+    assert "候補接近" in notices[0]
+    assert "現在mark比 +1.50%" in notices[0]
+
+
+def test_candidate_does_not_spam_every_five_minutes(monkeypatch, tmp_path):
+    isolate_state(monkeypatch, tmp_path)
+    close1_discord_progress.periodic_notices(
+        now=NOW,
+        fetcher=lambda: snapshot(),
+        candidate_fetcher=lambda: candidate_scan(move="0.015"),
+    )
+    notices = close1_discord_progress.periodic_notices(
+        now=NOW + timedelta(minutes=5),
+        fetcher=lambda: snapshot(sweep=193),
+        candidate_fetcher=lambda: candidate_scan(move="0.014"),
+    )
+    assert notices == []
+
+
+def test_material_candidate_improvement_notifies(monkeypatch, tmp_path):
+    isolate_state(monkeypatch, tmp_path)
+    close1_discord_progress.periodic_notices(
+        now=NOW,
+        fetcher=lambda: snapshot(),
+        candidate_fetcher=lambda: candidate_scan(move="0.018"),
+    )
+    notices = close1_discord_progress.periodic_notices(
+        now=NOW + timedelta(minutes=5),
+        fetcher=lambda: snapshot(sweep=193),
+        candidate_fetcher=lambda: candidate_scan(move="0.012"),
+    )
+    assert len(notices) == 1
+    assert "候補接近" in notices[0]
+
+
+def test_scanner_failure_does_not_break_progress_notice(monkeypatch, tmp_path):
+    isolate_state(monkeypatch, tmp_path)
+
+    def fail_scan():
+        raise RuntimeError("scanner-offline")
+
+    notices = close1_discord_progress.periodic_notices(
+        now=NOW,
+        fetcher=lambda: snapshot(),
+        candidate_fetcher=fail_scan,
+    )
+    assert len(notices) == 1
+    assert "監視開始" in notices[0]
+    assert "strategy scanner: unavailable (RuntimeError)" in notices[0]
+    assert "visible top3 cutoff: +96.00 POLF" in notices[0]
+
+
+def test_candidate_signal_requires_ready_gate(monkeypatch, tmp_path):
+    isolate_state(monkeypatch, tmp_path)
+    close1_discord_progress.periodic_notices(
+        now=NOW,
+        fetcher=lambda: snapshot(),
+        candidate_fetcher=lambda: candidate_scan(move="0.030"),
+    )
+    notices = close1_discord_progress.periodic_notices(
+        now=NOW + timedelta(minutes=5),
+        fetcher=lambda: snapshot(sweep=193),
+        candidate_fetcher=lambda: candidate_scan(move="0.010", gate="leader_coverage_incomplete"),
+    )
+    assert notices == []
