@@ -820,7 +820,6 @@ class Control:
             " / ".join(incidents[key] for key in sorted(current_keys)) or None
         )
         save_ui_state(ui)
-        notices.extend(close1_discord_progress.periodic_notices())
         return notices
     def interaction_notices(self) -> list[str]:
         interactions = sync_interactions(); ui = load_ui_state(); notified = set(ui.get("notified_interactions", [])); notices = []
@@ -992,6 +991,17 @@ async def notification_worker(channel, control: Control, stop: asyncio.Event, di
             await _send_airdrop_action_notices(channel, discord)
         try: await asyncio.wait_for(stop.wait(), timeout=15)
         except TimeoutError: pass
+async def close1_progress_worker(channel, stop: asyncio.Event) -> None:
+    """Keep Close Call I/O isolated from core health/candidate notifications."""
+    while not stop.is_set():
+        for notice in await asyncio.to_thread(close1_discord_progress.periodic_notices):
+            await channel.send(notice, suppress_embeds=True)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=15)
+        except TimeoutError:
+            pass
+
+
 async def digest_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
         configured = resident.load_config().get("discord_digest_interval_seconds", NORMAL_DIGEST_SECONDS); interval = max(NORMAL_DIGEST_SECONDS, int(configured))
@@ -1009,7 +1019,7 @@ def main() -> None:
         channel = bot.get_channel(int(channel_id))
         if channel is None: raise RuntimeError("configured Discord channel is unavailable")
         if getattr(bot, "resident_workers_started", False): return
-        bot.resident_workers_started = True; await asyncio.to_thread(control.ensure_baseline); LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal"); asyncio.create_task(notification_worker(channel, control, stop, discord)); asyncio.create_task(digest_worker(channel, control, stop))
+        bot.resident_workers_started = True; await asyncio.to_thread(control.ensure_baseline); LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal"); asyncio.create_task(notification_worker(channel, control, stop, discord)); asyncio.create_task(close1_progress_worker(channel, stop)); asyncio.create_task(digest_worker(channel, control, stop))
     @bot.event
     async def on_message(message):
         if message.author.bot or str(message.channel.id) != channel_id: return
