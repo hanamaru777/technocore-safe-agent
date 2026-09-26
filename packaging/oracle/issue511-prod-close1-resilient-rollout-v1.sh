@@ -120,7 +120,23 @@ DIS=$(snap technocore-safe-agent-discord.service)
 
 BASE_COUNTS=$(counts)
 [[ "$BASE_COUNTS" == "$CORE_E|$CORE_M|$BRIDGE_E|$BRIDGE_M" ]] || stop_rollout protected_baseline_changed
-SAFETY_AGE=$(safety_gate) || stop_rollout observer_safety_not_ok
+
+SAFETY_AGE=''
+for _ in $(seq 1 12); do
+  if SAFETY_AGE=$(safety_gate 2>/dev/null); then
+    break
+  fi
+  sleep 10
+done
+[[ -n "$SAFETY_AGE" ]] || stop_rollout observer_safety_not_ok_after_wait
+
+# Revalidate the immutable safety baseline after the read-only recovery wait.
+[[ "$(snap technocore-safe-agent-resident.service)" == "$RES" ]] || stop_rollout resident_changed_during_safety_wait
+[[ "$(snap technocore-safe-agent-lobby-capture.service)" == "$CAP" ]] || stop_rollout capture_changed_during_safety_wait
+[[ "$(snap technocore-safe-agent-signer.service)" == "$SIG" ]] || stop_rollout signer_changed_during_safety_wait
+[[ "$(snap technocore-safe-agent-discord.service)" == "$DIS" ]] || stop_rollout discord_changed_during_safety_wait
+[[ "$(counts)" == "$BASE_COUNTS" ]] || stop_rollout protected_changed_during_safety_wait
+
 PROGRESS_BEFORE=$(progress_fields) || stop_rollout close1_progress_state_unreadable
 IFS='|' read -r ATTEMPT_BEFORE SUCCESS_BEFORE FAILURES_BEFORE SWEEP_BEFORE <<<"$PROGRESS_BEFORE"
 
