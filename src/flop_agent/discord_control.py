@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import airdrop_approval, autopilot, discord_airdrop_actions, observer, resident, tclk_watch
+from . import airdrop_approval, autopilot, close1_discord_progress, discord_airdrop_actions, observer, resident, tclk_watch
 
 LOG = logging.getLogger(__name__)
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -607,6 +607,7 @@ class Control:
             except airdrop_approval.ApprovalInboxError as error: return {"ok": False, "error": str(error), "message": "Airdrop rejection was not recorded. No external action was executed."}
             return {"ok": True, "data": data, "message": f"REJECTED locally: {data['request_id']}. 外部実行はありません。"}
         if action == "/status": return {"ok": True, "data": {}, "message": status_message()}
+        if action == "/close1" and not args: return {"ok": True, "data": {}, "message": close1_discord_progress.status_message()}
         if action == "/mission" and not args: return {"ok": True, "data": {}, "message": mission_message()}
         if action == "/activity" and not args: return {"ok": True, "data": {}, "message": activity_message()}
         if action == "/tclk-opportunities" and not args: return {"ok": True, "data": {}, "message": tclk_opportunities_message()}
@@ -632,7 +633,7 @@ class Control:
         if action == "/autopilot-queue": data = autopilot.queue(); return {"ok": True, "data": data, "message": f"Autopilot queue: {len(data['outbox'])} structured public intents."}
         if action == "/autopilot-pause": return {"ok": True, "data": autopilot.pause(True), "message": "Autopilot outbox generation paused."}
         if action == "/autopilot-resume": return {"ok": True, "data": autopilot.pause(False), "message": "Autopilot outbox generation resumed locally; Discord cannot publish."}
-        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /mission /status /activity /airdrop-approvals /airdrop-approval <id> /trust-candidates /trusted /history [相手ID] /candidate <id> /tclk-opportunities /tclk <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
+        if action == "/help": return {"ok": True, "data": {}, "message": "普段使うコマンド: /mission /status /close1 /activity /airdrop-approvals /airdrop-approval <id> /trust-candidates /trusted /history [相手ID] /candidate <id> /tclk-opportunities /tclk <id> | 緊急停止: /autopilot-pause | 詳細: /help-debug"}
         if action == "/help-debug": return {"ok": True, "data": {}, "message": "Debug: /resident-status /intel /opportunities /agents /agent <id> /approve <id> /reject <id> <reason> /pause /resume /learning /autopilot-status /autopilot-queue /autopilot-resume"}
         return {"ok": False, "error": "unsupported", "message": "Unsupported control command. Use /help."}
     def notifications(self) -> list[dict]:
@@ -990,6 +991,17 @@ async def notification_worker(channel, control: Control, stop: asyncio.Event, di
             await _send_airdrop_action_notices(channel, discord)
         try: await asyncio.wait_for(stop.wait(), timeout=15)
         except TimeoutError: pass
+async def close1_progress_worker(channel, stop: asyncio.Event) -> None:
+    """Keep Close Call I/O isolated from core health/candidate notifications."""
+    while not stop.is_set():
+        for notice in await asyncio.to_thread(close1_discord_progress.periodic_notices):
+            await channel.send(notice, suppress_embeds=True)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=15)
+        except TimeoutError:
+            pass
+
+
 async def digest_worker(channel, control: Control, stop: asyncio.Event) -> None:
     while not stop.is_set():
         configured = resident.load_config().get("discord_digest_interval_seconds", NORMAL_DIGEST_SECONDS); interval = max(NORMAL_DIGEST_SECONDS, int(configured))
@@ -1007,7 +1019,7 @@ def main() -> None:
         channel = bot.get_channel(int(channel_id))
         if channel is None: raise RuntimeError("configured Discord channel is unavailable")
         if getattr(bot, "resident_workers_started", False): return
-        bot.resident_workers_started = True; await asyncio.to_thread(control.ensure_baseline); LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal"); asyncio.create_task(notification_worker(channel, control, stop, discord)); asyncio.create_task(digest_worker(channel, control, stop))
+        bot.resident_workers_started = True; await asyncio.to_thread(control.ensure_baseline); LOG.info("Discord control started; message-content intent must be enabled in the Discord developer portal"); asyncio.create_task(notification_worker(channel, control, stop, discord)); asyncio.create_task(close1_progress_worker(channel, stop)); asyncio.create_task(digest_worker(channel, control, stop))
     @bot.event
     async def on_message(message):
         if message.author.bot or str(message.channel.id) != channel_id: return
