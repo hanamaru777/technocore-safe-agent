@@ -204,6 +204,7 @@ def test_server_gap_records_full_prefix_only_without_local_suffix(monkeypatch):
     state["cursors"]["lobby"] = 10
     budget = Budget()
 
+    monkeypatch.setattr(bridge, "LOCAL_RECOVERY_GRACE_SECONDS", 0)
     monkeypatch.setattr(capture, "read_range", lambda *args, **kwargs: [])
     monkeypatch.setattr(capture, "first_available_seq", lambda *args, **kwargs: None)
 
@@ -224,8 +225,91 @@ def test_server_gap_records_full_prefix_only_without_local_suffix(monkeypatch):
     assert state["metrics"]["lobby_startup_bridge_unrecoverable_messages"] == 9
     assert state["metrics"]["lobby_startup_bridge_local_suffix_handoffs"] == 0
     assert state["metrics"]["lobby_startup_bridge_avoided_unrecoverable_messages"] == 0
+    assert state["metrics"]["lobby_startup_bridge_local_grace_attempts"] == 1
+    assert state["metrics"]["lobby_startup_bridge_local_grace_timeouts"] == 1
     assert state["last_unrecoverable_gap"]["missing_from"] == 11
     assert state["last_unrecoverable_gap"]["missing_to"] == 19
+
+
+def test_inflight_capture_grace_recovers_expected_row_before_loss(monkeypatch):
+    state = resilience.default_state()
+    state["cursors"]["lobby"] = 10
+    budget = Budget()
+    present = set()
+    calls = {"first": 0}
+
+    def fake_read_range(start, end, path=None):
+        if start == end and start in present:
+            return [msg(start)]
+        return []
+
+    def fake_first_available(start, end=None, path=None):
+        calls["first"] += 1
+        if calls["first"] == 1:
+            return None
+        present.add(11)
+        return 11
+
+    monkeypatch.setattr(capture, "read_range", fake_read_range)
+    monkeypatch.setattr(capture, "first_available_seq", fake_first_available)
+
+    recovered, retry, error, local_resume = asyncio.run(
+        bridge._stream_until_local_resume(
+            Client([msg(20)]), budget, state, cfg(), None, None, Stop()
+        )
+    )
+
+    assert (recovered, retry, error, local_resume) == (0, None, None, True)
+    assert state["cursors"]["lobby"] == 10
+    assert state["metrics"].get("unrecoverable_core_gap_events", 0) == 0
+    assert state["metrics"]["lobby_startup_bridge_local_grace_attempts"] == 1
+    assert state["metrics"]["lobby_startup_bridge_local_grace_recoveries"] == 1
+    assert state["metrics"]["lobby_startup_bridge_local_grace_timeouts"] == 0
+
+
+def test_stop_during_local_grace_never_records_loss(monkeypatch):
+    state = resilience.default_state()
+    state["cursors"]["lobby"] = 10
+    budget = Budget()
+
+    class StopDuringGrace:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        async def wait(self):
+            self.stopped = True
+
+    stop = StopDuringGrace()
+    monkeypatch.setattr(capture, "read_range", lambda *args, **kwargs: [])
+    monkeypatch.setattr(capture, "first_available_seq", lambda *args, **kwargs: None)
+
+    recovered, retry, error, local_resume = asyncio.run(
+        bridge._stream_until_local_resume(
+            Client([msg(20)]), budget, state, cfg(), None, None, stop
+        )
+    )
+
+    assert recovered == 0
+    assert retry is None
+    assert error == "stopped_during_local_grace"
+    assert local_resume is False
+    assert state["cursors"]["lobby"] == 10
+    assert state["metrics"].get("unrecoverable_core_gap_events", 0) == 0
+
+
+def test_bridge_capture_sqlite_reads_are_offloaded_from_event_loop():
+    import inspect
+
+    source = inspect.getsource(bridge)
+    local_range = inspect.getsource(bridge._read_local_range)
+    first_seq = inspect.getsource(bridge._first_local_seq)
+    assert "asyncio.to_thread(capture.read_range" in local_range
+    assert "asyncio.to_thread(capture.first_available_seq" in first_seq
+    assert "capture.read_range(" not in source
+    assert "capture.first_available_seq(" not in source
 
 
 def test_bridge_transport_error_never_invents_cursor_progress(monkeypatch):
