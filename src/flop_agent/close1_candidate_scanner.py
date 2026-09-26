@@ -109,6 +109,10 @@ def _visible_top3_at_price(
     ]
     if len(scores) < 3:
         raise ValueError("close1_scanner_insufficient_stable_leaders")
+    # Conservative floor: registered accounts that never trade score exactly 0.
+    # Keep three synthetic zero-score competitors so a rebound that makes all
+    # visible leaders negative never creates a false "top3 with a loss" signal.
+    scores.extend((Decimal("0"), Decimal("0"), Decimal("0")))
     scores.sort(reverse=True)
     return scores[2]
 
@@ -325,8 +329,8 @@ def build_candidate_scan(
             visible_leader_coverage=stable_count,
             visible_leaders=len(leaders),
             warning=(
-                "visible-leader projection only; leader/future trades, hidden accounts and "
-                "sweep-close clawback can change the actual top3 outcome"
+                "visible-leader projection with conservative zero-score floor; leader/future "
+                "trades, hidden accounts and sweep-close clawback can change the actual top3 outcome"
             ),
         ))
 
