@@ -89,6 +89,26 @@ print("|".join([attempt,success if isinstance(success,str) else "",str(failures)
 PY
 }
 
+health_sample() {
+  "$PY" - "$OBS" "$SAFETY" "$CORE_E" "$CORE_M" <<'PY'
+import json, pathlib, sys
+from datetime import UTC, datetime
+obs=json.loads(pathlib.Path(sys.argv[1]).read_text("utf-8"))
+safe=json.loads(pathlib.Path(sys.argv[2]).read_text("utf-8"))
+ce,cm=map(int,sys.argv[3:5])
+now=datetime.now(UTC)
+def age(value):
+    stamp=datetime.fromisoformat(str(value).replace("Z","+00:00")).astimezone(UTC)
+    return (now-stamp).total_seconds()
+if (obs.get("health") or {}).get("current")!="ok": raise SystemExit(1)
+if not 0 <= age(obs.get("updated_at")) <= 300: raise SystemExit(1)
+if safe.get("schema_version")!=1 or safe.get("health")!="ok": raise SystemExit(1)
+if safe.get("unrecoverable_core_gap_events")!=ce or safe.get("unrecoverable_core_gap_messages")!=cm: raise SystemExit(1)
+if not 0 <= age(safe.get("updated_at")) <= 300: raise SystemExit(1)
+print(f"obs_age:{int(age(obs.get('updated_at')))} safety_age:{int(age(safe.get('updated_at')))}")
+PY
+}
+
 safe_sample() {
   "$PY" - "$OBS" "$SAFETY" "$CORE_E" "$CORE_M" <<'PY'
 import json, pathlib, sys
@@ -213,7 +233,7 @@ for _ in $(seq 1 60); do
   CUR_OBS=$(obs_fields) || stop_rollout observer_state_unreadable_after_resident
   IFS='|' read -r OBS_UPDATED_AFTER OBS_HEALTH_AFTER LOBBY_AFTER <<<"$CUR_OBS"
   if [[ "$OBS_UPDATED_AFTER" != "$OBS_UPDATED_BEFORE" && "$OBS_HEALTH_AFTER" == ok && "$LOBBY_AFTER" -ge "$LOBBY_BEFORE" ]]; then
-    if POST_SAFE=$(safe_sample 2>/dev/null); then RES_ACCEPTED=YES; break; fi
+    if POST_SAFE=$(health_sample 2>/dev/null); then RES_ACCEPTED=YES; break; fi
   fi
   sleep 10
 done
