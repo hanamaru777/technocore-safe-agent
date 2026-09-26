@@ -113,14 +113,22 @@ def _offer(*, trade_id="live1", qty="44.00", px="224.33", side="sell", until=10)
     }, key, terms
 
 
-def _trade_for_offer(offer, key, terms):
+def _trade_for_offer(offer, key, terms, *, valid_taker_sig=True):
+    taker_key = Ed25519PrivateKey.from_private_bytes(b"\x44" * 32)
+    taker = _did(taker_key)
+    taker_sig = _sig(
+        taker_key,
+        close_call.taker_signature_preimage(terms, taker),
+    )
+    if not valid_taker_sig:
+        taker_sig = "A" * 86
     payload = {
         "t": "trade",
         "season": "close-1",
         "terms": terms,
-        "taker": OUR_DID,
+        "taker": taker,
         "maker_sig": json.loads(offer["text"])["maker_sig"],
-        "taker_sig": "A" * 86,
+        "taker_sig": taker_sig,
     }
     text = json.dumps(payload, separators=(",", ":"))
     nonce = 12346
@@ -214,6 +222,24 @@ def test_scanner_excludes_offer_id_already_seen_as_countersigned_trade(monkeypat
     assert report.sampled_trade_ids == 1
     assert report.verified_offers == 0
     assert report.candidates == ()
+
+
+def test_fake_trade_with_invalid_taker_signature_does_not_suppress_offer(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+    offer, key, terms = _offer()
+    fake_trade = _trade_for_offer(offer, key, terms, valid_taker_sig=False)
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": [offer, fake_trade]}},
+    )
+
+    assert report.sampled_trade_ids == 0
+    assert report.verified_offers == 1
+    assert len(report.candidates) == 1
 
 
 def test_scanner_stops_candidates_when_reference_is_stale(monkeypatch):
