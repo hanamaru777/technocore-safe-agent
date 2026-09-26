@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
-from . import core
+from . import core, public_record
 
 CONTEST_ID = "close-1"
 OFFICIAL_REPO_COMMIT = "66c1da36538e4b1c685417d2f66922906b13fea0"
@@ -54,6 +54,22 @@ class LiveSnapshot:
     longs: int
     shorts: int
     open_notional: Decimal
+
+
+@dataclass(frozen=True)
+class VerifiedPublicOffer:
+    """A verified public negotiation offer; not a referee-settled trade."""
+
+    seq: int
+    ts: str
+    maker: str
+    maker_side: str
+    taker_side: str
+    qty: Decimal
+    px: Decimal
+    until: int
+    canonical_terms: str
+    taker_signature_preimage: str
 
 
 def _compact(value: dict) -> str:
@@ -158,6 +174,144 @@ def taker_signature_preimage(terms: object, taker_did: str) -> str:
     if named != "any" and named != taker_did:
         raise ValueError("close1_taker_mismatch")
     return f"{CONTEST_ID}|accept|{canonical}|{taker_did}"
+
+
+def parse_verified_public_offer(
+    message: object,
+    *,
+    current_sweep: int,
+    our_did: str,
+) -> VerifiedPublicOffer:
+    """Verify one observed t=offer convention without signing or posting.
+
+    t=offer is a public negotiation convention seen in close1. It is not an
+    official referee-counted message; only a fully countersigned t=trade can
+    settle.
+    """
+    our_did = _did(our_did, label="taker")
+    if type(current_sweep) is not int or current_sweep < 0 or current_sweep >= LOCK_SWEEP:
+        raise ValueError("close1_current_sweep_invalid")
+    if not isinstance(message, dict):
+        raise ValueError("close1_offer_record_invalid")
+
+    public_record.verify_signed_record(TRADING_ROOM, message)
+    text = message.get("text")
+    try:
+        payload = json.loads(text)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("close1_offer_json_invalid") from error
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"t", "season", "terms", "maker_sig"}
+        or payload.get("t") != "offer"
+        or payload.get("season") != CONTEST_ID
+    ):
+        raise ValueError("close1_offer_shape_invalid")
+
+    terms = payload.get("terms")
+    canonical = canonical_terms(terms)
+    maker = terms["maker"]
+    if message.get("from") != maker:
+        raise ValueError("close1_offer_author_mismatch")
+    if maker == our_did:
+        raise ValueError("close1_self_trade_forbidden_by_local_policy")
+    if terms["taker"] != "any":
+        raise ValueError("close1_offer_not_public")
+    if terms["until"] < current_sweep + 1:
+        raise ValueError("close1_offer_expired")
+
+    maker_sig = payload.get("maker_sig")
+    if not isinstance(maker_sig, str):
+        raise ValueError("close1_offer_maker_sig_invalid")
+    public_record.verify_did_signature(
+        maker,
+        maker_sig,
+        maker_signature_preimage(terms),
+    )
+
+    seq = message.get("seq")
+    ts = message.get("ts")
+    if type(seq) is not int or seq <= 0 or not isinstance(ts, str):
+        raise ValueError("close1_offer_record_invalid")
+
+    maker_side = terms["side"]
+    taker_side = "sell" if maker_side == "buy" else "buy"
+    return VerifiedPublicOffer(
+        seq=seq,
+        ts=ts,
+        maker=maker,
+        maker_side=maker_side,
+        taker_side=taker_side,
+        qty=_amount(terms["qty"], label="qty"),
+        px=_amount(terms["px"], label="price"),
+        until=terms["until"],
+        canonical_terms=canonical,
+        taker_signature_preimage=taker_signature_preimage(terms, our_did),
+    )
+
+
+def evaluate_verified_offer_as_taker(
+    message: object,
+    *,
+    current_sweep: int,
+    our_did: str,
+    reference_price: str,
+    reference_age_seconds: int,
+    available_cash: str | None = None,
+    current_position: str = "0",
+) -> dict:
+    """Read-only taker-side risk preflight for one verified public offer."""
+    offer = parse_verified_public_offer(
+        message,
+        current_sweep=current_sweep,
+        our_did=our_did,
+    )
+    if type(reference_age_seconds) is not int or reference_age_seconds < 0:
+        raise ValueError("close1_reference_age_invalid")
+    if reference_age_seconds > SAFE_MAX_REFERENCE_AGE_SECONDS:
+        raise RuntimeError("close1_reference_stale_for_local_strategy")
+
+    ref = _amount(reference_price, label="reference")
+    lower = ref * (Decimal("1") - LIMIT_WINDOW)
+    upper = ref * (Decimal("1") + LIMIT_WINDOW)
+    if offer.px < lower or offer.px > upper:
+        raise ValueError("close1_price_outside_limit")
+
+    try:
+        held = Decimal(current_position)
+    except InvalidOperation as error:
+        raise ValueError("close1_position_invalid") from error
+    if not held.is_finite():
+        raise ValueError("close1_position_invalid")
+    side = Decimal("1") if offer.taker_side == "buy" else Decimal("-1")
+    closing = min(offer.qty, max(-side * held, Decimal("0")))
+    opening = offer.qty - closing
+    base_fee = FEE_RATE * offer.qty * offer.px
+    required_before_unknown_clawback = opening * offer.px + base_fee
+
+    enough_base_cash = None
+    if available_cash is not None:
+        cash = _amount(available_cash, label="available_cash")
+        enough_base_cash = cash >= required_before_unknown_clawback
+
+    return {
+        "offer_seq": offer.seq,
+        "maker": offer.maker,
+        "maker_side": offer.maker_side,
+        "taker_side": offer.taker_side,
+        "canonical_terms": offer.canonical_terms,
+        "taker_signature_preimage": offer.taker_signature_preimage,
+        "reference": str(ref),
+        "limit_low": str(lower),
+        "limit_high": str(upper),
+        "reference_age_seconds": reference_age_seconds,
+        "reference_fresh_for_strategy": True,
+        "opening_qty": str(opening),
+        "base_fee": str(base_fee),
+        "required_cash_before_unknown_clawback": str(required_before_unknown_clawback),
+        "enough_cash_for_base_fee_and_collateral": enough_base_cash,
+        "warning": "offer is negotiation only until countersigned; sweep close is unknown and clawback can exceed the 1% base fee",
+    }
 
 
 def validate_trade_plan(
