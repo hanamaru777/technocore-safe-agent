@@ -60,6 +60,7 @@ class LiveSnapshot:
 class VerifiedPublicOffer:
     """A verified public negotiation offer; not a referee-settled trade."""
 
+    room: str
     seq: int
     ts: str
     maker: str
@@ -70,6 +71,18 @@ class VerifiedPublicOffer:
     until: int
     canonical_terms: str
     taker_signature_preimage: str
+
+
+@dataclass(frozen=True)
+class ExposureEstimate:
+    """Provisional score-vs-mark exposure inferred from successive PnL posts."""
+
+    did: str
+    intervals: int
+    consistent_intervals: int
+    exposure: Decimal | None
+    stable: bool
+    min_mark_move: Decimal
 
 
 def _compact(value: dict) -> str:
@@ -181,6 +194,7 @@ def parse_verified_public_offer(
     *,
     current_sweep: int,
     our_did: str,
+    room: str = TRADING_ROOM,
 ) -> VerifiedPublicOffer:
     """Verify one observed t=offer convention without signing or posting.
 
@@ -193,19 +207,26 @@ def parse_verified_public_offer(
         raise ValueError("close1_current_sweep_invalid")
     if not isinstance(message, dict):
         raise ValueError("close1_offer_record_invalid")
+    if not isinstance(room, str) or not room or len(room) > 128:
+        raise ValueError("close1_offer_room_invalid")
 
-    public_record.verify_signed_record(TRADING_ROOM, message)
+    public_record.verify_signed_record(room, message)
     text = message.get("text")
     try:
         payload = json.loads(text)
     except (TypeError, json.JSONDecodeError) as error:
         raise ValueError("close1_offer_json_invalid") from error
+    required = {"t", "season", "terms", "maker_sig"}
+    allowed = required | {"how"}
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"t", "season", "terms", "maker_sig"}
+        or not required.issubset(payload)
+        or not set(payload).issubset(allowed)
         or payload.get("t") != "offer"
         or payload.get("season") != CONTEST_ID
     ):
+        raise ValueError("close1_offer_shape_invalid")
+    if "how" in payload and not isinstance(payload["how"], str):
         raise ValueError("close1_offer_shape_invalid")
 
     terms = payload.get("terms")
@@ -237,6 +258,7 @@ def parse_verified_public_offer(
     maker_side = terms["side"]
     taker_side = "sell" if maker_side == "buy" else "buy"
     return VerifiedPublicOffer(
+        room=room,
         seq=seq,
         ts=ts,
         maker=maker,
@@ -256,6 +278,7 @@ def evaluate_verified_offer_as_taker(
     current_sweep: int,
     our_did: str,
     reference_price: str,
+    room: str = TRADING_ROOM,
     reference_age_seconds: int,
     available_cash: str | None = None,
     current_position: str = "0",
@@ -265,6 +288,7 @@ def evaluate_verified_offer_as_taker(
         message,
         current_sweep=current_sweep,
         our_did=our_did,
+        room=room,
     )
     if type(reference_age_seconds) is not int or reference_age_seconds < 0:
         raise ValueError("close1_reference_age_invalid")
@@ -313,6 +337,147 @@ def evaluate_verified_offer_as_taker(
         "warning": "offer is negotiation only until countersigned; sweep close is unknown and clawback can exceed the 1% base fee",
     }
 
+
+def _signed_decimal(value: object, *, label: str) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(f"close1_{label}_invalid") from error
+    if not parsed.is_finite():
+        raise ValueError(f"close1_{label}_invalid")
+    return parsed
+
+
+def estimate_pnl_exposure(
+    pnl_room: object,
+    *,
+    did: str,
+    min_mark_move: str = "0.10",
+    min_intervals: int = 4,
+) -> ExposureEstimate:
+    """Infer current exposure from score-vs-mark changes conservatively.
+
+    A stable account with no intervening trade changes score by approximately
+    position times mark_change. Rounded public values make tiny moves noisy,
+    so this requires a robust median and a consistency gate.
+    """
+    did = _did(did, label="leader")
+    threshold = _amount(min_mark_move, label="min_mark_move")
+    if type(min_intervals) is not int or min_intervals < 2:
+        raise ValueError("close1_min_intervals_invalid")
+    if not isinstance(pnl_room, dict) or not isinstance(pnl_room.get("messages"), list):
+        raise ValueError("close1_pnl_room_invalid")
+
+    points: list[tuple[int, Decimal, Decimal]] = []
+    for message in pnl_room["messages"]:
+        payload = _referee_payload(message, "pnl")
+        n = payload.get("n")
+        if type(n) is not int:
+            raise ValueError("close1_pnl_sweep_invalid")
+        mark = _amount(str(payload.get("mark")), label="pnl_mark")
+        top = payload.get("top")
+        if not isinstance(top, list):
+            raise ValueError("close1_pnl_top_invalid")
+        score = None
+        for row in top:
+            if isinstance(row, list) and len(row) == 2 and row[0] == did:
+                score = _signed_decimal(row[1], label="pnl_score")
+                break
+        if score is not None:
+            points.append((n, mark, score))
+
+    slopes: list[Decimal] = []
+    for previous, current in zip(points, points[1:]):
+        prev_n, prev_mark, prev_score = previous
+        cur_n, cur_mark, cur_score = current
+        if cur_n != prev_n + 1:
+            continue
+        delta_mark = cur_mark - prev_mark
+        if abs(delta_mark) < threshold:
+            continue
+        slopes.append((cur_score - prev_score) / delta_mark)
+
+    if len(slopes) < min_intervals:
+        return ExposureEstimate(
+            did=did,
+            intervals=len(slopes),
+            consistent_intervals=0,
+            exposure=None,
+            stable=False,
+            min_mark_move=threshold,
+        )
+
+    ordered = sorted(slopes)
+    middle = len(ordered) // 2
+    median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / Decimal("2")
+    tolerance = max(Decimal("1.50"), abs(median) * Decimal("0.08"))
+    consistent = sum(1 for slope in slopes if abs(slope - median) <= tolerance)
+    required = max(3, (len(slopes) * 3 + 3) // 4)
+    stable = consistent >= required
+
+    return ExposureEstimate(
+        did=did,
+        intervals=len(slopes),
+        consistent_intervals=consistent,
+        exposure=median if stable else None,
+        stable=stable,
+        min_mark_move=threshold,
+    )
+
+
+def candidate_score_at_final(
+    *,
+    side: str,
+    qty: str,
+    px: str,
+    final_price: str,
+    fee: str | None = None,
+) -> Decimal:
+    """Projected score for one fresh opening trade and no later trades."""
+    if side not in {"buy", "sell"}:
+        raise ValueError("close1_side_invalid")
+    q = _amount(qty, label="qty")
+    p = _amount(px, label="price")
+    final = _amount(final_price, label="final_price")
+    paid_fee = FEE_RATE * q * p if fee is None else _amount(fee, label="fee")
+    exposure = q if side == "buy" else -q
+    return exposure * (final - p) - paid_fee
+
+
+def dynamic_crossover_with_leader(
+    *,
+    leader_score: str,
+    leader_exposure: str,
+    current_mark: str,
+    candidate_side: str,
+    qty: str,
+    px: str,
+    fee: str | None = None,
+) -> dict:
+    """Solve the final price where a fresh candidate ties a current leader."""
+    if candidate_side not in {"buy", "sell"}:
+        raise ValueError("close1_side_invalid")
+    leader = _signed_decimal(leader_score, label="leader_score")
+    leader_pos = _signed_decimal(leader_exposure, label="leader_exposure")
+    mark = _amount(current_mark, label="current_mark")
+    q = _amount(qty, label="qty")
+    p = _amount(px, label="price")
+    paid_fee = FEE_RATE * q * p if fee is None else _amount(fee, label="fee")
+    candidate_pos = q if candidate_side == "buy" else -q
+    denominator = candidate_pos - leader_pos
+    if denominator == 0:
+        raise ValueError("close1_crossover_parallel_exposure")
+
+    crossover = (leader + candidate_pos * p + paid_fee - leader_pos * mark) / denominator
+    beats_if = "above" if denominator > 0 else "below"
+    return {
+        "crossover_final_price": str(crossover),
+        "beats_leader_if_final": beats_if,
+        "candidate_exposure": str(candidate_pos),
+        "leader_exposure": str(leader_pos),
+        "base_or_supplied_fee": str(paid_fee),
+        "warning": "projection assumes fixed leader exposure/no later trades and does not know sweep-close clawback",
+    }
 
 def validate_trade_plan(
     terms: object,
