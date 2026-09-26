@@ -89,6 +89,16 @@ def test_project_score_uses_current_position_slope():
     assert projected == Decimal("0.87")
 
 
+def test_project_score_allows_negative_current_score():
+    projected = close1_strategy.project_score(
+        current_score="-10.00",
+        current_mark="220.00",
+        position="5",
+        final_price="221.00",
+    )
+    assert projected == Decimal("-5.00")
+
+
 def test_single_position_score_matches_fold_economics():
     fee = close1_strategy.base_fee(qty="44", px="224.33")
     assert fee == Decimal("98.7052")
