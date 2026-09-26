@@ -54,6 +54,16 @@ def _decimal(value: object, *, label: str, allow_zero: bool = False) -> Decimal:
     return parsed
 
 
+def _signed_decimal(value: object, *, label: str) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(f"close1_strategy_{label}_invalid") from error
+    if not parsed.is_finite():
+        raise ValueError(f"close1_strategy_{label}_invalid")
+    return parsed
+
+
 def _score_by_did(snapshot: object, did: str) -> Decimal | None:
     if not isinstance(snapshot, dict):
         raise ValueError("close1_strategy_snapshot_invalid")
@@ -148,15 +158,10 @@ def project_score(
     final_price: object,
 ) -> Decimal:
     """Project score at a hypothetical final price if exposure stays unchanged."""
-    score = _decimal(current_score, label="current_score", allow_zero=True)
+    score = _signed_decimal(current_score, label="current_score")
     mark = _decimal(current_mark, label="current_mark")
-    try:
-        pos = Decimal(str(position))
-    except InvalidOperation as error:
-        raise ValueError("close1_strategy_position_invalid") from error
+    pos = _signed_decimal(position, label="position")
     final = _decimal(final_price, label="final_price")
-    if not pos.is_finite():
-        raise ValueError("close1_strategy_position_invalid")
     return score + pos * (final - mark)
 
 
@@ -207,13 +212,8 @@ def crossover_vs_competitor(
     quantity = _decimal(qty, label="qty")
     entry = _decimal(px, label="px")
     mark = _decimal(current_mark, label="current_mark")
-    comp_score = _decimal(competitor_score, label="competitor_score", allow_zero=True)
-    try:
-        comp_pos = Decimal(str(competitor_position))
-    except InvalidOperation as error:
-        raise ValueError("close1_strategy_competitor_position_invalid") from error
-    if not comp_pos.is_finite():
-        raise ValueError("close1_strategy_competitor_position_invalid")
+    comp_score = _signed_decimal(competitor_score, label="competitor_score")
+    comp_pos = _signed_decimal(competitor_position, label="competitor_position")
 
     paid_fee = base_fee(qty=quantity, px=entry) if fee is None else _decimal(
         fee, label="fee", allow_zero=True
