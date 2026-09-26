@@ -243,7 +243,9 @@ def crossover_vs_competitor(
         competitor_position=comp_pos,
         fee=paid_fee,
         warning=(
-            "projection assumes competitor exposure stays unchanged; default fee is "
-            "1% base fee only and actual favorable-price clawback can be larger"
+            "projection compares one currently visible competitor only, assumes its "
+            "exposure stays unchanged, and cannot rule out hidden accounts entering "
+            "the top three at another final price; default fee is 1% base fee only "
+            "and actual favorable-price clawback can be larger"
         ),
     )
