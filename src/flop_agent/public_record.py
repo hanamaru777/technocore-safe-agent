@@ -40,13 +40,11 @@ def _public_key(did: str) -> Ed25519PublicKey:
     return Ed25519PublicKey.from_public_bytes(decoded[2:])
 
 
-def verify_signed_record(room: str, record: dict) -> None:
-    """Raise on every malformed or unsigned record; never performs I/O."""
-    did, signature, text = record.get("from"), record.get("sig"), record.get("text")
-    nonce = str(record.get("nonce", ""))
-    if not ROOM_RE.fullmatch(room) or not isinstance(did, str) or not isinstance(signature, str) or not isinstance(text, str):
-        raise ValueError("record is not signed")
-    if not NONCE_RE.fullmatch(nonce) or not SIG_RE.fullmatch(signature):
+def verify_did_signature(did: str, signature: str, message: str) -> None:
+    """Verify one detached Ed25519 signature carried by an Ed25519 did:key."""
+    if not isinstance(did, str) or not isinstance(signature, str) or not isinstance(message, str):
+        raise ValueError("invalid signed record")
+    if not SIG_RE.fullmatch(signature):
         raise ValueError("invalid signed record")
     try:
         raw = base64.urlsafe_b64decode(signature + "==")
@@ -55,6 +53,17 @@ def verify_signed_record(room: str, record: dict) -> None:
     if len(raw) != 64:
         raise ValueError("invalid Ed25519 signature length")
     try:
-        _public_key(did).verify(raw, f"{room}|{nonce}|{text}".encode("utf-8"))
+        _public_key(did).verify(raw, message.encode("utf-8"))
     except InvalidSignature as error:
         raise ValueError("signature verification failed") from error
+
+
+def verify_signed_record(room: str, record: dict) -> None:
+    """Raise on every malformed or unsigned record; never performs I/O."""
+    did, signature, text = record.get("from"), record.get("sig"), record.get("text")
+    nonce = str(record.get("nonce", ""))
+    if not ROOM_RE.fullmatch(room) or not isinstance(did, str) or not isinstance(signature, str) or not isinstance(text, str):
+        raise ValueError("record is not signed")
+    if not NONCE_RE.fullmatch(nonce) or not SIG_RE.fullmatch(signature):
+        raise ValueError("invalid signed record")
+    verify_did_signature(did, signature, f"{room}|{nonce}|{text}")
