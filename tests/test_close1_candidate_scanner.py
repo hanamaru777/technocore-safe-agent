@@ -225,6 +225,10 @@ def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(mon
     assert candidate.dynamic_condition == "above"
     assert Decimal("226") < candidate.dynamic_top3_price < Decimal("227")
     assert candidate.required_cash < Decimal("10000")
+    assert candidate.flat_target_score == Decimal("235.00")
+    assert candidate.base_fee_flat_exit_price is not None
+    assert candidate.base_fee_flat_exit_price > candidate.px
+    assert candidate.base_fee_flat_move_percent > Decimal("0")
     assert "clawback" in candidate.warning
 
 
@@ -280,6 +284,10 @@ def test_scanner_builds_same_side_basket_from_verified_offers(monkeypatch):
     assert [leg.trade_id for leg in basket.legs] == ["leg-a", "leg-b", "leg-c"]
     assert basket.required_cash < Decimal("10000")
     assert basket.dynamic_top3_price is not None
+    assert basket.flat_target_score == Decimal("235.00")
+    assert basket.base_fee_flat_exit_price is not None
+    assert basket.base_fee_flat_exit_price > basket.weighted_px
+    assert basket.base_fee_flat_move_percent > Decimal("0")
     assert abs(basket.move_percent_from_mark) < min(
         abs(candidate.move_percent_from_mark)
         for candidate in report.candidates
