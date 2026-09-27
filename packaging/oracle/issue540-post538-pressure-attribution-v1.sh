@@ -6,7 +6,7 @@ APP=/opt/technocore-safe-agent
 PY=$APP/.venv/bin/python
 OBS=/var/lib/technocore-safe-agent/observer/observer-state.json
 SAFETY=/var/lib/technocore-safe-agent/observer-safety.json
-PROBE=$APP/packaging/oracle/issue540_pressure_probe.py
+PROBE=${PROD540_PROBE:-$APP/packaging/oracle/issue540_pressure_probe.py}
 
 EXPECTED_HEAD=58943a072eb0d752960e092970f06311344a8996
 RES_PID=2462149
