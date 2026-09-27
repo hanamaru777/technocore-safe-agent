@@ -349,3 +349,23 @@ def test_intelligence_keeps_each_rooms_and_events_new_room_separate(monkeypatch,
     observer.save_state(state)
     rooms = {item["discovered_room"] for item in observer.intelligence_report()["opportunities"] if item["kinds"] == ["new_room"]}
     assert rooms == {"listed-one", "listed-two", "event-one", "event-two"}
+
+
+def test_observer_heartbeat_exports_persisted_lobby_cursor_after_state_write(monkeypatch, tmp_path):
+    setup(monkeypatch, tmp_path)
+    state = observer.default_state()
+    state["cursors"]["lobby"] = 77
+    calls = []
+    real_atomic = observer.atomic_json_write
+
+    def recording_atomic(path, value, **kwargs):
+        calls.append(path)
+        return real_atomic(path, value, **kwargs)
+
+    monkeypatch.setattr(observer, "atomic_json_write", recording_atomic)
+    observer.save_state(state)
+
+    heartbeat = json.loads(observer.heartbeat_path().read_text("utf-8"))
+    assert heartbeat["lobby_cursor"] == 77
+    assert calls[0] == observer.state_path()
+    assert calls[1] == observer.heartbeat_path()
