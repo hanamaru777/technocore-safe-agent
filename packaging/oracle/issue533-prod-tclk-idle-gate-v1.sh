@@ -153,6 +153,7 @@ BASE_COUNTS="$CORE_E|$CORE_M|$BRIDGE_E|$BRIDGE_M"
 
 TMPDIR=$(mktemp -d /tmp/prod533.XXXXXX)
 trap 'rm -rf "$TMPDIR"' EXIT
+chmod 0755 "$TMPDIR"
 mkdir -p "$TMPDIR/old-units" "$TMPDIR/target-units"
 
 git_owner fetch --quiet --no-tags origin main
