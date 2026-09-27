@@ -222,3 +222,20 @@ def test_prod538_revalidates_loaded_pre_unit_state():
     assert "loaded_gate_changed_" in s
     assert "ExecCondition" in s
     assert "FragmentPath" in s
+
+
+def test_prod538_rolls_back_source_only_before_daemon_reload():
+    s=_source()
+    restore=s[s.index("restore_old_source() {"):s.index("restore_timers() {")]
+    assert '[[ "$SOURCE_UPDATED" == YES ]]' in restore
+    assert '[[ "$DAEMON_RELOADED" != YES ]]' in restore
+    assert '[[ "$(git_owner rev-parse HEAD)" == "$TARGET" ]]' in restore
+    assert '[[ -z "$(git_owner status --porcelain=v1 --untracked-files=all)" ]]' in restore
+    assert 'git_owner reset --hard "$PRE"' in restore
+    assert "SOURCE_UPDATED=NO" in restore
+    assert "SOURCE_RESTORE=" in s
+
+
+def test_prod538_post_gate_rejects_unexpected_exit_codes():
+    s=_source()
+    assert '[[ "$rc" == 0 || "$rc" == 1 ]] || finish_stop "post_gate_unexpected_${mode}_rc_${rc}"' in s
