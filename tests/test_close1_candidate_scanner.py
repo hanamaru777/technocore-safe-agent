@@ -125,8 +125,8 @@ def _rooms_with_shadow_longs(*, age=10):
     return {"messages": [price]}, {"messages": pnl_messages}
 
 
-def _offer(*, trade_id="live1", qty="44.00", px="224.33", side="sell", until=10):
-    key = Ed25519PrivateKey.from_private_bytes(b"\x33" * 32)
+def _offer(*, trade_id="live1", qty="44.00", px="224.33", side="sell", until=10, key_byte=0x33):
+    key = Ed25519PrivateKey.from_private_bytes(bytes([key_byte]) * 32)
     maker = _did(key)
     terms = {
         "id": trade_id,
@@ -262,9 +262,9 @@ def test_scanner_builds_same_side_basket_from_verified_offers(monkeypatch):
     _verify_referee_with_fixture(monkeypatch)
     price, pnl = _rooms()
     offers = [
-        _offer(trade_id="leg-a", qty="10.00", px="220.00", side="sell")[0],
-        _offer(trade_id="leg-b", qty="10.00", px="221.00", side="sell")[0],
-        _offer(trade_id="leg-c", qty="10.00", px="222.00", side="sell")[0],
+        _offer(trade_id="leg-a", qty="10.00", px="220.00", side="sell", key_byte=0x34)[0],
+        _offer(trade_id="leg-b", qty="10.00", px="221.00", side="sell", key_byte=0x35)[0],
+        _offer(trade_id="leg-c", qty="10.00", px="222.00", side="sell", key_byte=0x36)[0],
     ]
 
     report = scanner.build_candidate_scan(
@@ -296,16 +296,18 @@ def test_scanner_builds_same_side_basket_from_verified_offers(monkeypatch):
     assert "separate binding trade" in basket.warning
 
 
-def test_basket_stays_within_cash_and_deduplicates_trade_ids(monkeypatch):
+def test_basket_stays_within_cash_and_uses_at_most_one_leg_per_maker(monkeypatch):
     _verify_referee_with_fixture(monkeypatch)
     price, pnl = _rooms()
     offers = [
-        _offer(trade_id="leg-a", qty="10.00", px="220.00", side="sell")[0],
-        _offer(trade_id="leg-a", qty="10.00", px="220.00", side="sell")[0],
-        _offer(trade_id="leg-b", qty="10.00", px="221.00", side="sell")[0],
-        _offer(trade_id="leg-c", qty="10.00", px="222.00", side="sell")[0],
-        _offer(trade_id="leg-d", qty="10.00", px="223.00", side="sell")[0],
-        _offer(trade_id="leg-e", qty="10.00", px="224.00", side="sell")[0],
+        # Same maker: the better-priced offer should win and the other must not
+        # be stacked as independent collateral.
+        _offer(trade_id="maker-a-best", qty="10.00", px="220.00", side="sell", key_byte=0x34)[0],
+        _offer(trade_id="maker-a-worse", qty="10.00", px="221.50", side="sell", key_byte=0x34)[0],
+        _offer(trade_id="leg-b", qty="10.00", px="221.00", side="sell", key_byte=0x35)[0],
+        _offer(trade_id="leg-c", qty="10.00", px="222.00", side="sell", key_byte=0x36)[0],
+        _offer(trade_id="leg-d", qty="10.00", px="223.00", side="sell", key_byte=0x37)[0],
+        _offer(trade_id="leg-e", qty="10.00", px="224.00", side="sell", key_byte=0x38)[0],
     ]
 
     report = scanner.build_candidate_scan(
@@ -320,15 +322,20 @@ def test_basket_stays_within_cash_and_deduplicates_trade_ids(monkeypatch):
     assert basket.qty == Decimal("40.00")
     assert len(basket.legs) == 4
     assert len({leg.trade_id for leg in basket.legs}) == 4
-    assert "leg-e" not in {leg.trade_id for leg in basket.legs}
+    assert len({leg.maker for leg in basket.legs}) == 4
+    ids = {leg.trade_id for leg in basket.legs}
+    assert "maker-a-best" in ids
+    assert "maker-a-worse" not in ids
+    assert "leg-e" not in ids
+    assert "one leg per maker" in basket.warning
 
 
 def test_scanner_omits_baskets_when_current_position_is_nonzero(monkeypatch):
     _verify_referee_with_fixture(monkeypatch)
     price, pnl = _rooms()
     offers = [
-        _offer(trade_id="leg-a", qty="4.00", px="220.00", side="sell")[0],
-        _offer(trade_id="leg-b", qty="4.00", px="221.00", side="sell")[0],
+        _offer(trade_id="leg-a", qty="4.00", px="220.00", side="sell", key_byte=0x34)[0],
+        _offer(trade_id="leg-b", qty="4.00", px="221.00", side="sell", key_byte=0x35)[0],
     ]
 
     report = scanner.build_candidate_scan(
