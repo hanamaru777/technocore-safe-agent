@@ -71,6 +71,7 @@ def candidate_scan(*, move="0.015", side="buy", gate="ready"):
 def isolate_state(monkeypatch, tmp_path):
     path = tmp_path / "close1-progress.json"
     monkeypatch.setattr(close1_discord_progress, "state_path", lambda: path)
+    monkeypatch.setattr(close1_discord_progress, "_background_poll_allowed", lambda: True)
     return path
 
 
@@ -322,3 +323,75 @@ def test_close1_worker_backoff_is_bounded_and_resets():
     assert discord_control._close1_worker_delay(3) == 60
     assert discord_control._close1_worker_delay(6) == 300
     assert discord_control._close1_worker_delay(99) == 300
+
+
+def test_background_poll_skips_all_network_work_under_pressure(monkeypatch, tmp_path):
+    isolate_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(close1_discord_progress, "_background_poll_allowed", lambda: False)
+    calls = []
+
+    notices = close1_discord_progress.periodic_notices(
+        now=NOW,
+        fetcher=lambda: calls.append("snapshot") or snapshot(),
+        candidate_fetcher=lambda: calls.append("candidate") or candidate_scan(),
+    )
+
+    assert notices == []
+    assert calls == []
+    state = close1_discord_progress._load_state()
+    assert state["last_pressure_safe"] is False
+    assert state["last_attempt_at"] == NOW.isoformat()
+
+
+def test_background_poll_resumes_after_pressure_recovers(monkeypatch, tmp_path):
+    isolate_state(monkeypatch, tmp_path)
+    allowed = {"value": False}
+    monkeypatch.setattr(
+        close1_discord_progress,
+        "_background_poll_allowed",
+        lambda: allowed["value"],
+    )
+
+    assert close1_discord_progress.periodic_notices(
+        now=NOW,
+        fetcher=lambda: snapshot(),
+    ) == []
+
+    allowed["value"] = True
+    notices = close1_discord_progress.periodic_notices(
+        now=NOW + timedelta(minutes=5),
+        fetcher=lambda: snapshot(sweep=193),
+    )
+
+    assert len(notices) == 1
+    assert "負荷回復" in notices[0]
+
+
+def test_manual_status_is_not_blocked_by_background_pressure_gate(monkeypatch):
+    monkeypatch.setattr(close1_discord_progress, "_background_poll_allowed", lambda: False)
+    calls = []
+
+    message = close1_discord_progress.status_message(
+        fetcher=lambda: calls.append("snapshot") or snapshot(),
+        candidate_fetcher=lambda: calls.append("candidate") or candidate_scan(),
+    )
+
+    assert calls == ["snapshot", "candidate"]
+    assert "strategy scanner: ready" in message
+
+
+def test_pressure_thresholds_match_existing_runtime_restart_safety_limits(monkeypatch):
+    monkeypatch.setattr(close1_discord_progress, "_mem_available_bytes", lambda: 256 * 1024 * 1024)
+    values = {"memory": Decimal("5"), "io": Decimal("10")}
+    monkeypatch.setattr(close1_discord_progress, "_psi_full_avg10", lambda kind: values[kind])
+    assert close1_discord_progress._background_poll_allowed() is True
+
+    monkeypatch.setattr(close1_discord_progress, "_mem_available_bytes", lambda: 256 * 1024 * 1024 - 1)
+    assert close1_discord_progress._background_poll_allowed() is False
+
+    monkeypatch.setattr(close1_discord_progress, "_mem_available_bytes", lambda: 512 * 1024 * 1024)
+    values["memory"] = Decimal("5.01")
+    assert close1_discord_progress._background_poll_allowed() is False
+    values["memory"] = Decimal("5")
+    values["io"] = Decimal("10.01")
+    assert close1_discord_progress._background_poll_allowed() is False
