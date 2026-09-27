@@ -294,6 +294,7 @@ PY
 [[ "$(snap technocore-safe-agent-lobby-capture.service)" == "$CAP" ]] || finish_stop capture_changed_before_resident_restart
 [[ "$(snap technocore-safe-agent-signer.service)" == "$SIG" ]] || finish_stop signer_changed_before_resident_restart
 [[ "$(counts)" == "$BASE_COUNTS" ]] || finish_stop protected_changed_before_resident_restart
+PRE_RESTART_SAFE=$(safe_sample 2>/dev/null) || finish_stop pressure_returned_before_resident_restart
 
 systemctl restart technocore-safe-agent-resident.service
 RESIDENT_RESTARTED=YES
@@ -360,7 +361,7 @@ echo "PROD523V1=PASS"
 echo "HEAD=$TARGET"
 echo "SERVICES=resident:$NEW_RES capture:$CAP_PID signer:$SIG_PID discord:$NEW_DIS"
 echo "PROTECTED=core:$CORE_E/$CORE_M bridge:$BRIDGE_E/$BRIDGE_M"
-echo "SAFE_AFTER_DISCORD_QUIESCE=$SAFE_LINE"
+echo "SAFE_AFTER_DISCORD_QUIESCE=$SAFE_LINE pre_restart:$PRE_RESTART_SAFE"
 echo "POST_RESIDENT_HEALTH=$POST_HEALTH lobby:$LOBBY_BEFORE->$LOBBY_AFTER"
 echo "PROGRESS_ADVANCED=YES before:$ATTEMPT_BEFORE after:$ATTEMPT_AFTER"
 echo "PROGRESS_POST=failure_count:$FAILURES_AFTER last_success:$SUCCESS_AFTER sweep:$SWEEP_AFTER"
