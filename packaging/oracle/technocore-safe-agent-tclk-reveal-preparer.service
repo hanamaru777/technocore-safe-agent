@@ -13,6 +13,7 @@ WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/tclk-prepare.env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+ExecCondition=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_timer_gate reveal
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_pilot_reveal
 NoNewPrivileges=true
 PrivateTmp=true
