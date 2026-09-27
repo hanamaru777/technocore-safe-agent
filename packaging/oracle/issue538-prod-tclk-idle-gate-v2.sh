@@ -154,7 +154,7 @@ DIS=$(snap technocore-safe-agent-discord.service)
 BASE_COUNTS="$CORE_E|$CORE_M|$BRIDGE_E|$BRIDGE_M"
 [[ "$(counts)" == "$BASE_COUNTS" ]] || finish_stop protected_baseline_changed
 
-TMPDIR=$(mktemp -d /tmp/prod533.XXXXXX)
+TMPDIR=$(mktemp -d /tmp/prod538.XXXXXX)
 trap 'rm -rf "$TMPDIR"' EXIT
 chmod 0755 "$TMPDIR"
 mkdir -p "$TMPDIR/old-units" "$TMPDIR/target-units"
