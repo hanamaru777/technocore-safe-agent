@@ -189,7 +189,7 @@ blockers=",".join(
     for name,values in checks.items() if not all(values)
 ) or "none"
 
-print("PROD540V1=PASS")
+print("PROD540_SAMPLE=COMPLETE")
 print(f"WINDOW=samples:{SAMPLES} interval_s:{INTERVAL:.0f} gate_pass:{sum(allpass)}/{SAMPLES} max_safe_window_s:{max(0,(best-1)*INTERVAL):.0f}")
 print("BLOCKERS="+blockers)
 print(f"MEM_AVAILABLE_MB=min:{min(mems)} max:{max(mems)} end:{mems[-1]}")
@@ -215,5 +215,3 @@ for name,pid in zip(("resident","capture","signer","discord"),sys.argv[3:7]):
     print(f"CGROUP_{name.upper()}=current_mb:{to_mb(cur_b)} peak_mb:{to_mb(peak_b)} pids:{pids}")
 
 print("PROTECTED=core:143/5652707 bridge:26/569552")
-print("MUTATION=NONE")
-print("DO_NOT_RERUN=YES")
