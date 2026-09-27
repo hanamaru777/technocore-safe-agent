@@ -113,6 +113,64 @@ def test_near_candidate_and_material_improvement_send(monkeypatch, tmp_path):
     assert "勝ち筋候補接近" in improved["reasons"]
 
 
+def test_watcher_prefers_nearer_basket_over_single(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    base = _scan(move="0.040", trade_id="single")
+    legs = (
+        scanner.BasketLegView(
+            room="close1-offers",
+            seq=1,
+            trade_id="leg-a",
+            qty=Decimal("4"),
+            px=Decimal("224.00"),
+            until=999,
+            base_fee=Decimal("8.96"),
+            required_cash=Decimal("904.96"),
+        ),
+        scanner.BasketLegView(
+            room="close1-offers",
+            seq=2,
+            trade_id="leg-b",
+            qty=Decimal("4"),
+            px=Decimal("224.10"),
+            until=999,
+            base_fee=Decimal("8.964"),
+            required_cash=Decimal("905.364"),
+        ),
+    )
+    basket = scanner.BasketCandidateView(
+        taker_side="buy",
+        legs=legs,
+        qty=Decimal("8"),
+        weighted_px=Decimal("224.05"),
+        until=999,
+        base_fee=Decimal("17.924"),
+        required_cash=Decimal("1810.324"),
+        dynamic_top3_price=Decimal("229.00"),
+        dynamic_condition="above",
+        move_percent_from_mark=Decimal("0.020"),
+        visible_leader_coverage=6,
+        visible_leaders=6,
+        warning="test basket",
+    )
+    scan = replace(base, baskets=(basket,))
+    sent = []
+
+    result = watch.run_once(
+        fetcher=lambda: scan,
+        sender=sent.append,
+        now=datetime(2026, 9, 27, 15, 0, tzinfo=UTC),
+    )
+
+    assert result["sent"] is True
+    assert "BASKET BUY 8" in sent[0]
+    assert "legs 2" in sent[0]
+    assert "leg-a:4@224.00" in sent[0]
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_candidate_trade_id"] == "basket:leg-a,leg-b"
+    assert state["last_candidate_move_abs"] == "0.020"
+
+
 def test_send_failure_does_not_advance_activation_baseline(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
