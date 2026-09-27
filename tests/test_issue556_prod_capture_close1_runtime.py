@@ -42,10 +42,18 @@ def test_discord_gate_keeps_original_strict_thresholds_for_60s():
     assert 'r["shealth"]=="ok"' in x
     assert "STRICT_GATE=PASS:60s" in x
 
-def test_resident_and_signer_are_never_restarted():
+def test_restart_order_is_capture_then_strict_gate_then_resident_then_discord():
     x=s()
-    assert re.search(r'systemctl restart "\$(RES|SIG)"',x) is None
-    assert "RESIDENT_RESTART=NO SIGNER_RESTART=NO" in x
+    assert x.count('systemctl restart "$CAP"') == 1
+    assert x.count('systemctl restart "$RES"') == 1
+    assert x.count('systemctl restart "$DIS"') == 1
+    assert re.search(r'systemctl restart "\$SIG"',x) is None
+    assert x.index('systemctl restart "$CAP"') < x.index('if [[ "$GATE" != PASS ]]')
+    assert x.index('if [[ "$GATE" != PASS ]]') < x.index('systemctl restart "$RES"')
+    assert x.index('systemctl restart "$RES"') < x.index('if [[ "$POST_RES_GATE" != PASS ]]')
+    assert x.index('if [[ "$POST_RES_GATE" != PASS ]]') < x.index('systemctl restart "$DIS"')
+    assert "PASS_CAPTURE_RESIDENT_ONLY" in x
+    assert "SIGNER_RESTART=NO" in x
 
 def test_expected_source_diff_is_narrow():
     x=s()
