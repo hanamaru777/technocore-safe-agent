@@ -94,3 +94,9 @@ def test_prod540_bash_syntax_valid():
 def test_prod540_probe_compiles():
     r=subprocess.run(["python","-m","py_compile",str(PROBE)],capture_output=True,text=True)
     assert r.returncode==0,r.stderr
+
+
+def test_prod540_supports_branch_only_pinned_probe_path():
+    s=_helper()
+    assert 'PROBE=${PROD540_PROBE:-$APP/packaging/oracle/issue540_pressure_probe.py}' in s
+    assert '[[ -d "$APP/.git" && -x "$PY" && -f "$OBS" && -f "$SAFETY" && -f "$PROBE" ]]' in s
