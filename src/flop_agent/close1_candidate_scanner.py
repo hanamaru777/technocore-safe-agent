@@ -38,6 +38,7 @@ class CandidateView:
     visible_leader_coverage: int
     visible_leaders: int
     warning: str
+    maker: str | None = None
     flat_target_score: Decimal | None = None
     base_fee_flat_exit_price: Decimal | None = None
     base_fee_flat_move_percent: Decimal | None = None
@@ -48,6 +49,7 @@ class BasketLegView:
     room: str
     seq: int
     trade_id: str
+    maker: str
     qty: Decimal
     px: Decimal
     until: int
@@ -355,15 +357,19 @@ def _build_same_side_basket(
 
     chosen: list[CandidateView] = []
     seen_ids: set[str] = set()
+    seen_makers: set[str] = set()
     required_cash = Decimal("0")
     for candidate in rows:
         if candidate.trade_id in seen_ids:
+            continue
+        if candidate.maker is None or candidate.maker in seen_makers:
             continue
         next_cash = required_cash + candidate.required_cash
         if next_cash > available_cash:
             continue
         chosen.append(candidate)
         seen_ids.add(candidate.trade_id)
+        seen_makers.add(candidate.maker)
         required_cash = next_cash
 
     if len(chosen) < 2:
@@ -396,6 +402,7 @@ def _build_same_side_basket(
         room=candidate.room,
         seq=candidate.seq,
         trade_id=candidate.trade_id,
+        maker=candidate.maker,
         qty=candidate.qty,
         px=candidate.px,
         until=candidate.until,
@@ -429,9 +436,9 @@ def _build_same_side_basket(
         visible_leader_coverage=stable_count,
         visible_leaders=len(leaders),
         warning=(
-            "heuristic full-offer basket in best-price order; every leg remains a separate "
-            "binding trade, all legs must still be live at execution time, and favorable-price "
-            "clawback plus leader/future trades can worsen the projected outcome"
+            "heuristic full-offer basket in best-price order with at most one leg per maker; "
+            "every leg remains a separate binding trade, all legs must still be live at execution "
+            "time, and favorable-price clawback plus leader/future trades can worsen the projected outcome"
         ),
         flat_target_score=flat_target_score,
         base_fee_flat_exit_price=flat_exit,
@@ -659,6 +666,7 @@ def build_candidate_scan(
                 "trades, accounts never visible in sampled history and sweep-close clawback can "
                 "change the actual top3 outcome"
             ),
+            maker=offer.maker,
             flat_target_score=flat_target_score,
             base_fee_flat_exit_price=flat_exit,
             base_fee_flat_move_percent=flat_move,
