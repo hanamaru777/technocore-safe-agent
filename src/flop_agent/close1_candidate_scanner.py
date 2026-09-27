@@ -91,6 +91,104 @@ def _project_candidate_score(*, side: str, qty: Decimal, px: Decimal, fee: Decim
     )
 
 
+def _score_for_did(snapshot: dict, did: str) -> Decimal | None:
+    top = snapshot.get("top")
+    if not isinstance(top, list):
+        raise ValueError("close1_scanner_pnl_top_invalid")
+    for row in top:
+        if not isinstance(row, list) or len(row) != 2:
+            raise ValueError("close1_scanner_pnl_top_invalid")
+        if row[0] == did:
+            return _signed_decimal(row[1], label="leader_score")
+    return None
+
+
+def _leader_universe(
+    *,
+    snapshots: list[dict],
+    current_mark: Decimal,
+) -> list[LeaderView]:
+    """Current top rows plus stable historically-visible shadow leaders.
+
+    A DID that fell out of the latest top list can still become a future top3
+    competitor after a price reversal.  When its score/mark slope is stable,
+    project its most recent observed score to the current mark and keep it in
+    the conservative competitor envelope.
+    """
+    if not snapshots:
+        raise ValueError("close1_scanner_pnl_room_empty")
+    latest = snapshots[-1]
+    latest_top = latest.get("top")
+    if not isinstance(latest_top, list):
+        raise ValueError("close1_scanner_pnl_top_invalid")
+
+    current_order: list[str] = []
+    current_scores: dict[str, Decimal] = {}
+    for row in latest_top:
+        if not isinstance(row, list) or len(row) != 2:
+            raise ValueError("close1_scanner_pnl_top_invalid")
+        did = close_call._did(row[0], label="leader")
+        if did in current_scores:
+            raise ValueError("close1_scanner_duplicate_leader")
+        current_order.append(did)
+        current_scores[did] = _signed_decimal(row[1], label="leader_score")
+
+    historical_order: list[str] = []
+    historical_seen: set[str] = set(current_order)
+    for snapshot in reversed(snapshots[:-1]):
+        top = snapshot.get("top")
+        if not isinstance(top, list):
+            raise ValueError("close1_scanner_pnl_top_invalid")
+        for row in top:
+            if not isinstance(row, list) or len(row) != 2:
+                raise ValueError("close1_scanner_pnl_top_invalid")
+            did = close_call._did(row[0], label="leader")
+            if did not in historical_seen:
+                historical_seen.add(did)
+                historical_order.append(did)
+
+    leaders: list[LeaderView] = []
+    for did in current_order:
+        estimate = close1_strategy.infer_exposure(did, snapshots)
+        leaders.append(LeaderView(
+            did=did,
+            score=current_scores[did],
+            position=estimate.position,
+            stable=estimate.stable,
+            reason=estimate.reason,
+        ))
+
+    for did in historical_order:
+        estimate = close1_strategy.infer_exposure(did, snapshots)
+        if not estimate.stable or estimate.position is None:
+            continue
+        latest_observation: tuple[Decimal, Decimal] | None = None
+        for snapshot in reversed(snapshots[:-1]):
+            score = _score_for_did(snapshot, did)
+            if score is None:
+                continue
+            mark = close_call._amount(str(snapshot.get("mark")), label="pnl_mark")
+            latest_observation = (mark, score)
+            break
+        if latest_observation is None:
+            continue
+        observed_mark, observed_score = latest_observation
+        projected_score = close1_strategy.project_score(
+            current_score=observed_score,
+            current_mark=observed_mark,
+            position=estimate.position,
+            final_price=current_mark,
+        )
+        leaders.append(LeaderView(
+            did=did,
+            score=projected_score,
+            position=estimate.position,
+            stable=True,
+            reason="stable_shadow_leader",
+        ))
+    return leaders
+
+
 def _visible_top3_at_price(
     *,
     final: Decimal,
@@ -260,22 +358,13 @@ def build_candidate_scan(
     top = pnl.get("top")
     if not isinstance(top, list):
         raise ValueError("close1_scanner_pnl_top_invalid")
-    leaders: list[LeaderView] = []
+    current_scores = []
     for row in top:
         if not isinstance(row, list) or len(row) != 2:
             raise ValueError("close1_scanner_pnl_top_invalid")
-        did = close_call._did(row[0], label="leader")
-        score = _signed_decimal(row[1], label="leader_score")
-        estimate = close1_strategy.infer_exposure(did, snapshots)
-        leaders.append(LeaderView(
-            did=did,
-            score=score,
-            position=estimate.position,
-            stable=estimate.stable,
-            reason=estimate.reason,
-        ))
-
-    top3_cutoff = leaders[2].score if len(leaders) >= 3 else None
+        current_scores.append(_signed_decimal(row[1], label="leader_score"))
+    top3_cutoff = current_scores[2] if len(current_scores) >= 3 else None
+    leaders = _leader_universe(snapshots=snapshots, current_mark=mark)
     seen_trade_ids: set[str] = set()
     offer_records: list[tuple[str, dict]] = []
     rejected = 0
@@ -378,8 +467,9 @@ def build_candidate_scan(
             visible_leader_coverage=stable_count,
             visible_leaders=len(leaders),
             warning=(
-                "visible-leader projection with conservative zero-score floor; leader/future "
-                "trades, hidden accounts and sweep-close clawback can change the actual top3 outcome"
+                "recent-history leader envelope with conservative zero-score floor; leader/future "
+                "trades, accounts never visible in sampled history and sweep-close clawback can "
+                "change the actual top3 outcome"
             ),
         ))
 
@@ -414,7 +504,7 @@ def fetch_candidate_scan(
     return build_candidate_scan(
         our_did=our_did,
         price_room=core.read_room("d-close1-price", limit=2),
-        pnl_room=core.read_room("d-close1-pnl", limit=12),
+        pnl_room=core.read_room("d-close1-pnl", limit=36),
         negotiation_rooms={
             "close1": core.read_room("close1", limit=200),
             "close1-offers": core.read_room("close1-offers", limit=200),
