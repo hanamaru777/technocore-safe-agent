@@ -352,127 +352,9 @@ fi
 
 echo "STRICT_GATE=PASS:60s"
 
-[[ "$(snap "$SIG")" == "$SIG_PRE" ]] || stop_now signer_changed_before_resident_restart
-[[ "$(snap "$CAP")" == "active|running|$NEW_CAP_PID|0|success" ]] || stop_now capture_changed_before_resident_restart
-[[ "$(snap "$DIS")" == "$DIS_PRE" ]] || stop_now discord_changed_before_resident_restart
-require_state PRE_RESIDENT
-
-systemctl restart "$RES"
-NEW_RES_PID=''
-for _ in $(seq 1 30); do
-  S=$(snap "$RES")
-  IFS='|' read -r a sub p nr result <<<"$S"
-  if [[ "$a" == active && "$sub" == running && "$p" != 0 && "$p" != "$RES_PID" && "$nr" == 0 && "$result" == success ]]; then
-    NEW_RES_PID=$p
-    break
-  fi
-  sleep 1
-done
-[[ -n "$NEW_RES_PID" ]] || stop_now resident_restart_not_stable
-
-HEARTBEAT_CURSOR=''
-for _ in $(seq 1 12); do
-  HEARTBEAT_CURSOR=$("$PY" - "$HB" <<'PY'
-import json,pathlib,sys
-from datetime import UTC,datetime
-try:
-    h=json.loads(pathlib.Path(sys.argv[1]).read_text("utf-8"))
-    cursor=h.get("lobby_cursor")
-    stamp=datetime.fromisoformat(str(h.get("updated_at","")).replace("Z","+00:00"))
-    if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=UTC)
-    age=max(0.0,(datetime.now(UTC)-stamp.astimezone(UTC)).total_seconds())
-    if h.get("schema_version")==1 and h.get("status")=="ok" and type(cursor) is int and cursor >= 0 and age <= 120:
-        print(cursor)
-except Exception:
-    pass
-PY
-)
-  if [[ -n "$HEARTBEAT_CURSOR" && "$HEARTBEAT_CURSOR" -ge "$POST_CURSOR" ]]; then
-    break
-  fi
-  sleep 5
-done
-[[ -n "$HEARTBEAT_CURSOR" && "$HEARTBEAT_CURSOR" -ge "$POST_CURSOR" ]] || stop_now resident_new_heartbeat_not_ready
-
-[[ "$(snap "$SIG")" == "$SIG_PRE" ]] || stop_now signer_changed_post_resident
-[[ "$(snap "$CAP")" == "active|running|$NEW_CAP_PID|0|success" ]] || stop_now capture_changed_post_resident
-[[ "$(snap "$DIS")" == "$DIS_PRE" ]] || stop_now discord_changed_post_resident
-[[ "$(snap "$RES")" == "active|running|$NEW_RES_PID|0|success" ]] || stop_now resident_changed_post_resident
-require_state POST_RESIDENT
-RES_CURSOR=$STATE_CURSOR
-[[ "$RES_CURSOR" -ge "$POST_CURSOR" ]] || stop_now lobby_cursor_regressed_post_resident
-
-LIVE_CURSOR=$(runuser -u technocore -- env FLOP_STATE_DIR=/var/lib/technocore-safe-agent PYTHONPATH="$APP/src" "$PY" - <<'PY'
-from flop_agent import observer_lobby_capture as c
-print(c._observer_cursor())
-PY
-)
-[[ "$LIVE_CURSOR" -ge "$POST_CURSOR" ]] || stop_now heartbeat_cursor_not_authoritative
-
-POST_RES_GATE=$("$PY" - "$HB" "$SAFETY" "$CORE_E" "$CORE_M" <<'PY'
-import json,pathlib,sys,time
-from datetime import UTC,datetime
-hb=pathlib.Path(sys.argv[1]);sf=pathlib.Path(sys.argv[2]);ce=int(sys.argv[3]);cm=int(sys.argv[4])
-
-def load(p):
-    try:
-        v=json.loads(p.read_text("utf-8"));return v if isinstance(v,dict) else {}
-    except Exception:return {}
-def age(v):
-    try:
-        d=datetime.fromisoformat(str(v).replace("Z","+00:00"))
-        if d.tzinfo is None:d=d.replace(tzinfo=UTC)
-        return max(0.0,(datetime.now(UTC)-d.astimezone(UTC)).total_seconds())
-    except Exception:return -1.0
-def mem():
-    try:
-        for line in pathlib.Path("/proc/meminfo").read_text("utf-8").splitlines():
-            if line.startswith("MemAvailable:"):return int(line.split()[1])*1024
-    except Exception:pass
-    return -1
-def psi(kind):
-    try:
-        for line in pathlib.Path(f"/proc/pressure/{kind}").read_text("utf-8").splitlines():
-            if line.startswith("full "):
-                for f in line.split()[1:]:
-                    if f.startswith("avg10="):return float(f.split("=",1)[1])
-    except Exception:pass
-    return -1.0
-
-streak=0
-for i in range(3):
-    h=load(hb);s=load(sf)
-    ok=(
-        h.get("status")=="ok" and 0 <= age(h.get("updated_at")) <= 300
-        and s.get("health")=="ok" and 0 <= age(s.get("updated_at")) <= 300
-        and s.get("unrecoverable_core_gap_events")==ce
-        and s.get("unrecoverable_core_gap_messages")==cm
-        and mem() >= 256*1024*1024
-        and 0 <= psi("memory") <= 5
-        and 0 <= psi("io") <= 10
-    )
-    streak=streak+1 if ok else 0
-    if i != 2:time.sleep(10)
-print("PASS" if streak==3 else "STOP")
-PY
-)
-if [[ "$POST_RES_GATE" != PASS ]]; then
-  echo "POST_RESIDENT_GATE=STOP"
-  echo "PROD556V1=PASS_CAPTURE_RESIDENT_ONLY"
-  echo "SOURCE=$TARGET CAPTURE_PID=$NEW_CAP_PID RESIDENT_PID=$NEW_RES_PID DISCORD_PID=$DIS_PID"
-  echo "CONTINUITY=core:$CORE_E/$CORE_M bridge:$BRIDGE_E/$BRIDGE_M cursor:$PRE_CURSOR->$RES_CURSOR"
-  echo "DISCORD_STRATEGY_RUNTIME=NOT_ACTIVATED"
-  echo "SIGNER_RESTART=NO"
-  echo "TECHNOCORE_WRITE=NO FLOP_WRITE=NO TRADE=NO"
-  echo "DO_NOT_RERUN=YES"
-  exit 0
-fi
-
-echo "POST_RESIDENT_GATE=PASS:3x10s"
-
+[[ "$(snap "$RES")" == "$RES_PRE" ]] || stop_now resident_changed_before_discord_restart
 [[ "$(snap "$SIG")" == "$SIG_PRE" ]] || stop_now signer_changed_before_discord_restart
 [[ "$(snap "$CAP")" == "active|running|$NEW_CAP_PID|0|success" ]] || stop_now capture_changed_before_discord_restart
-[[ "$(snap "$RES")" == "active|running|$NEW_RES_PID|0|success" ]] || stop_now resident_changed_before_discord_restart
 require_state PRE_DISCORD
 
 systemctl restart "$DIS"
@@ -492,20 +374,20 @@ sleep 30
 
 [[ "$(snap "$SIG")" == "$SIG_PRE" ]] || stop_now signer_changed_final
 [[ "$(snap "$CAP")" == "active|running|$NEW_CAP_PID|0|success" ]] || stop_now capture_changed_final
-[[ "$(snap "$RES")" == "active|running|$NEW_RES_PID|0|success" ]] || stop_now resident_changed_final
+[[ "$(snap "$RES")" == "$RES_PRE" ]] || stop_now resident_changed_final
 [[ "$(snap "$DIS")" == "active|running|$NEW_DIS_PID|0|success" ]] || stop_now discord_changed_final
 require_state FINAL
 FINAL_CURSOR=$STATE_CURSOR
-[[ "$FINAL_CURSOR" -ge "$RES_CURSOR" ]] || stop_now lobby_cursor_regressed_final
+[[ "$FINAL_CURSOR" -ge "$POST_CURSOR" ]] || stop_now lobby_cursor_regressed_final
 
 PRESSURE_GATE_PRESENT=$(grep -c 'def _background_poll_allowed' "$APP/src/flop_agent/close1_discord_progress.py" || true)
 SCANNER_PRESENT=$(grep -c 'close1_candidate_scanner' "$APP/src/flop_agent/close1_discord_progress.py" || true)
 [[ "$PRESSURE_GATE_PRESENT" -ge 1 && "$SCANNER_PRESENT" -ge 1 ]] || stop_now close1_strategy_source_missing
 
 echo "PROD556V1=PASS_FULL"
-echo "SOURCE=$TARGET CAPTURE_PID=$NEW_CAP_PID RESIDENT_PID=$NEW_RES_PID DISCORD_PID=$NEW_DIS_PID"
+echo "SOURCE=$TARGET CAPTURE_PID=$NEW_CAP_PID RESIDENT_PID=$RES_PID DISCORD_PID=$NEW_DIS_PID"
 echo "CONTINUITY=core:$CORE_E/$CORE_M bridge:$BRIDGE_E/$BRIDGE_M cursor:$PRE_CURSOR->$FINAL_CURSOR"
 echo "DISCORD_STRATEGY_RUNTIME=ACTIVATED pressure_gate=YES candidate_scanner=YES"
-echo "SIGNER_RESTART=NO"
+echo "RESIDENT_RESTART=NO SIGNER_RESTART=NO"
 echo "TECHNOCORE_WRITE=NO FLOP_WRITE=NO TRADE=NO"
 echo "DO_NOT_RERUN=YES"
