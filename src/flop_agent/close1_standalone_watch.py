@@ -81,15 +81,37 @@ def _decimal(value: object) -> Decimal | None:
     return result if result.is_finite() else None
 
 
-def _best_candidate(scan: close1_candidate_scanner.CandidateScan):
-    return scan.candidates[0] if scan.candidates else None
+def _opportunity_key(kind: str, candidate) -> str:
+    if kind == "single":
+        return f"single:{candidate.trade_id}"
+    return "basket:" + ",".join(leg.trade_id for leg in candidate.legs)
+
+
+def _best_opportunity(scan: close1_candidate_scanner.CandidateScan):
+    rows = []
+    for candidate in scan.candidates:
+        rows.append(("single", candidate))
+    for basket in scan.baskets:
+        rows.append(("basket", basket))
+    rows.sort(key=lambda item: (
+        item[1].move_percent_from_mark is None,
+        abs(item[1].move_percent_from_mark)
+        if item[1].move_percent_from_mark is not None
+        else Decimal("999"),
+        -item[1].qty,
+        0 if item[0] == "basket" else 1,
+    ))
+    return rows[0] if rows else None
 
 
 def _candidate_signal(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bool:
     if scan.strategy_gate != "ready":
         return False
-    candidate = _best_candidate(scan)
-    if candidate is None or candidate.move_percent_from_mark is None:
+    opportunity = _best_opportunity(scan)
+    if opportunity is None:
+        return False
+    kind, candidate = opportunity
+    if candidate.move_percent_from_mark is None:
         return False
     move_abs = abs(candidate.move_percent_from_mark)
     if move_abs > CANDIDATE_NEAR:
@@ -97,14 +119,15 @@ def _candidate_signal(scan: close1_candidate_scanner.CandidateScan, state: dict)
 
     previous_move = _decimal(state.get("last_candidate_move_abs"))
     previous_side = state.get("last_candidate_side")
-    previous_trade_id = state.get("last_candidate_trade_id")
+    previous_key = state.get("last_candidate_trade_id")
+    current_key = _opportunity_key(kind, candidate)
     if previous_move is None or previous_side != candidate.taker_side:
         return True
     if previous_move > CANDIDATE_NEAR:
         return True
     if previous_move - move_abs >= CANDIDATE_IMPROVEMENT:
         return True
-    return previous_trade_id != candidate.trade_id and move_abs <= previous_move
+    return previous_key != current_key and move_abs <= previous_move
 
 
 def _price_shock(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bool:
@@ -149,25 +172,42 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
         f"strategy gate: {scan.strategy_gate} / verified offers {scan.verified_offers}",
     ]
 
-    candidate = _best_candidate(scan)
-    if candidate is None:
+    opportunity = _best_opportunity(scan)
+    if opportunity is None:
         lines.append("best WATCH: 現在、資金・鮮度・署名条件を満たす公開候補なし")
-    elif candidate.dynamic_top3_price is None or candidate.move_percent_from_mark is None:
-        lines.append(
-            f"best WATCH: {candidate.taker_side.upper()} {candidate.qty} @ {candidate.px}"
-            f" / until {candidate.until} / dynamic top3未確定"
-        )
     else:
-        relation = ">=" if candidate.dynamic_condition == "above" else "<="
-        move = candidate.move_percent_from_mark * Decimal("100")
-        lines.extend([
-            f"best WATCH: {candidate.taker_side.upper()} {candidate.qty} @ {candidate.px}"
-            f" / until {candidate.until}",
-            f"visible-top3推定: final S {relation} "
-            f"{candidate.dynamic_top3_price.quantize(Decimal('0.01'))}"
-            f" / mark比 {move:+.2f}%",
-            f"base fee: {candidate.base_fee} / required cash: {candidate.required_cash}",
-        ])
+        kind, candidate = opportunity
+        if kind == "basket":
+            prefix = (
+                f"BASKET {candidate.taker_side.upper()} {candidate.qty} "
+                f"@ weighted {candidate.weighted_px.quantize(Decimal('0.01'))} "
+                f"/ legs {len(candidate.legs)} / until {candidate.until}"
+            )
+        else:
+            prefix = (
+                f"{candidate.taker_side.upper()} {candidate.qty} @ {candidate.px}"
+                f" / until {candidate.until}"
+            )
+        if candidate.dynamic_top3_price is None or candidate.move_percent_from_mark is None:
+            lines.append(f"best WATCH: {prefix} / dynamic top3未確定")
+        else:
+            relation = ">=" if candidate.dynamic_condition == "above" else "<="
+            move = candidate.move_percent_from_mark * Decimal("100")
+            lines.extend([
+                f"best WATCH: {prefix}",
+                f"visible-top3推定: final S {relation} "
+                f"{candidate.dynamic_top3_price.quantize(Decimal('0.01'))}"
+                f" / mark比 {move:+.2f}%",
+                f"base fee: {candidate.base_fee} / required cash: {candidate.required_cash}",
+            ])
+            if kind == "basket":
+                leg_text = ", ".join(
+                    f"{leg.trade_id}:{leg.qty}@{leg.px}" for leg in candidate.legs[:8]
+                )
+                if len(candidate.legs) > 8:
+                    leg_text += f", +{len(candidate.legs) - 8} more"
+                lines.append(f"basket legs: {leg_text}")
+                lines.append("basketは複数の別trade。各legごとにexact承認が必要です。")
 
     lines.extend([
         "shadow leaders込み。leader/future trades・未観測account・clawbackで条件は変動します。",
@@ -217,7 +257,12 @@ def _discord_post(message: str) -> None:
 
 
 def _remember_scan(state: dict, scan: close1_candidate_scanner.CandidateScan, current: datetime) -> None:
-    candidate = _best_candidate(scan)
+    opportunity = _best_opportunity(scan)
+    if opportunity is None:
+        kind = None
+        candidate = None
+    else:
+        kind, candidate = opportunity
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
@@ -230,7 +275,11 @@ def _remember_scan(state: dict, scan: close1_candidate_scanner.CandidateScan, cu
             if candidate is not None and candidate.move_percent_from_mark is not None
             else None
         ),
-        last_candidate_trade_id=candidate.trade_id if candidate is not None else None,
+        last_candidate_trade_id=(
+            _opportunity_key(kind, candidate)
+            if candidate is not None and kind is not None
+            else None
+        ),
         last_error=None,
     )
 
