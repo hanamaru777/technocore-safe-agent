@@ -121,6 +121,45 @@ def test_single_position_score_matches_fold_economics():
     assert short_score == Decimal("179.8148")
 
 
+def test_base_fee_roundtrip_exit_price_matches_fold_cash_math():
+    fee = close1_strategy.base_fee(qty="44", px="224.33")
+
+    long_exit = close1_strategy.base_fee_roundtrip_exit_price(
+        side="buy",
+        qty="44",
+        entry_px="224.33",
+        entry_fee=fee,
+        target_score="100",
+    )
+    short_exit = close1_strategy.base_fee_roundtrip_exit_price(
+        side="sell",
+        qty="44",
+        entry_px="224.33",
+        entry_fee=fee,
+        target_score="100",
+    )
+
+    assert Decimal("231.15") < long_exit < Decimal("231.16")
+    assert Decimal("217.63") < short_exit < Decimal("217.64")
+
+    # Re-evaluate the flat round trip with a 1% base fee on the exit leg.
+    long_score = Decimal("44") * (long_exit - Decimal("224.33")) - fee - Decimal("0.01") * Decimal("44") * long_exit
+    short_score = Decimal("44") * (Decimal("224.33") - short_exit) - fee - Decimal("0.01") * Decimal("44") * short_exit
+    assert abs(long_score - Decimal("100")) < Decimal("0.0000001")
+    assert abs(short_score - Decimal("100")) < Decimal("0.0000001")
+
+
+def test_roundtrip_exit_rejects_impossible_nonpositive_short_target():
+    with pytest.raises(ValueError, match="roundtrip_exit_nonpositive"):
+        close1_strategy.base_fee_roundtrip_exit_price(
+            side="sell",
+            qty="1",
+            entry_px="10",
+            entry_fee="0.10",
+            target_score="20",
+        )
+
+
 def test_long_crossover_against_current_short_leader_is_near_226_5():
     crossover = close1_strategy.crossover_vs_competitor(
         side="buy",
