@@ -134,6 +134,29 @@ require_state PRE_RESTART
 [[ "$FALLBACK_CURSOR" -ge "$PRE_CURSOR" && "$FALLBACK_CURSOR" -le "$STATE_CURSOR" ]] || stop_now rolling_fallback_cursor_mismatch
 PRE_RESTART_CURSOR=$STATE_CURSOR
 
+HOST_FLOOR=$("$PY" - <<'PY'
+from pathlib import Path
+mem=-1
+for line in Path("/proc/meminfo").read_text("utf-8").splitlines():
+    if line.startswith("MemAvailable:"):
+        mem=int(line.split()[1])*1024
+def psi(kind):
+    for line in Path(f"/proc/pressure/{kind}").read_text("utf-8").splitlines():
+        if line.startswith("full "):
+            for field in line.split()[1:]:
+                if field.startswith("avg10="):
+                    return float(field.split("=",1)[1])
+    return -1.0
+print(f"{mem}|{psi('memory')}|{psi('io')}")
+PY
+)
+IFS='|' read -r FLOOR_MEM FLOOR_MPSI FLOOR_IPSI <<<"$HOST_FLOOR"
+"$PY" - "$FLOOR_MEM" "$FLOOR_MPSI" "$FLOOR_IPSI" <<'PY' || stop_now host_floor_unsafe
+import sys
+mem=int(sys.argv[1]); m=float(sys.argv[2]); i=float(sys.argv[3])
+raise SystemExit(0 if mem >= 128*1024*1024 and 0 <= m <= 30 and 0 <= i <= 50 else 1)
+PY
+
 [[ "$(snap "$RES")" == "$RES_PRE" ]] || stop_now resident_changed_before_restart
 [[ "$(snap "$SIG")" == "$SIG_PRE" ]] || stop_now signer_changed_before_restart
 [[ "$(snap "$DIS")" == "$DIS_PRE" ]] || stop_now discord_changed_before_restart
