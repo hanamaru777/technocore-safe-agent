@@ -67,6 +67,9 @@ restore_discord() {
 finish_stop() {
   local reason=$1
   local restore=NONE
+  if [[ -n "$RESTORED_DIS" ]]; then
+    restore="YES:$RESTORED_DIS"
+  fi
   if [[ "$DISCORD_QUIESCED" == YES ]]; then
     if restore_discord; then restore="YES:$RESTORED_DIS"; else restore=FAILED; fi
   fi
@@ -81,6 +84,9 @@ on_error() {
   local rc=$?
   trap - ERR
   local restore=NONE
+  if [[ -n "$RESTORED_DIS" ]]; then
+    restore="YES:$RESTORED_DIS"
+  fi
   if [[ "$DISCORD_QUIESCED" == YES ]]; then
     if restore_discord; then restore="YES:$RESTORED_DIS"; else restore=FAILED; fi
   fi
@@ -265,6 +271,9 @@ if (( SAFE_STREAK < 5 )); then
 fi
 
 [[ "$(counts)" == "$BASE_COUNTS" ]] || finish_stop protected_changed_before_fetch
+CUR_DIS=$(snap technocore-safe-agent-discord.service)
+IFS='|' read -r da ds dp dn dr <<<"$CUR_DIS"
+[[ "$da" == inactive && "$dp" == 0 ]] || finish_stop discord_not_quiesced_before_fetch
 git_owner fetch --quiet --no-tags origin main
 [[ "$(git_owner rev-parse FETCH_HEAD)" == "$TARGET" ]] || finish_stop remote_main_moved
 git_owner merge-base --is-ancestor "$PRE" "$TARGET" || finish_stop target_not_ff
@@ -294,6 +303,9 @@ PY
 [[ "$(snap technocore-safe-agent-lobby-capture.service)" == "$CAP" ]] || finish_stop capture_changed_before_resident_restart
 [[ "$(snap technocore-safe-agent-signer.service)" == "$SIG" ]] || finish_stop signer_changed_before_resident_restart
 [[ "$(counts)" == "$BASE_COUNTS" ]] || finish_stop protected_changed_before_resident_restart
+CUR_DIS=$(snap technocore-safe-agent-discord.service)
+IFS='|' read -r da ds dp dn dr <<<"$CUR_DIS"
+[[ "$da" == inactive && "$dp" == 0 ]] || finish_stop discord_not_quiesced_before_resident_restart
 PRE_RESTART_SAFE=$(safe_sample 2>/dev/null) || finish_stop pressure_returned_before_resident_restart
 
 systemctl restart technocore-safe-agent-resident.service
@@ -328,6 +340,9 @@ for _ in $(seq 1 60); do
   sleep 10
 done
 [[ "$RES_ACCEPTED" == YES ]] || finish_stop resident_observer_not_accepted
+CUR_DIS=$(snap technocore-safe-agent-discord.service)
+IFS='|' read -r da ds dp dn dr <<<"$CUR_DIS"
+[[ "$da" == inactive && "$dp" == 0 ]] || finish_stop discord_not_quiesced_before_start
 
 systemctl start technocore-safe-agent-discord.service
 wait_discord_active "$DIS_PID" || finish_stop discord_start_not_stable
