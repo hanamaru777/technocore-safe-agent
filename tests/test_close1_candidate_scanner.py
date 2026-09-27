@@ -17,6 +17,11 @@ LEADERS = [
     "did:key:z6Mkedxe1yacwZyNB1tyyuW71PFvU9Y8YDrFmirDrkZ5hZDY",
 ]
 OUR_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
+SHADOW_LONGS = [
+    "did:key:z6MkjyBG1Br9k8MFUXMmNzkYyH6h4JAe8hPv3oqWhdDT7tav",
+    "did:key:z6Mkq38Zv4xKX2YEL9H4WcwpZMLBpXFAVHfUULVj74yPVaJh",
+    "did:key:z6MktvZPUUeoNsND7eMAD7Pgo4XuRHkESfQxDmoyTxemUdya",
+]
 
 
 def _b58encode(raw: bytes) -> str:
@@ -78,6 +83,45 @@ def _rooms(*, age=10, newest_only_leader=None):
         "global": "221.41",
         "file": "c" * 64,
     }, nonce=999)
+    return {"messages": [price]}, {"messages": pnl_messages}
+
+
+def _rooms_with_shadow_longs(*, age=10):
+    marks = [
+        Decimal("220.00"),
+        Decimal("220.20"),
+        Decimal("220.40"),
+        Decimal("220.60"),
+        Decimal("220.80"),
+        Decimal("221.00"),
+    ]
+    short_scores = [Decimal("218.00"), Decimal("210.00"), Decimal("210.00"), Decimal("210.00")]
+    short_positions = [Decimal("-40"), Decimal("-42"), Decimal("-42"), Decimal("-42")]
+    pnl_messages = []
+    for index, mark in enumerate(marks, 1):
+        top = []
+        for did, final_score, position in zip(LEADERS, short_scores, short_positions):
+            score = final_score + position * (mark - marks[-1])
+            top.append([did, str(score)])
+        if index < len(marks):
+            for did in SHADOW_LONGS:
+                score = Decimal("180.00") + Decimal("42") * (mark - Decimal("220.80"))
+                top.append([did, str(score)])
+        pnl_messages.append(_referee("pnl", {
+            "n": index,
+            "mark": str(mark),
+            "file": "d" * 64,
+            "top": top,
+        }, nonce=300 + index))
+    price = _referee("price", {
+        "n": len(marks),
+        "for": len(marks) + 1,
+        "age_s": age,
+        "ref": {"px": "224.33", "time": "2026-09-27T13:45:00Z", "tid": 2},
+        "limits": ["213.12", "235.54"],
+        "global": "221.00",
+        "file": "e" * 64,
+    }, nonce=399)
     return {"messages": [price]}, {"messages": pnl_messages}
 
 
@@ -182,6 +226,32 @@ def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(mon
     assert Decimal("226") < candidate.dynamic_top3_price < Decimal("227")
     assert candidate.required_cash < Decimal("10000")
     assert "clawback" in candidate.warning
+
+
+def test_scanner_keeps_stable_shadow_longs_after_they_fall_out_of_latest_top(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms_with_shadow_longs()
+    offer, _, _ = _offer()
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": [offer]}},
+    )
+
+    shadow = [item for item in report.visible_leaders if item.reason == "stable_shadow_leader"]
+    assert {item.did for item in shadow} == set(SHADOW_LONGS)
+    assert all(item.position is not None and Decimal("41") < item.position < Decimal("43") for item in shadow)
+    assert all(Decimal("188") < item.score < Decimal("189") for item in shadow)
+
+    candidate = report.candidates[0]
+    assert candidate.taker_side == "buy"
+    assert candidate.dynamic_condition == "above"
+    # Without the omitted long cluster this fixture looks like a ~226-227 top3
+    # crossover. Keeping three stable shadow longs correctly pushes the hurdle
+    # far away because they re-enter the top3 on a rally.
+    assert candidate.dynamic_top3_price > Decimal("400")
 
 
 def test_dynamic_top3_never_drops_below_zero_score_floor(monkeypatch):
@@ -311,7 +381,7 @@ def test_fetch_candidate_scan_reads_only_expected_public_rooms(monkeypatch):
     assert report.candidates == ()
     assert calls == [
         ("d-close1-price", 2),
-        ("d-close1-pnl", 12),
+        ("d-close1-pnl", 36),
         ("close1", 200),
         ("close1-offers", 200),
     ]
