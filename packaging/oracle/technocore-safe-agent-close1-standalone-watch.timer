@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Close Call standalone strategy watcher every five minutes
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=5min
+AccuracySec=15s
+Unit=technocore-safe-agent-close1-standalone-watch.service
+
+[Install]
+WantedBy=timers.target
