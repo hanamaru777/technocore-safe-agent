@@ -190,6 +190,39 @@ def base_fee(*, qty: object, px: object) -> Decimal:
     return close_call.FEE_RATE * quantity * entry
 
 
+def base_fee_roundtrip_exit_price(
+    *,
+    side: str,
+    qty: object,
+    entry_px: object,
+    entry_fee: object,
+    target_score: object,
+) -> Decimal:
+    """Base-fee-only exit price required to close flat at a target net score.
+
+    This intentionally ignores favorable-price clawback on both legs.  It is a
+    planning lower bound only; actual required exit can be farther away.
+    """
+    if side not in {"buy", "sell"}:
+        raise ValueError("close1_strategy_side_invalid")
+    quantity = _decimal(qty, label="qty")
+    entry = _decimal(entry_px, label="entry_px")
+    paid_entry_fee = _decimal(entry_fee, label="entry_fee", allow_zero=True)
+    target = _decimal(target_score, label="target_score", allow_zero=True)
+    rate = close_call.FEE_RATE
+
+    if side == "buy":
+        denominator = quantity * (Decimal("1") - rate)
+        exit_px = (quantity * entry + paid_entry_fee + target) / denominator
+    else:
+        denominator = quantity * (Decimal("1") + rate)
+        exit_px = (quantity * entry - paid_entry_fee - target) / denominator
+
+    if exit_px <= 0:
+        raise ValueError("close1_strategy_roundtrip_exit_nonpositive")
+    return exit_px
+
+
 def crossover_vs_competitor(
     *,
     side: str,
