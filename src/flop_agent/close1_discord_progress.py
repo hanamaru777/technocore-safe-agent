@@ -22,6 +22,9 @@ CANDIDATE_IMPROVEMENT_DELTA = Decimal("0.005")
 OWNER_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
 ASSUMED_AVAILABLE_CASH = "10000"
 ASSUMED_CURRENT_POSITION = "0"
+PRESSURE_MIN_MEM_AVAILABLE_BYTES = 256 * 1024 * 1024
+PRESSURE_MAX_MEMORY_PSI_FULL_AVG10 = Decimal("5")
+PRESSURE_MAX_IO_PSI_FULL_AVG10 = Decimal("10")
 
 
 def state_path() -> Path:
@@ -43,6 +46,7 @@ def _default_state() -> dict:
         "last_candidate_side": None,
         "last_candidate_move_abs": None,
         "last_candidate_notice_at": None,
+        "last_pressure_safe": None,
     }
 
 
@@ -93,6 +97,47 @@ def _decimal_or_none(value: object) -> Decimal | None:
     except Exception:
         return None
     return parsed if parsed.is_finite() else None
+
+
+def _mem_available_bytes() -> int | None:
+    try:
+        for line in Path("/proc/meminfo").read_text("utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(parts[1]) * 1024
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _psi_full_avg10(kind: str) -> Decimal | None:
+    try:
+        for line in Path(f"/proc/pressure/{kind}").read_text("utf-8").splitlines():
+            if not line.startswith("full "):
+                continue
+            for field in line.split()[1:]:
+                if field.startswith("avg10="):
+                    value = Decimal(field.split("=", 1)[1])
+                    return value if value.is_finite() else None
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _background_poll_allowed() -> bool:
+    """Fail closed for optional polling when host pressure is unsafe or unreadable."""
+    mem = _mem_available_bytes()
+    memory_psi = _psi_full_avg10("memory")
+    io_psi = _psi_full_avg10("io")
+    return bool(
+        mem is not None
+        and memory_psi is not None
+        and io_psi is not None
+        and mem >= PRESSURE_MIN_MEM_AVAILABLE_BYTES
+        and memory_psi <= PRESSURE_MAX_MEMORY_PSI_FULL_AVG10
+        and io_psi <= PRESSURE_MAX_IO_PSI_FULL_AVG10
+    )
 
 
 def _leader_score(snapshot: close_call.LiveSnapshot) -> Decimal | None:
@@ -265,6 +310,13 @@ def periodic_notices(
         return []
 
     state["last_attempt_at"] = current.isoformat()
+    previous_pressure_safe = state.get("last_pressure_safe")
+    if not _background_poll_allowed():
+        state["last_pressure_safe"] = False
+        _save_state(state)
+        return []
+    state["last_pressure_safe"] = True
+
     fetch = fetcher or close_call.fetch_live_snapshot
     try:
         snapshot = fetch()
@@ -304,6 +356,8 @@ def periodic_notices(
     cutoff = snapshot.top3_cutoff
 
     reasons: list[str] = []
+    if previous_pressure_safe is False:
+        reasons.append("負荷回復")
     if state.get("last_notice_at") is None:
         reasons.append("監視開始")
     elif isinstance(previous_fresh, bool) and previous_fresh != snapshot.reference_fresh_for_strategy:
