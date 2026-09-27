@@ -254,6 +254,86 @@ def test_scanner_keeps_stable_shadow_longs_after_they_fall_out_of_latest_top(mon
     assert candidate.dynamic_top3_price > Decimal("400")
 
 
+def test_scanner_builds_same_side_basket_from_verified_offers(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+    offers = [
+        _offer(trade_id="leg-a", qty="10.00", px="220.00", side="sell")[0],
+        _offer(trade_id="leg-b", qty="10.00", px="221.00", side="sell")[0],
+        _offer(trade_id="leg-c", qty="10.00", px="222.00", side="sell")[0],
+    ]
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": offers}},
+    )
+
+    assert report.strategy_gate == "ready"
+    assert len(report.baskets) == 1
+    basket = report.baskets[0]
+    assert basket.taker_side == "buy"
+    assert basket.qty == Decimal("30.00")
+    assert basket.weighted_px == Decimal("221.00")
+    assert len(basket.legs) == 3
+    assert [leg.trade_id for leg in basket.legs] == ["leg-a", "leg-b", "leg-c"]
+    assert basket.required_cash < Decimal("10000")
+    assert basket.dynamic_top3_price is not None
+    assert abs(basket.move_percent_from_mark) < min(
+        abs(candidate.move_percent_from_mark)
+        for candidate in report.candidates
+        if candidate.move_percent_from_mark is not None
+    )
+    assert "separate binding trade" in basket.warning
+
+
+def test_basket_stays_within_cash_and_deduplicates_trade_ids(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+    offers = [
+        _offer(trade_id="leg-a", qty="10.00", px="220.00", side="sell")[0],
+        _offer(trade_id="leg-a", qty="10.00", px="220.00", side="sell")[0],
+        _offer(trade_id="leg-b", qty="10.00", px="221.00", side="sell")[0],
+        _offer(trade_id="leg-c", qty="10.00", px="222.00", side="sell")[0],
+        _offer(trade_id="leg-d", qty="10.00", px="223.00", side="sell")[0],
+        _offer(trade_id="leg-e", qty="10.00", px="224.00", side="sell")[0],
+    ]
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": offers}},
+    )
+
+    basket = report.baskets[0]
+    assert basket.required_cash <= Decimal("10000")
+    assert basket.qty == Decimal("40.00")
+    assert len(basket.legs) == 4
+    assert len({leg.trade_id for leg in basket.legs}) == 4
+    assert "leg-e" not in {leg.trade_id for leg in basket.legs}
+
+
+def test_scanner_omits_baskets_when_current_position_is_nonzero(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+    offers = [
+        _offer(trade_id="leg-a", qty="4.00", px="220.00", side="sell")[0],
+        _offer(trade_id="leg-b", qty="4.00", px="221.00", side="sell")[0],
+    ]
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": offers}},
+        current_position="1.00",
+    )
+
+    assert report.baskets == ()
+
+
 def test_dynamic_top3_never_drops_below_zero_score_floor(monkeypatch):
     _verify_referee_with_fixture(monkeypatch)
     price, pnl = _rooms()
