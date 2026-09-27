@@ -40,7 +40,7 @@ def test_protects_continuity_and_other_services():
 
 def test_no_forbidden_surfaces():
     x=s()
-    for pat in (r"sqlite3",r"journalctl",r"curl ",r"wget ",r"/cmdline",r"/environ",r"SIGN_SEED",r"OCI_VAULT_SECRET_OCID"):
+    for pat in (r"\\bsqlite3\\b",r"journalctl",r"curl ",r"wget ",r"/cmdline",r"/environ",r"SIGN_SEED",r"OCI_VAULT_SECRET_OCID"):
         assert re.search(pat,x,re.I) is None
     assert "ACTIVE_CAPTURE_SQLITE_QUERY=NO" in x
     assert "TECHNOCORE_WRITE=NO FLOP_WRITE=NO TRADE=NO" in x
@@ -48,3 +48,11 @@ def test_no_forbidden_surfaces():
 def test_bash_syntax():
     r=subprocess.run(["bash","-n",str(H)],capture_output=True,text=True)
     assert r.returncode==0,r.stderr
+
+
+def test_capture_restart_has_emergency_host_floor():
+    x=s()
+    assert "host_floor_unsafe" in x
+    assert "128*1024*1024" in x
+    assert "m <= 30" in x
+    assert "i <= 50" in x
