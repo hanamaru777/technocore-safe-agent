@@ -67,3 +67,11 @@ def test_forbidden_surfaces_absent():
 def test_bash_syntax():
     r=subprocess.run(["bash","-n",str(H)],capture_output=True,text=True)
     assert r.returncode==0,r.stderr
+
+
+def test_resident_activation_requires_new_cursor_heartbeat_before_discord():
+    x=s()
+    assert "resident_new_heartbeat_not_ready" in x
+    assert "heartbeat_cursor_not_authoritative" in x
+    assert "POST_RESIDENT_GATE=PASS:3x10s" in x
+    assert x.index("resident_new_heartbeat_not_ready") < x.index('systemctl restart "$DIS"')
