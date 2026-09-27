@@ -209,6 +209,21 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
                 lines.append(f"basket legs: {leg_text}")
                 lines.append("basketは複数の別trade。各legごとにexact承認が必要です。")
 
+        if (
+            candidate.flat_target_score is not None
+            and candidate.base_fee_flat_exit_price is not None
+            and candidate.base_fee_flat_move_percent is not None
+        ):
+            exit_action = "SELL >=" if candidate.taker_side == "buy" else "BUY <="
+            flat_move = candidate.base_fee_flat_move_percent * Decimal("100")
+            lines.append(
+                "途中利確目安(base-fee only): "
+                f"flat +{candidate.flat_target_score} POLF ⇒ "
+                f"{exit_action} {candidate.base_fee_flat_exit_price.quantize(Decimal('0.01'))} "
+                f"/ entry比 {flat_move:+.2f}%"
+            )
+            lines.append("この途中利確価格はclawback未反映の楽観下限です。")
+
     lines.extend([
         "shadow leaders込み。leader/future trades・未観測account・clawbackで条件は変動します。",
         "取引は未実行。binding actionはexact tradeごとの個別承認が必要です。",
