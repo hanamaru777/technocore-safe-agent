@@ -314,13 +314,27 @@ def stage_pending(*, now_ms: int | None = None, max_count: int = 4) -> dict:
         raise PilotError("invalid_stage_batch")
     try:
         evidence_records = list(tclk_review_evidence.load_store()["records"])
+    except tclk_review_evidence.EvidenceError as error:
+        raise PilotError("stage_source_unavailable") from error
+
+    live_records = [
+        evidence
+        for evidence in evidence_records
+        if isinstance(evidence, dict)
+        and isinstance(evidence.get("expires_ms"), int)
+        and evidence["expires_ms"] - current >= MIN_STAGE_SECONDS * 1000
+    ]
+    if not live_records:
+        return {"staged": [], "count": 0, "skipped": len(evidence_records)}
+
+    try:
         state = observer.load_state()
-    except (RuntimeError, tclk_review_evidence.EvidenceError) as error:
+    except RuntimeError as error:
         raise PilotError("stage_source_unavailable") from error
 
     staged: list[str] = []
-    skipped = 0
-    for evidence in reversed(evidence_records):
+    skipped = len(evidence_records) - len(live_records)
+    for evidence in reversed(live_records):
         if len(staged) >= max_count:
             break
         offer_id = evidence.get("offer_id") if isinstance(evidence, dict) else None

@@ -11,6 +11,7 @@ SupplementaryGroups=technocore-autopilot
 WorkingDirectory=/opt/technocore-safe-agent
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+ExecCondition=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_timer_gate stager
 ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.tclk_pilot_stager
 NoNewPrivileges=true
 PrivateTmp=true
