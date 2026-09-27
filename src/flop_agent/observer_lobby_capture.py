@@ -37,7 +37,7 @@ PRUNE_EVERY_INSERTS = 5_000
 MAX_EXPORT_BYTES = 12 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 2.0
 READ_TIMEOUT_SECONDS = 5.0
-OBSERVER_CURSOR_PREFIX_BYTES = 64 * 1024
+OBSERVER_CURSOR_BOOTSTRAP_NAME = "observer-lobby-prune-cursor-bootstrap.json"
 
 
 def capture_path() -> Path:
@@ -78,23 +78,18 @@ def _cursor_value(value: object) -> int:
     return value if type(value) is int and value >= 0 else 0
 
 
-def _observer_cursor_from_state_prefix() -> int:
-    """Rolling-upgrade fallback: read only the early cursor object, never rich state."""
+def observer_cursor_bootstrap_path() -> Path:
+    return observer.observer_dir() / OBSERVER_CURSOR_BOOTSTRAP_NAME
+
+
+def _observer_cursor_from_bootstrap() -> int:
+    """Rolling-upgrade fallback: read only the tiny conservative bootstrap sidecar."""
     try:
-        with observer.state_path().open("rb") as handle:
-            prefix = handle.read(OBSERVER_CURSOR_PREFIX_BYTES).decode("utf-8")
-        marker = '"cursors":'
-        marker_at = prefix.find(marker)
-        if marker_at < 0:
+        value = json.loads(observer_cursor_bootstrap_path().read_text("utf-8"))
+        if not isinstance(value, dict) or value.get("schema_version") != 1:
             return 0
-        object_at = prefix.find("{", marker_at + len(marker))
-        if object_at < 0:
-            return 0
-        cursors, _ = json.JSONDecoder().raw_decode(prefix[object_at:])
-        if not isinstance(cursors, dict):
-            return 0
-        return _cursor_value(cursors.get(ROOM))
-    except (OSError, UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+        return _cursor_value(value.get("lobby_cursor"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return 0
 
 
@@ -108,7 +103,7 @@ def _observer_cursor() -> int:
                 return cursor
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         pass
-    return _observer_cursor_from_state_prefix()
+    return _observer_cursor_from_bootstrap()
 
 
 def initialize_cursor(connection: sqlite3.Connection, observer_cursor: int | None = None) -> int:

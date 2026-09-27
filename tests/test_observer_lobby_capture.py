@@ -240,19 +240,19 @@ def test_capture_process_requires_export_proof_before_permanent_skip():
     assert "capture_export_partial_before_gap" in source
 
 
-def test_observer_cursor_prefers_tiny_heartbeat_without_rich_state_read(monkeypatch, tmp_path):
+def test_observer_cursor_prefers_tiny_heartbeat_without_bootstrap(monkeypatch, tmp_path):
     heartbeat = tmp_path / "observer-heartbeat.json"
     heartbeat.write_text(
         '{"schema_version":1,"lobby_cursor":123}',
         encoding="utf-8",
     )
 
-    class BombStatePath:
-        def open(self, *args, **kwargs):
-            raise AssertionError("rich observer state must not be opened")
+    class BombBootstrapPath:
+        def read_text(self, *args, **kwargs):
+            raise AssertionError("bootstrap must not be read when heartbeat has a cursor")
 
     monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
-    monkeypatch.setattr(capture.observer, "state_path", lambda: BombStatePath())
+    monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: BombBootstrapPath())
     assert capture._observer_cursor() == 123
 
 
@@ -263,43 +263,56 @@ def test_observer_cursor_accepts_zero_heartbeat_cursor_without_fallback(monkeypa
         encoding="utf-8",
     )
 
-    class BombStatePath:
-        def open(self, *args, **kwargs):
+    class BombBootstrapPath:
+        def read_text(self, *args, **kwargs):
             raise AssertionError("zero is a valid fail-closed heartbeat cursor")
 
     monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
-    monkeypatch.setattr(capture.observer, "state_path", lambda: BombStatePath())
+    monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: BombBootstrapPath())
     assert capture._observer_cursor() == 0
 
 
-def test_observer_cursor_rolling_fallback_reads_bounded_state_prefix(monkeypatch, tmp_path):
-    heartbeat = tmp_path / "missing-heartbeat.json"
-    state = tmp_path / "observer-state.json"
-    state.write_text(
-        '{"schema_version":3,"created_at":"x","updated_at":"y",'
-        '"compaction_acknowledged":true,"cursors":{"lobby":456,"events":12},'
-        '"agents":"' + ("x" * 200000) + '"}',
+def test_observer_cursor_rolling_fallback_reads_tiny_bootstrap(monkeypatch, tmp_path):
+    heartbeat = tmp_path / "old-heartbeat.json"
+    heartbeat.write_text(
+        '{"schema_version":1,"updated_at":"x","status":"ok"}',
+        encoding="utf-8",
+    )
+    bootstrap = tmp_path / "observer-lobby-prune-cursor-bootstrap.json"
+    bootstrap.write_text(
+        '{"schema_version":1,"lobby_cursor":456}',
         encoding="utf-8",
     )
     monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
-    monkeypatch.setattr(capture.observer, "state_path", lambda: state)
-    assert state.stat().st_size > capture.OBSERVER_CURSOR_PREFIX_BYTES
+    monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: bootstrap)
+
     assert capture._observer_cursor() == 456
 
     import inspect
-    source = inspect.getsource(capture._observer_cursor_from_state_prefix)
-    assert "handle.read(OBSERVER_CURSOR_PREFIX_BYTES)" in source
-    assert ".read_text(" not in source
+    source = inspect.getsource(capture._observer_cursor_from_bootstrap)
+    assert "read_text" in source
+    assert "observer.state_path" not in source
 
 
-def test_observer_cursor_fallback_fails_closed_when_cursor_not_in_prefix(monkeypatch, tmp_path):
-    heartbeat = tmp_path / "missing-heartbeat.json"
-    state = tmp_path / "observer-state.json"
-    state.write_text(
-        '{"padding":"' + ("x" * 200) + '","cursors":{"lobby":999}}',
-        encoding="utf-8",
-    )
+def test_observer_cursor_bootstrap_fails_closed_when_missing_or_invalid(monkeypatch, tmp_path):
+    heartbeat = tmp_path / "old-heartbeat.json"
+    heartbeat.write_text('{"schema_version":1}', encoding="utf-8")
+    bootstrap = tmp_path / "missing-bootstrap.json"
     monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
-    monkeypatch.setattr(capture.observer, "state_path", lambda: state)
-    monkeypatch.setattr(capture, "OBSERVER_CURSOR_PREFIX_BYTES", 64)
+    monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: bootstrap)
+
     assert capture._observer_cursor() == 0
+
+    bootstrap.write_text('{"schema_version":2,"lobby_cursor":999}', encoding="utf-8")
+    assert capture._observer_cursor() == 0
+
+    bootstrap.write_text('{"schema_version":1,"lobby_cursor":-1}', encoding="utf-8")
+    assert capture._observer_cursor() == 0
+
+
+def test_capture_source_has_no_rich_observer_state_cursor_fallback():
+    import inspect
+
+    source = inspect.getsource(capture)
+    assert "_observer_cursor_from_state_prefix" not in source
+    assert "OBSERVER_CURSOR_PREFIX_BYTES" not in source
