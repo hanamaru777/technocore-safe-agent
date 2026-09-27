@@ -233,7 +233,7 @@ def load_state(memory_retention: int | None = None) -> dict:
 
 def write_heartbeat(state: dict) -> None:
     metrics = state.get("metrics", {})
-    atomic_json_write(heartbeat_path(), {"schema_version": 1, "updated_at": state["updated_at"], "status": state.get("health", {}).get("current", "degraded"), "agent_count": len(state.get("agents", {})), "metrics": {"unique_dids_discovered": int(metrics.get("unique_dids_discovered", 0)), "returning_did_encounters": int(metrics.get("returning_did_encounters", 0)), "message_gaps": int(metrics.get("message_gaps", 0))}}, compact=True)
+    atomic_json_write(heartbeat_path(), {"schema_version": 1, "updated_at": state["updated_at"], "status": state.get("health", {}).get("current", "degraded"), "agent_count": len(state.get("agents", {})), "lobby_cursor": int(state.get("cursors", {}).get("lobby", 0) or 0), "metrics": {"unique_dids_discovered": int(metrics.get("unique_dids_discovered", 0)), "returning_did_encounters": int(metrics.get("returning_did_encounters", 0)), "message_gaps": int(metrics.get("message_gaps", 0))}}, compact=True)
 
 
 def save_state(state: dict) -> None:
