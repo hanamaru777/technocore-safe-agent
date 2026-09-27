@@ -28,7 +28,7 @@ def test_service_is_short_lived_hardened_and_reuses_existing_env():
     assert "CPUQuota=50%" in x
     assert "NoNewPrivileges=true" in x
     assert "ProtectSystem=strict" in x
-    assert "ReadWritePaths=/var/lib/technocore-safe-agent/resident" in x
+    assert "ReadWritePaths=/var/lib/technocore-safe-agent/observer" in x
 
 
 def test_timer_runs_every_five_minutes():
