@@ -172,3 +172,9 @@ def test_prod533_bash_syntax_valid():
         text=True,
     )
     assert result.returncode==0, result.stderr
+
+
+def test_prod533_temp_gate_is_traversable_by_service_users():
+    s=_source()
+    assert 'chmod 0755 "$TMPDIR"' in s
+    assert 'chmod 0644 "$TMPDIR/tclk_timer_gate.py"' in s
