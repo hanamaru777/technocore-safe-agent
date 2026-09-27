@@ -294,3 +294,43 @@ def test_preparer_service_uses_public_only_env_and_blocks_oci_metadata():
     assert "/etc/technocore-safe-agent/signer.env" not in unit
     assert "Requires=technocore-safe-agent-metadata-block.service" in unit
     assert "IPAddressDeny=169.254.169.254" in unit
+
+
+def test_stage_pending_skips_rich_observer_load_when_no_live_evidence(monkeypatch):
+    expired = {"expires_ms": NOW + tclk_pilot.MIN_STAGE_SECONDS * 1000 - 1}
+    monkeypatch.setattr(
+        tclk_review_evidence,
+        "load_store",
+        lambda: {"schema_version": 1, "records": [expired]},
+    )
+    monkeypatch.setattr(
+        observer,
+        "load_state",
+        lambda: (_ for _ in ()).throw(AssertionError("no-op stager must not full-load Observer state")),
+    )
+
+    result = tclk_pilot.stage_pending(now_ms=NOW)
+
+    assert result == {"staged": [], "count": 0, "skipped": 1}
+
+
+def test_stage_pending_still_loads_observer_for_live_evidence(monkeypatch):
+    live = {"expires_ms": NOW + tclk_pilot.MIN_STAGE_SECONDS * 1000}
+    marker = {"loaded": False}
+
+    monkeypatch.setattr(
+        tclk_review_evidence,
+        "load_store",
+        lambda: {"schema_version": 1, "records": [live]},
+    )
+
+    def load_state():
+        marker["loaded"] = True
+        return observer.default_state()
+
+    monkeypatch.setattr(observer, "load_state", load_state)
+
+    result = tclk_pilot.stage_pending(now_ms=NOW)
+
+    assert marker["loaded"] is True
+    assert result["count"] == 0
