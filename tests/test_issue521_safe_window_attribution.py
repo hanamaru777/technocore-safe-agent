@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import subprocess
 
 HELPER = Path("packaging/oracle/issue521-safe-window-attribution-v1.sh")
 
@@ -84,3 +85,13 @@ def test_prod521_has_no_mutation_or_forbidden_observation_surface():
 def test_prod521_output_is_compact():
     s = _source()
     assert s.count('print("') + s.count("print(f") <= 20
+
+
+def test_prod521_bash_syntax_is_valid():
+    result = subprocess.run(
+        ["bash", "-n", str(HELPER)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
