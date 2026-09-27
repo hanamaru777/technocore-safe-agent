@@ -38,6 +38,9 @@ class CandidateView:
     visible_leader_coverage: int
     visible_leaders: int
     warning: str
+    flat_target_score: Decimal | None = None
+    base_fee_flat_exit_price: Decimal | None = None
+    base_fee_flat_move_percent: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,9 @@ class BasketCandidateView:
     visible_leader_coverage: int
     visible_leaders: int
     warning: str
+    flat_target_score: Decimal | None = None
+    base_fee_flat_exit_price: Decimal | None = None
+    base_fee_flat_move_percent: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -297,6 +303,27 @@ def _nearest_dynamic_top3(
     return price, condition, (price - current_mark) / current_mark
 
 
+def _flat_target_plan(
+    *,
+    side: str,
+    qty: Decimal,
+    entry_px: Decimal,
+    entry_fee: Decimal,
+    target_score: Decimal,
+) -> tuple[Decimal, Decimal] | None:
+    try:
+        exit_px = close1_strategy.base_fee_roundtrip_exit_price(
+            side=side,
+            qty=qty,
+            entry_px=entry_px,
+            entry_fee=entry_fee,
+            target_score=target_score,
+        )
+    except ValueError:
+        return None
+    return exit_px, (exit_px - entry_px) / entry_px
+
+
 def _build_same_side_basket(
     *,
     side: str,
@@ -304,6 +331,7 @@ def _build_same_side_basket(
     available_cash: Decimal,
     current_mark: Decimal,
     leaders: list[LeaderView],
+    flat_target_score: Decimal,
 ) -> BasketCandidateView | None:
     """Build one conservative full-offer basket for a single taker side.
 
@@ -374,6 +402,18 @@ def _build_same_side_basket(
         base_fee=candidate.base_fee,
         required_cash=candidate.required_cash,
     ) for candidate in chosen)
+    flat_plan = _flat_target_plan(
+        side=side,
+        qty=qty,
+        entry_px=weighted_px,
+        entry_fee=base_fee,
+        target_score=flat_target_score,
+    )
+    if flat_plan is None:
+        flat_exit = None
+        flat_move = None
+    else:
+        flat_exit, flat_move = flat_plan
 
     return BasketCandidateView(
         taker_side=side,
@@ -393,6 +433,9 @@ def _build_same_side_basket(
             "binding trade, all legs must still be live at execution time, and favorable-price "
             "clawback plus leader/future trades can worsen the projected outcome"
         ),
+        flat_target_score=flat_target_score,
+        base_fee_flat_exit_price=flat_exit,
+        base_fee_flat_move_percent=flat_move,
     )
 
 
@@ -493,6 +536,10 @@ def build_candidate_scan(
             raise ValueError("close1_scanner_pnl_top_invalid")
         current_scores.append(_signed_decimal(row[1], label="leader_score"))
     top3_cutoff = current_scores[2] if len(current_scores) >= 3 else None
+    flat_target_score = max(
+        Decimal("100"),
+        (top3_cutoff + Decimal("25")) if top3_cutoff is not None else Decimal("100"),
+    )
     leaders = _leader_universe(snapshots=snapshots, current_mark=mark)
     seen_trade_ids: set[str] = set()
     offer_records: list[tuple[str, dict]] = []
@@ -580,6 +627,18 @@ def build_candidate_scan(
             move = None
         else:
             price_value, condition, move = dynamic
+        flat_plan = _flat_target_plan(
+            side=offer.taker_side,
+            qty=offer.qty,
+            entry_px=offer.px,
+            entry_fee=fee,
+            target_score=flat_target_score,
+        )
+        if flat_plan is None:
+            flat_exit = None
+            flat_move = None
+        else:
+            flat_exit, flat_move = flat_plan
         candidate_rows.append(CandidateView(
             room=room,
             seq=offer.seq,
@@ -600,6 +659,9 @@ def build_candidate_scan(
                 "trades, accounts never visible in sampled history and sweep-close clawback can "
                 "change the actual top3 outcome"
             ),
+            flat_target_score=flat_target_score,
+            base_fee_flat_exit_price=flat_exit,
+            base_fee_flat_move_percent=flat_move,
         ))
 
     candidate_rows.sort(key=lambda item: (
@@ -620,6 +682,7 @@ def build_candidate_scan(
                 available_cash=cash_budget,
                 current_mark=mark,
                 leaders=leaders,
+                flat_target_score=flat_target_score,
             )
             if basket is not None:
                 basket_rows.append(basket)
