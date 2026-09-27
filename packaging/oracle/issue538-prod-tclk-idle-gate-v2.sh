@@ -77,6 +77,16 @@ restore_old_units() {
   UNIT_WRITES_STARTED=NO
 }
 
+restore_old_source() {
+  [[ "$SOURCE_UPDATED" == YES ]] || return 0
+  [[ "$DAEMON_RELOADED" != YES ]] || return 1
+  [[ "$(git_owner rev-parse HEAD)" == "$TARGET" ]] || return 1
+  [[ "$(git_owner branch --show-current)" == main ]] || return 1
+  [[ -z "$(git_owner status --porcelain=v1 --untracked-files=all)" ]] || return 1
+  git_owner reset --hard "$PRE" >/dev/null
+  SOURCE_UPDATED=NO
+}
+
 restore_timers() {
   [[ "$TIMERS_PAUSED" == YES ]] || return 0
   systemctl start "${TIMERS[@]}" || return 1
@@ -92,9 +102,13 @@ restore_timers() {
 finish_stop() {
   local reason=$1
   local unit_restore=NONE
+  local source_restore=NONE
   local timer_restore=NONE
   if [[ "$UNIT_WRITES_STARTED" == YES && "$DAEMON_RELOADED" != YES ]]; then
     if restore_old_units; then unit_restore=YES; else unit_restore=FAILED; fi
+  fi
+  if [[ "$SOURCE_UPDATED" == YES && "$DAEMON_RELOADED" != YES ]]; then
+    if restore_old_source; then source_restore=YES; else source_restore=FAILED; fi
   fi
   if [[ "$TIMERS_PAUSED" == YES ]]; then
     if restore_timers; then timer_restore=YES; else timer_restore=FAILED; fi
@@ -102,7 +116,7 @@ finish_stop() {
     timer_restore=ALREADY
   fi
   echo "PROD538V1=STOP:$reason step:$STEP"
-  echo "SOURCE_UPDATED=$SOURCE_UPDATED UNIT_RESTORE=$unit_restore TIMER_RESTORE=$timer_restore"
+  echo "SOURCE_UPDATED=$SOURCE_UPDATED SOURCE_RESTORE=$source_restore UNIT_RESTORE=$unit_restore TIMER_RESTORE=$timer_restore"
   echo "DO_NOT_RERUN=YES"
   exit 0
 }
@@ -113,9 +127,13 @@ on_error() {
   local failed_line="${BASH_LINENO[0]:-0}"
   trap - ERR
   local unit_restore=NONE
+  local source_restore=NONE
   local timer_restore=NONE
   if [[ "$UNIT_WRITES_STARTED" == YES && "$DAEMON_RELOADED" != YES ]]; then
     if restore_old_units; then unit_restore=YES; else unit_restore=FAILED; fi
+  fi
+  if [[ "$SOURCE_UPDATED" == YES && "$DAEMON_RELOADED" != YES ]]; then
+    if restore_old_source; then source_restore=YES; else source_restore=FAILED; fi
   fi
   if [[ "$TIMERS_PAUSED" == YES ]]; then
     if restore_timers; then timer_restore=YES; else timer_restore=FAILED; fi
@@ -124,7 +142,7 @@ on_error() {
   fi
   echo "PROD538V1=ERROR:rc_$rc step:$STEP line:$failed_line"
   printf 'ERROR_COMMAND=%q\n' "$failed_cmd"
-  echo "SOURCE_UPDATED=$SOURCE_UPDATED UNIT_RESTORE=$unit_restore TIMER_RESTORE=$timer_restore"
+  echo "SOURCE_UPDATED=$SOURCE_UPDATED SOURCE_RESTORE=$source_restore UNIT_RESTORE=$unit_restore TIMER_RESTORE=$timer_restore"
   echo "DO_NOT_RERUN=YES"
   exit 0
 }
@@ -374,6 +392,7 @@ for i in "${!MODES[@]}"; do
   else
     rc=$?
   fi
+  [[ "$rc" == 0 || "$rc" == 1 ]] || finish_stop "post_gate_unexpected_${mode}_rc_${rc}"
   POST_GATE+=("$mode:$rc")
 done
 
