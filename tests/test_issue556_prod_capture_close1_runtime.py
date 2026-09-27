@@ -42,18 +42,23 @@ def test_discord_gate_keeps_original_strict_thresholds_for_60s():
     assert 'r["shealth"]=="ok"' in x
     assert "STRICT_GATE=PASS:60s" in x
 
-def test_restart_order_is_capture_then_strict_gate_then_resident_then_discord():
+def test_restart_order_is_capture_then_strict_gate_then_discord_only():
     x=s()
     assert x.count('systemctl restart "$CAP"') == 1
-    assert x.count('systemctl restart "$RES"') == 1
     assert x.count('systemctl restart "$DIS"') == 1
-    assert re.search(r'systemctl restart "\$SIG"',x) is None
+    assert re.search(r'systemctl restart "\$(RES|SIG)"',x) is None
     assert x.index('systemctl restart "$CAP"') < x.index('if [[ "$GATE" != PASS ]]')
-    assert x.index('if [[ "$GATE" != PASS ]]') < x.index('systemctl restart "$RES"')
-    assert x.index('systemctl restart "$RES"') < x.index('if [[ "$POST_RES_GATE" != PASS ]]')
-    assert x.index('if [[ "$POST_RES_GATE" != PASS ]]') < x.index('systemctl restart "$DIS"')
-    assert "PASS_CAPTURE_RESIDENT_ONLY" in x
-    assert "SIGNER_RESTART=NO" in x
+    assert x.index('if [[ "$GATE" != PASS ]]') < x.index('systemctl restart "$DIS"')
+    assert "PASS_CAPTURE_ONLY" in x
+    assert "PASS_FULL" in x
+    assert "RESIDENT_RESTART=NO SIGNER_RESTART=NO" in x
+
+def test_old_resident_is_preserved_while_bootstrap_keeps_capture_fail_closed():
+    x=s()
+    assert "observer-lobby-prune-cursor-bootstrap.json" in x
+    assert '[[ "$(snap "$RES")" == "$RES_PRE" ]] || stop_now resident_changed_before_discord_restart' in x
+    assert '[[ "$(snap "$RES")" == "$RES_PRE" ]] || stop_now resident_changed_final' in x
+    assert "RESIDENT_RESTART=NO SIGNER_RESTART=NO" in x
 
 def test_expected_source_diff_is_narrow():
     x=s()
@@ -75,11 +80,3 @@ def test_forbidden_surfaces_absent():
 def test_bash_syntax():
     r=subprocess.run(["bash","-n",str(H)],capture_output=True,text=True)
     assert r.returncode==0,r.stderr
-
-
-def test_resident_activation_requires_new_cursor_heartbeat_before_discord():
-    x=s()
-    assert "resident_new_heartbeat_not_ready" in x
-    assert "heartbeat_cursor_not_authoritative" in x
-    assert "POST_RESIDENT_GATE=PASS:3x10s" in x
-    assert x.index("resident_new_heartbeat_not_ready") < x.index('systemctl restart "$DIS"')
