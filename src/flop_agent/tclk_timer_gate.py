@@ -123,7 +123,7 @@ def _activity_tail(root: Path) -> list[dict]:
     except UnicodeDecodeError as error:
         raise GateAmbiguous("activity_unreadable") from error
     rows: list[dict] = []
-    for line in lines[-2000:]:
+    for line in lines:
         if not line.strip():
             continue
         try:
