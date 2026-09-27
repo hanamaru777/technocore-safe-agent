@@ -129,3 +129,8 @@ for timer in "${TIMERS[@]}"; do
   systemctl is-active --quiet "$timer" || stop_diag timer_changed_post
   [[ "$(systemctl is-enabled "$timer" 2>/dev/null || true)" == enabled ]] || stop_diag timer_enablement_changed_post
 done
+
+
+echo "PROD540V1=PASS"
+echo "MUTATION=NONE"
+echo "DO_NOT_RERUN=YES"
