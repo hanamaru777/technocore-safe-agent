@@ -171,6 +171,31 @@ def test_watcher_prefers_nearer_basket_over_single(monkeypatch, tmp_path):
     assert state["last_candidate_move_abs"] == "0.020"
 
 
+def test_watcher_renders_base_fee_only_flat_target(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    base = _scan(move="0.020", trade_id="single")
+    candidate = replace(
+        base.candidates[0],
+        flat_target_score=Decimal("125"),
+        base_fee_flat_exit_price=Decimal("231.25"),
+        base_fee_flat_move_percent=Decimal("0.028"),
+    )
+    scan = replace(base, candidates=(candidate,))
+    sent = []
+
+    result = watch.run_once(
+        fetcher=lambda: scan,
+        sender=sent.append,
+        now=datetime(2026, 9, 27, 15, 0, tzinfo=UTC),
+    )
+
+    assert result["sent"] is True
+    assert "flat +125 POLF" in sent[0]
+    assert "SELL >= 231.25" in sent[0]
+    assert "entry比 +2.80%" in sent[0]
+    assert "clawback未反映" in sent[0]
+
+
 def test_send_failure_does_not_advance_activation_baseline(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
