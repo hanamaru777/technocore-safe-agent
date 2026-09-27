@@ -41,6 +41,35 @@ class CandidateView:
 
 
 @dataclass(frozen=True)
+class BasketLegView:
+    room: str
+    seq: int
+    trade_id: str
+    qty: Decimal
+    px: Decimal
+    until: int
+    base_fee: Decimal
+    required_cash: Decimal
+
+
+@dataclass(frozen=True)
+class BasketCandidateView:
+    taker_side: str
+    legs: tuple[BasketLegView, ...]
+    qty: Decimal
+    weighted_px: Decimal
+    until: int
+    base_fee: Decimal
+    required_cash: Decimal
+    dynamic_top3_price: Decimal | None
+    dynamic_condition: str | None
+    move_percent_from_mark: Decimal | None
+    visible_leader_coverage: int
+    visible_leaders: int
+    warning: str
+
+
+@dataclass(frozen=True)
 class CandidateScan:
     sweep: int
     reference: Decimal
@@ -53,6 +82,7 @@ class CandidateScan:
     rejected_offers: int
     candidates: tuple[CandidateView, ...]
     strategy_gate: str
+    baskets: tuple[BasketCandidateView, ...] = ()
 
 
 def _signed_decimal(value: object, *, label: str) -> Decimal:
@@ -267,6 +297,105 @@ def _nearest_dynamic_top3(
     return price, condition, (price - current_mark) / current_mark
 
 
+def _build_same_side_basket(
+    *,
+    side: str,
+    candidates: list[CandidateView],
+    available_cash: Decimal,
+    current_mark: Decimal,
+    leaders: list[LeaderView],
+) -> BasketCandidateView | None:
+    """Build one conservative full-offer basket for a single taker side.
+
+    This is deliberately not an execution plan.  It greedily takes distinct
+    verified offers in best-price order while staying within the current cash
+    budget.  Individual offer acceptance still requires separate exact approval.
+    """
+    if side not in {"buy", "sell"}:
+        raise ValueError("close1_scanner_basket_side_invalid")
+    if available_cash <= 0:
+        raise ValueError("close1_scanner_basket_cash_invalid")
+
+    rows = [candidate for candidate in candidates if candidate.taker_side == side]
+    rows.sort(key=lambda candidate: (
+        candidate.px if side == "buy" else -candidate.px,
+        -candidate.qty,
+        candidate.until,
+        candidate.seq,
+        candidate.trade_id,
+    ))
+
+    chosen: list[CandidateView] = []
+    seen_ids: set[str] = set()
+    required_cash = Decimal("0")
+    for candidate in rows:
+        if candidate.trade_id in seen_ids:
+            continue
+        next_cash = required_cash + candidate.required_cash
+        if next_cash > available_cash:
+            continue
+        chosen.append(candidate)
+        seen_ids.add(candidate.trade_id)
+        required_cash = next_cash
+
+    if len(chosen) < 2:
+        return None
+
+    qty = sum((candidate.qty for candidate in chosen), Decimal("0"))
+    if qty <= 0:
+        return None
+    notional = sum((candidate.qty * candidate.px for candidate in chosen), Decimal("0"))
+    weighted_px = notional / qty
+    base_fee = sum((candidate.base_fee for candidate in chosen), Decimal("0"))
+    until = min(candidate.until for candidate in chosen)
+    stable_count = sum(1 for leader in leaders if leader.stable and leader.position is not None)
+    dynamic = _nearest_dynamic_top3(
+        side=side,
+        qty=qty,
+        px=weighted_px,
+        fee=base_fee,
+        current_mark=current_mark,
+        leaders=leaders,
+    )
+    if dynamic is None:
+        dynamic_top3_price = None
+        condition = None
+        move = None
+    else:
+        dynamic_top3_price, condition, move = dynamic
+
+    legs = tuple(BasketLegView(
+        room=candidate.room,
+        seq=candidate.seq,
+        trade_id=candidate.trade_id,
+        qty=candidate.qty,
+        px=candidate.px,
+        until=candidate.until,
+        base_fee=candidate.base_fee,
+        required_cash=candidate.required_cash,
+    ) for candidate in chosen)
+
+    return BasketCandidateView(
+        taker_side=side,
+        legs=legs,
+        qty=qty,
+        weighted_px=weighted_px,
+        until=until,
+        base_fee=base_fee,
+        required_cash=required_cash,
+        dynamic_top3_price=dynamic_top3_price,
+        dynamic_condition=condition,
+        move_percent_from_mark=move,
+        visible_leader_coverage=stable_count,
+        visible_leaders=len(leaders),
+        warning=(
+            "heuristic full-offer basket in best-price order; every leg remains a separate "
+            "binding trade, all legs must still be live at execution time, and favorable-price "
+            "clawback plus leader/future trades can worsen the projected outcome"
+        ),
+    )
+
+
 def _verified_trade_id(room: str, message: object) -> str | None:
     """Return a trade id only after outer, maker and taker signatures verify."""
     if not isinstance(message, dict):
@@ -479,6 +608,28 @@ def build_candidate_scan(
         -item.qty,
         item.seq,
     ))
+
+    basket_rows: list[BasketCandidateView] = []
+    parsed_position = _signed_decimal(current_position, label="current_position")
+    if parsed_position == 0:
+        cash_budget = close_call._amount(available_cash, label="available_cash")
+        for side in ("buy", "sell"):
+            basket = _build_same_side_basket(
+                side=side,
+                candidates=candidate_rows,
+                available_cash=cash_budget,
+                current_mark=mark,
+                leaders=leaders,
+            )
+            if basket is not None:
+                basket_rows.append(basket)
+    basket_rows.sort(key=lambda item: (
+        item.dynamic_top3_price is None,
+        abs(item.move_percent_from_mark) if item.move_percent_from_mark is not None else Decimal("999"),
+        -item.qty,
+        item.until,
+    ))
+
     return CandidateScan(
         sweep=sweep,
         reference=reference,
@@ -491,6 +642,7 @@ def build_candidate_scan(
         rejected_offers=rejected,
         candidates=tuple(candidate_rows),
         strategy_gate="ready" if stable_count == len(leaders) and len(leaders) >= 3 else "leader_coverage_incomplete",
+        baskets=tuple(basket_rows),
     )
 
 
