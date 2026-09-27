@@ -151,3 +151,19 @@ def test_prod523_bash_syntax_valid():
         text=True,
     )
     assert result.returncode==0, result.stderr
+
+
+def test_prod523_revalidates_discord_quiesce_at_critical_boundaries():
+    s=_source()
+    for token in (
+        "discord_not_quiesced_before_fetch",
+        "discord_not_quiesced_before_resident_restart",
+        "discord_not_quiesced_before_start",
+    ):
+        assert token in s
+
+
+def test_prod523_reports_already_restored_discord_on_later_stop():
+    s=_source()
+    assert 'if [[ -n "$RESTORED_DIS" ]]; then' in s
+    assert 'restore="YES:$RESTORED_DIS"' in s
