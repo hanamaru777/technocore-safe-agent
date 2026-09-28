@@ -76,7 +76,7 @@ def test_insufficient_or_unstable_history_does_not_claim_stable_exposure():
     )
     assert unstable.position == Decimal("-45")
     assert unstable.stable is False
-    assert unstable.reason == "unstable_score_mark_slope"
+    assert unstable.reason == "unstable_recent_score_mark_slope"
 
 
 def test_recent_stable_regime_recovers_after_older_position_change():
