@@ -27,6 +27,8 @@ PRICE_SHOCK = Decimal("0.0075")
 TOP3_DELTA = Decimal("10")
 CANDIDATE_NEAR = Decimal("0.03")
 CANDIDATE_IMPROVEMENT = Decimal("0.005")
+FLOW_SHOCK_QTY = Decimal("40")
+FLOW_SHOCK_IMPROVEMENT = Decimal("20")
 
 DISCORD_API = "https://discord.com/api/v10"
 DISCORD_LIMIT = 2000
@@ -47,6 +49,8 @@ def _default_state() -> dict:
         "last_candidate_side": None,
         "last_candidate_move_abs": None,
         "last_candidate_trade_id": None,
+        "last_flow_key": None,
+        "last_flow_qty": None,
         "last_alert_at": None,
         "last_error": None,
     }
@@ -143,6 +147,25 @@ def _top3_shift(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bo
     return bool(current is not None and previous is not None and abs(current - previous) >= TOP3_DELTA)
 
 
+def _top_flow(scan: close1_candidate_scanner.CandidateScan):
+    for flow in scan.recent_flows:
+        if flow.taker != OWNER_DID:
+            return flow
+    return None
+
+
+def _flow_signal(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bool:
+    flow = _top_flow(scan)
+    if flow is None or flow.qty < FLOW_SHOCK_QTY:
+        return False
+    key = f"{flow.taker}:{flow.taker_side}"
+    previous_key = state.get("last_flow_key")
+    previous_qty = _decimal(state.get("last_flow_qty"))
+    if previous_key != key or previous_qty is None:
+        return True
+    return flow.qty - previous_qty >= FLOW_SHOCK_IMPROVEMENT
+
+
 def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) -> list[str]:
     reasons: list[str] = []
     if state.get("activated") is not True:
@@ -153,6 +176,8 @@ def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) ->
         reasons.append("TOP3変化")
     if _candidate_signal(scan, state):
         reasons.append("勝ち筋候補接近")
+    if _flow_signal(scan, state):
+        reasons.append("大口フロー")
     return reasons
 
 
@@ -171,6 +196,15 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
         f"leader envelope: stable {stable}/{len(scan.visible_leaders)}",
         f"strategy gate: {scan.strategy_gate} / verified offers {scan.verified_offers}",
     ]
+
+    flow = _top_flow(scan)
+    if flow is not None and flow.qty >= FLOW_SHOCK_QTY:
+        lines.append(
+            "recent gross taker flow: "
+            f"{flow.taker_side.upper()} {flow.qty} contracts / {flow.trades} trades "
+            f"/ px {flow.min_px}-{flow.max_px}"
+        )
+        lines.append("gross flowは新規ポジション量とは限りません。PnL反映前の早期警戒です。")
 
     opportunity = _best_opportunity(scan)
     if opportunity is None:
@@ -278,6 +312,9 @@ def _remember_scan(state: dict, scan: close1_candidate_scanner.CandidateScan, cu
         candidate = None
     else:
         kind, candidate = opportunity
+    flow = _top_flow(scan)
+    flow_key = f"{flow.taker}:{flow.taker_side}" if flow is not None else None
+    flow_qty = str(flow.qty) if flow is not None else None
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
@@ -295,6 +332,8 @@ def _remember_scan(state: dict, scan: close1_candidate_scanner.CandidateScan, cu
             if candidate is not None and kind is not None
             else None
         ),
+        last_flow_key=flow_key,
+        last_flow_qty=flow_qty,
         last_error=None,
     )
 
