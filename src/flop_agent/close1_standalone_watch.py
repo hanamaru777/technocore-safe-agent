@@ -282,6 +282,10 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
             "flat target score: "
             + (f"{scan.flat_target_score:+f} POLF" if scan.flat_target_score is not None else "n/a")
         ),
+        (
+            "victory target score: "
+            + (f"{scan.victory_target_score:+f} POLF" if scan.victory_target_score is not None else "n/a")
+        ),
         f"leader envelope: stable {stable}/{len(scan.visible_leaders)}",
         f"strategy gate: {scan.strategy_gate} / verified offers {scan.verified_offers}",
     ]
@@ -368,6 +372,21 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
                 f"/ entry比 {flat_move:+.2f}%"
             )
             lines.append("この途中利確価格はclawback未反映の楽観下限です。")
+
+        if (
+            candidate.victory_target_score is not None
+            and candidate.base_fee_victory_exit_price is not None
+            and candidate.base_fee_victory_move_percent is not None
+        ):
+            exit_action = "SELL >=" if candidate.taker_side == "buy" else "BUY <="
+            victory_move = candidate.base_fee_victory_move_percent * Decimal("100")
+            lines.append(
+                "優勝目標(base-fee only): "
+                f"+{candidate.victory_target_score} POLF ⇒ "
+                f"{exit_action} {candidate.base_fee_victory_exit_price.quantize(Decimal('0.01'))} "
+                f"/ entry比 {victory_move:+.2f}%"
+            )
+            lines.append("優勝目標もclawback・将来のleader変化未反映の楽観下限です。")
 
     lines.extend([
         "shadow leaders込み。leader/future trades・未観測account・clawbackで条件は変動します。",
