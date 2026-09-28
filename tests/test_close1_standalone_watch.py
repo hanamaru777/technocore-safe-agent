@@ -96,6 +96,56 @@ def test_top3_material_shift_sends(monkeypatch, tmp_path):
     assert "TOP3変化" in result["reasons"]
 
 
+def test_hurdle_acceleration_alerts_on_first_crossing_and_large_reacceleration(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    sent = []
+
+    base = replace(_scan(), top3_delta_10m=Decimal("40"), flat_target_score=Decimal("125"))
+    first = watch.run_once(fetcher=lambda: base, sender=sent.append, now=now)
+    assert first["sent"] is True
+    assert first["reasons"] == ["監視開始"]
+    sent.clear()
+
+    accelerated = replace(_scan(), top3_delta_10m=Decimal("60"), flat_target_score=Decimal("587"))
+    second = watch.run_once(fetcher=lambda: accelerated, sender=sent.append, now=now)
+    assert second["sent"] is True
+    assert "TOP3急騰" in second["reasons"]
+    assert "top3 10m delta: +60 POLF" in sent[-1]
+    assert "flat target score: +587 POLF" in sent[-1]
+    sent.clear()
+
+    same_wave = replace(_scan(), top3_delta_10m=Decimal("90"), flat_target_score=Decimal("617"))
+    third = watch.run_once(fetcher=lambda: same_wave, sender=sent.append, now=now)
+    assert third["sent"] is False
+    sent.clear()
+
+    higher_wave = replace(_scan(), top3_delta_10m=Decimal("110"), flat_target_score=Decimal("637"))
+    fourth = watch.run_once(fetcher=lambda: higher_wave, sender=sent.append, now=now)
+    assert fourth["sent"] is True
+    assert fourth["reasons"] == ["TOP3急騰"]
+
+
+def test_hurdle_acceleration_resets_after_cooling(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    sent = []
+
+    hot = replace(_scan(), top3_delta_10m=Decimal("70"), flat_target_score=Decimal("597"))
+    watch.run_once(fetcher=lambda: hot, sender=sent.append, now=now)
+    sent.clear()
+
+    cool = replace(_scan(), top3_delta_10m=Decimal("10"), flat_target_score=Decimal("537"))
+    cooled = watch.run_once(fetcher=lambda: cool, sender=sent.append, now=now)
+    assert "TOP3急騰" not in cooled["reasons"]
+    sent.clear()
+
+    new_wave = replace(_scan(), top3_delta_10m=Decimal("55"), flat_target_score=Decimal("582"))
+    again = watch.run_once(fetcher=lambda: new_wave, sender=sent.append, now=now)
+    assert again["sent"] is True
+    assert "TOP3急騰" in again["reasons"]
+
+
 def test_near_candidate_and_material_improvement_send(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     sent = []
