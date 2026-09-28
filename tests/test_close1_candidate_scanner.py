@@ -207,6 +207,25 @@ def _verify_referee_with_fixture(monkeypatch):
     monkeypatch.setattr(public_record, "verify_signed_record", verify)
 
 
+def test_top3_delta_10m_uses_latest_and_two_snapshots_back():
+    snapshots = [
+        {"top": [[LEADERS[0], "500"], [LEADERS[1], "490"], [LEADERS[2], "480"]]},
+        {"top": [[LEADERS[0], "530"], [LEADERS[1], "520"], [LEADERS[2], "510"]]},
+        {"top": [[LEADERS[0], "580"], [LEADERS[1], "570"], [LEADERS[2], "560"]]},
+    ]
+
+    assert scanner._top3_delta_10m(snapshots) == Decimal("80")
+
+
+def test_top3_delta_10m_fails_safe_without_three_rows_or_history():
+    assert scanner._top3_delta_10m([]) is None
+    assert scanner._top3_delta_10m([
+        {"top": [[LEADERS[0], "1"], [LEADERS[1], "0"]]},
+        {"top": [[LEADERS[0], "2"], [LEADERS[1], "1"]]},
+        {"top": [[LEADERS[0], "3"], [LEADERS[1], "2"]]},
+    ]) is None
+
+
 def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(monkeypatch):
     _verify_referee_with_fixture(monkeypatch)
     price, pnl = _rooms()
