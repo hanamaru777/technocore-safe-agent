@@ -198,6 +198,71 @@ def test_watcher_renders_base_fee_only_flat_target(monkeypatch, tmp_path):
     assert "clawback未反映" in sent[0]
 
 
+def test_large_recent_flow_alerts_once_then_requires_material_increase(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    taker = "did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP"
+
+    flow40 = scanner.RecentFlowView(
+        taker=taker,
+        taker_side="buy",
+        qty=Decimal("40"),
+        trades=2,
+        min_px=Decimal("223.50"),
+        max_px=Decimal("223.70"),
+        latest_ts="2026-09-27T14:59:00Z",
+    )
+    sent = []
+    first_scan = replace(_scan(move="0.040"), recent_flows=(flow40,))
+    first = watch.run_once(fetcher=lambda: first_scan, sender=sent.append, now=now)
+
+    assert first["sent"] is True
+    assert "大口フロー" in first["reasons"]
+    assert "recent gross taker flow: BUY 40 contracts / 2 trades" in sent[-1]
+    assert "PnL反映前の早期警戒" in sent[-1]
+
+    sent.clear()
+    same = watch.run_once(fetcher=lambda: first_scan, sender=sent.append, now=now)
+    assert same["sent"] is False
+    assert sent == []
+
+    flow55 = replace(flow40, qty=Decimal("55"), trades=3)
+    modest_scan = replace(_scan(move="0.040"), recent_flows=(flow55,))
+    modest = watch.run_once(fetcher=lambda: modest_scan, sender=sent.append, now=now)
+    assert modest["sent"] is False
+
+    flow60 = replace(flow40, qty=Decimal("60"), trades=3)
+    increased_scan = replace(_scan(move="0.040"), recent_flows=(flow60,))
+    increased = watch.run_once(fetcher=lambda: increased_scan, sender=sent.append, now=now)
+    assert increased["sent"] is True
+    assert increased["reasons"] == ["大口フロー"]
+
+
+def test_flow_below_threshold_does_not_alert(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    flow = scanner.RecentFlowView(
+        taker="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+        taker_side="buy",
+        qty=Decimal("39.99"),
+        trades=4,
+        min_px=Decimal("223.50"),
+        max_px=Decimal("223.90"),
+        latest_ts="2026-09-27T14:59:00Z",
+    )
+    sent = []
+    result = watch.run_once(
+        fetcher=lambda: replace(_scan(move="0.040"), recent_flows=(flow,)),
+        sender=sent.append,
+        now=datetime(2026, 9, 27, 15, 0, tzinfo=UTC),
+    )
+
+    # First-ever watcher run still emits the normal activation notice, but it
+    # must not claim a large-flow alert below the threshold.
+    assert result["sent"] is True
+    assert result["reasons"] == ["監視開始"]
+    assert "大口フロー" not in sent[0]
+
+
 def test_send_failure_does_not_advance_activation_baseline(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)

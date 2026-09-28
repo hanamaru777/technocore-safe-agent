@@ -157,8 +157,17 @@ def _offer(*, trade_id="live1", qty="44.00", px="224.33", side="sell", until=10,
     }, key, terms
 
 
-def _trade_for_offer(offer, key, terms, *, valid_taker_sig=True):
-    taker_key = Ed25519PrivateKey.from_private_bytes(b"\x44" * 32)
+def _trade_for_offer(
+    offer,
+    key,
+    terms,
+    *,
+    valid_taker_sig=True,
+    taker_key_byte=0x44,
+    seq=51,
+    ts="2026-09-26T12:10:01Z",
+):
+    taker_key = Ed25519PrivateKey.from_private_bytes(bytes([taker_key_byte]) * 32)
     taker = _did(taker_key)
     taker_sig = _sig(
         taker_key,
@@ -177,8 +186,8 @@ def _trade_for_offer(offer, key, terms, *, valid_taker_sig=True):
     text = json.dumps(payload, separators=(",", ":"))
     nonce = 12346
     return {
-        "seq": 51,
-        "ts": "2026-09-26T12:10:01Z",
+        "seq": seq,
+        "ts": ts,
         "from": offer["from"],
         "text": text,
         "nonce": nonce,
@@ -407,6 +416,115 @@ def test_fake_trade_with_invalid_taker_signature_does_not_suppress_offer(monkeyp
     assert len(report.candidates) == 1
 
 
+def test_scanner_aggregates_recent_verified_gross_taker_flow(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+
+    offer_a, key_a, terms_a = _offer(
+        trade_id="flow-a",
+        qty="20.00",
+        px="223.50",
+        side="sell",
+        key_byte=0x34,
+    )
+    offer_b, key_b, terms_b = _offer(
+        trade_id="flow-b",
+        qty="25.00",
+        px="223.70",
+        side="sell",
+        key_byte=0x35,
+    )
+    offer_old, key_old, terms_old = _offer(
+        trade_id="flow-old",
+        qty="99.00",
+        px="223.60",
+        side="sell",
+        key_byte=0x36,
+    )
+    trade_a = _trade_for_offer(
+        offer_a, key_a, terms_a,
+        taker_key_byte=0x45,
+        seq=60,
+        ts="2026-09-26T12:20:00Z",
+    )
+    trade_b = _trade_for_offer(
+        offer_b, key_b, terms_b,
+        taker_key_byte=0x45,
+        seq=61,
+        ts="2026-09-26T12:24:00Z",
+    )
+    trade_old = _trade_for_offer(
+        offer_old, key_old, terms_old,
+        taker_key_byte=0x45,
+        seq=10,
+        ts="2026-09-26T11:00:00Z",
+    )
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={
+            "close1": {"messages": [trade_a]},
+            "close1-offers": {"messages": [trade_a, trade_b, trade_old]},
+        },
+    )
+
+    assert report.sampled_trade_ids == 3
+    assert len(report.recent_flows) == 1
+    flow = report.recent_flows[0]
+    assert flow.taker_side == "buy"
+    assert flow.qty == Decimal("45.00")
+    assert flow.trades == 2
+    assert flow.min_px == Decimal("223.50")
+    assert flow.max_px == Decimal("223.70")
+    assert flow.latest_ts == "2026-09-26T12:24:00Z"
+
+
+def test_scanner_separates_opposite_taker_directions(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+
+    sell_offer, sell_key, sell_terms = _offer(
+        trade_id="flow-buy",
+        qty="20.00",
+        px="223.50",
+        side="sell",
+        key_byte=0x34,
+    )
+    buy_offer, buy_key, buy_terms = _offer(
+        trade_id="flow-sell",
+        qty="22.00",
+        px="224.50",
+        side="buy",
+        key_byte=0x35,
+    )
+    trade_buy = _trade_for_offer(
+        sell_offer, sell_key, sell_terms,
+        taker_key_byte=0x45,
+        seq=60,
+        ts="2026-09-26T12:20:00Z",
+    )
+    trade_sell = _trade_for_offer(
+        buy_offer, buy_key, buy_terms,
+        taker_key_byte=0x45,
+        seq=61,
+        ts="2026-09-26T12:21:00Z",
+    )
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": [trade_buy, trade_sell]}},
+    )
+
+    assert {(row.taker_side, row.qty) for row in report.recent_flows} == {
+        ("buy", Decimal("20.00")),
+        ("sell", Decimal("22.00")),
+    }
+
+
 def test_scanner_stops_candidates_when_reference_is_stale(monkeypatch):
     _verify_referee_with_fixture(monkeypatch)
     price, pnl = _rooms(age=121)
@@ -474,6 +592,7 @@ def test_fetch_candidate_scan_reads_only_expected_public_rooms(monkeypatch):
     report = scanner.fetch_candidate_scan(our_did=OUR_DID)
 
     assert report.candidates == ()
+    assert report.recent_flows == ()
     assert calls == [
         ("d-close1-price", 2),
         ("d-close1-pnl", 36),
