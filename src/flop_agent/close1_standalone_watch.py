@@ -169,6 +169,16 @@ def _large_flows(scan: close1_candidate_scanner.CandidateScan):
     return tuple(rows[:3])
 
 
+def _flow_turnover_ratio(
+    scan: close1_candidate_scanner.CandidateScan,
+    flow: close1_candidate_scanner.RecentFlowView,
+) -> Decimal | None:
+    scale = scan.max_visible_abs_position
+    if scale is None or scale <= 0:
+        return None
+    return flow.qty / scale
+
+
 def _flow_key(flow) -> str:
     return f"{flow.taker}:{flow.taker_side}"
 
@@ -277,14 +287,28 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
     ]
 
     large_flows = _large_flows(scan)
+    high_turnover = False
     for index, flow in enumerate(large_flows, start=1):
+        ratio = _flow_turnover_ratio(scan, flow)
+        turnover = ""
+        if ratio is not None:
+            ratio_text = ratio.quantize(Decimal("0.1"))
+            turnover = f" / turnover {ratio_text}x"
+            if ratio >= Decimal("2"):
+                turnover += " HIGH"
+                high_turnover = True
         lines.append(
             f"recent gross taker flow #{index}: "
             f"{flow.taker_side.upper()} {flow.qty} contracts / {flow.trades} trades "
-            f"/ px {flow.min_px}-{flow.max_px} / taker {flow.taker}"
+            f"/ px {flow.min_px}-{flow.max_px} / taker {flow.taker}{turnover}"
         )
     if large_flows:
         lines.append("gross flowは新規ポジション量とは限りません。PnL反映前の早期警戒です。")
+    if high_turnover:
+        lines.append(
+            "HIGH turnoverはgross累計が可視最大ポジションの2倍以上です。"
+            "回転売買の可能性があるため方向性を強める根拠にしません。"
+        )
 
     opportunity = _best_opportunity(scan)
     if opportunity is None:
