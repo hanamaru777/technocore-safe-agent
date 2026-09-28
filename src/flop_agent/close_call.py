@@ -471,14 +471,55 @@ def build_live_snapshot(
     )
 
 
+def _latest_common_referee_sweep(room_payloads: dict[str, object]) -> dict[str, dict]:
+    """Select the newest sweep present in every referee room.
+
+    Referee rooms are updated independently, so four sequential reads can
+    legitimately observe different latest sweep numbers.  Use a bounded recent
+    history and align to the newest common sweep instead of treating that race
+    as a monitoring failure.
+    """
+    expected = {
+        "d-close1-price": "price",
+        "d-close1-state": "state",
+        "d-close1-pnl": "pnl",
+        "d-close1-positions": "positions",
+    }
+    indexed: dict[str, dict[int, dict]] = {}
+    for room, expected_type in expected.items():
+        payload = room_payloads.get(room)
+        if not isinstance(payload, dict) or not isinstance(payload.get("messages"), list):
+            raise ValueError("close1_room_payload_invalid")
+        by_sweep: dict[int, dict] = {}
+        for message in payload["messages"]:
+            parsed = _referee_payload(message, expected_type)
+            sweep = parsed.get("n")
+            if type(sweep) is not int or sweep < 0:
+                raise ValueError("close1_snapshot_sweep_invalid")
+            by_sweep[sweep] = message
+        if not by_sweep:
+            raise ValueError("close1_room_empty")
+        indexed[room] = by_sweep
+
+    common = set.intersection(*(set(rows) for rows in indexed.values()))
+    if not common:
+        raise ValueError("close1_snapshot_no_common_sweep")
+    sweep = max(common)
+    return {
+        room: {"messages": [rows[sweep]]}
+        for room, rows in indexed.items()
+    }
+
+
 def fetch_live_snapshot() -> LiveSnapshot:
-    """Read only the official referee rooms; no signing or posting."""
+    """Read only official referee rooms and align their newest common sweep."""
     payloads = {}
     for room in ("d-close1-price", "d-close1-state", "d-close1-pnl", "d-close1-positions"):
-        payloads[room] = core.read_room(room, limit=5)
+        payloads[room] = core.read_room(room, limit=12)
+    aligned = _latest_common_referee_sweep(payloads)
     return build_live_snapshot(
-        price_room=payloads["d-close1-price"],
-        state_room=payloads["d-close1-state"],
-        pnl_room=payloads["d-close1-pnl"],
-        positions_room=payloads["d-close1-positions"],
+        price_room=aligned["d-close1-price"],
+        state_room=aligned["d-close1-state"],
+        pnl_room=aligned["d-close1-pnl"],
+        positions_room=aligned["d-close1-positions"],
     )
