@@ -31,6 +31,8 @@ FLOW_SHOCK_QTY = Decimal("40")
 FLOW_SHOCK_IMPROVEMENT = Decimal("20")
 HURDLE_ACCEL = Decimal("50")
 HURDLE_ACCEL_IMPROVEMENT = Decimal("50")
+FALLBACK_COMPRESSION_RATIO = Decimal("0.75")
+FALLBACK_WORSEN_RATIO = Decimal("1.25")
 
 DISCORD_API = "https://discord.com/api/v10"
 DISCORD_LIMIT = 2000
@@ -55,6 +57,7 @@ def _default_state() -> dict:
         "last_flow_qty": None,
         "flow_alerted_qty": {},
         "last_hurdle_alert_delta": None,
+        "last_fallback_watch_move": None,
         "last_alert_at": None,
         "last_error": None,
     }
@@ -210,6 +213,26 @@ def _hurdle_accel_signal(scan: close1_candidate_scanner.CandidateScan, state: di
     return current - previous_alert >= HURDLE_ACCEL_IMPROVEMENT
 
 
+def _fallback_watch_move(scan: close1_candidate_scanner.CandidateScan) -> Decimal | None:
+    opportunity = _best_opportunity(scan)
+    if opportunity is None:
+        return None
+    _, candidate = opportunity
+    _, move, source = _opportunity_rank_move(candidate)
+    return move if source == "flat_target_fallback" else None
+
+
+def _fallback_compression_signal(
+    scan: close1_candidate_scanner.CandidateScan,
+    state: dict,
+) -> bool:
+    current = _fallback_watch_move(scan)
+    baseline = _decimal(state.get("last_fallback_watch_move"))
+    if current is None or baseline is None or baseline <= 0:
+        return False
+    return current <= baseline * FALLBACK_COMPRESSION_RATIO
+
+
 def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) -> list[str]:
     reasons: list[str] = []
     if state.get("activated") is not True:
@@ -222,6 +245,8 @@ def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) ->
         reasons.append("TOP3急騰")
     if _candidate_signal(scan, state):
         reasons.append("勝ち筋候補接近")
+    if _fallback_compression_signal(scan, state):
+        reasons.append("flat目標接近")
     if _flow_signals(scan, state):
         reasons.append("大口フロー")
     return reasons
@@ -412,6 +437,19 @@ def _remember_scan(
     else:
         hurdle_alert_delta = state.get("last_hurdle_alert_delta")
 
+    fallback_move = _fallback_watch_move(scan)
+    previous_fallback = _decimal(state.get("last_fallback_watch_move"))
+    if fallback_move is None:
+        fallback_baseline = None
+    elif previous_fallback is None or previous_fallback <= 0:
+        fallback_baseline = fallback_move
+    elif "flat目標接近" in reasons:
+        fallback_baseline = fallback_move
+    elif fallback_move >= previous_fallback * FALLBACK_WORSEN_RATIO:
+        fallback_baseline = fallback_move
+    else:
+        fallback_baseline = previous_fallback
+
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
@@ -433,6 +471,9 @@ def _remember_scan(
         last_flow_qty=flow_qty,
         flow_alerted_qty={key: str(value) for key, value in alerted.items()},
         last_hurdle_alert_delta=hurdle_alert_delta,
+        last_fallback_watch_move=(
+            str(fallback_baseline) if fallback_baseline is not None else None
+        ),
         last_error=None,
     )
 
