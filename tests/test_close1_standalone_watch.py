@@ -163,6 +163,92 @@ def test_near_candidate_and_material_improvement_send(monkeypatch, tmp_path):
     assert "勝ち筋候補接近" in improved["reasons"]
 
 
+def test_best_opportunity_uses_flat_target_fallback_when_dynamic_is_unavailable():
+    base = _scan(move="0.040", trade_id="single-a")
+    a = replace(
+        base.candidates[0],
+        trade_id="single-a",
+        dynamic_top3_price=None,
+        dynamic_condition=None,
+        move_percent_from_mark=None,
+        base_fee_flat_exit_price=Decimal("240"),
+        base_fee_flat_move_percent=Decimal("0.080"),
+    )
+    b = replace(
+        a,
+        trade_id="single-b",
+        qty=Decimal("3"),
+        base_fee_flat_exit_price=Decimal("236"),
+        base_fee_flat_move_percent=Decimal("0.050"),
+    )
+    scan = replace(
+        base,
+        candidates=(a, b),
+        strategy_gate="leader_coverage_incomplete",
+    )
+
+    kind, candidate = watch._best_opportunity(scan)
+
+    assert kind == "single"
+    assert candidate.trade_id == "single-b"
+    assert watch._opportunity_rank_move(candidate) == (
+        1,
+        Decimal("0.050"),
+        "flat_target_fallback",
+    )
+
+
+def test_best_opportunity_prefers_dynamic_rank_over_flat_fallback():
+    base = _scan(move="0.025", trade_id="dynamic")
+    dynamic = replace(
+        base.candidates[0],
+        base_fee_flat_move_percent=Decimal("0.090"),
+    )
+    fallback = replace(
+        dynamic,
+        trade_id="fallback",
+        dynamic_top3_price=None,
+        dynamic_condition=None,
+        move_percent_from_mark=None,
+        base_fee_flat_move_percent=Decimal("0.010"),
+    )
+    scan = replace(base, candidates=(fallback, dynamic))
+
+    kind, candidate = watch._best_opportunity(scan)
+
+    assert kind == "single"
+    assert candidate.trade_id == "dynamic"
+    assert watch._opportunity_rank_move(dynamic) == (
+        0,
+        Decimal("0.025"),
+        "dynamic_top3",
+    )
+
+
+def test_render_labels_flat_target_fallback_without_claiming_dynamic_top3():
+    base = _scan(move="0.040", trade_id="fallback")
+    candidate = replace(
+        base.candidates[0],
+        dynamic_top3_price=None,
+        dynamic_condition=None,
+        move_percent_from_mark=None,
+        flat_target_score=Decimal("650"),
+        base_fee_flat_exit_price=Decimal("245"),
+        base_fee_flat_move_percent=Decimal("0.055"),
+    )
+    scan = replace(
+        base,
+        candidates=(candidate,),
+        strategy_gate="leader_coverage_incomplete",
+    )
+
+    message = watch._render(scan, ["TOP3変化"])
+
+    assert "dynamic top3未確定" in message
+    assert "ranking=flat target fallback" in message
+    assert "flat +650 POLF" in message
+
+
 def test_watcher_prefers_nearer_basket_over_single(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     base = _scan(move="0.040", trade_id="single")
