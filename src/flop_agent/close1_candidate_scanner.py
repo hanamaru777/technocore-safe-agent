@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from . import close1_strategy, close_call, core, public_record
@@ -78,6 +79,17 @@ class BasketCandidateView:
 
 
 @dataclass(frozen=True)
+class RecentFlowView:
+    taker: str
+    taker_side: str
+    qty: Decimal
+    trades: int
+    min_px: Decimal
+    max_px: Decimal
+    latest_ts: str
+
+
+@dataclass(frozen=True)
 class CandidateScan:
     sweep: int
     reference: Decimal
@@ -91,6 +103,7 @@ class CandidateScan:
     candidates: tuple[CandidateView, ...]
     strategy_gate: str
     baskets: tuple[BasketCandidateView, ...] = ()
+    recent_flows: tuple[RecentFlowView, ...] = ()
 
 
 def _signed_decimal(value: object, *, label: str) -> Decimal:
@@ -446,8 +459,8 @@ def _build_same_side_basket(
     )
 
 
-def _verified_trade_id(room: str, message: object) -> str | None:
-    """Return a trade id only after outer, maker and taker signatures verify."""
+def _verified_trade_details(room: str, message: object) -> dict | None:
+    """Return verified public trade details or None."""
     if not isinstance(message, dict):
         return None
     try:
@@ -482,16 +495,89 @@ def _verified_trade_id(room: str, message: object) -> str | None:
             payload.get("taker_sig"),
             close_call.taker_signature_preimage(terms, taker),
         )
+        qty = close_call._amount(terms.get("qty"), label="qty")
+        px = close_call._amount(terms.get("px"), label="price")
     except (KeyError, TypeError, ValueError):
         return None
     if message.get("from") not in {maker, taker}:
         return None
     trade_id = terms.get("id")
-    if not isinstance(trade_id, str):
+    seq = message.get("seq")
+    ts = message.get("ts")
+    if not isinstance(trade_id, str) or type(seq) is not int or seq <= 0 or not isinstance(ts, str):
+        return None
+    try:
+        parsed_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if parsed_ts.tzinfo is None:
+            parsed_ts = parsed_ts.replace(tzinfo=UTC)
+        parsed_ts = parsed_ts.astimezone(UTC)
+    except ValueError:
         return None
     if canonical != close_call.canonical_terms(terms):
         return None
-    return trade_id
+    maker_side = terms["side"]
+    taker_side = "sell" if maker_side == "buy" else "buy"
+    return {
+        "trade_id": trade_id,
+        "taker": taker,
+        "taker_side": taker_side,
+        "qty": qty,
+        "px": px,
+        "seq": seq,
+        "ts": parsed_ts,
+        "ts_text": ts,
+    }
+
+
+def _verified_trade_id(room: str, message: object) -> str | None:
+    details = _verified_trade_details(room, message)
+    return details["trade_id"] if details is not None else None
+
+
+def _recent_flow_views(trades: list[dict]) -> tuple[RecentFlowView, ...]:
+    """Aggregate gross verified taker flow in a recent ten-minute window."""
+    if not trades:
+        return ()
+    newest = max(item["ts"] for item in trades)
+    cutoff = newest - timedelta(minutes=10)
+    grouped: dict[tuple[str, str], dict] = {}
+    for item in trades:
+        if item["ts"] < cutoff:
+            continue
+        key = (item["taker"], item["taker_side"])
+        row = grouped.get(key)
+        if row is None:
+            grouped[key] = {
+                "qty": item["qty"],
+                "trades": 1,
+                "min_px": item["px"],
+                "max_px": item["px"],
+                "latest_ts": item["ts"],
+                "latest_ts_text": item["ts_text"],
+            }
+            continue
+        row["qty"] += item["qty"]
+        row["trades"] += 1
+        row["min_px"] = min(row["min_px"], item["px"])
+        row["max_px"] = max(row["max_px"], item["px"])
+        if item["ts"] > row["latest_ts"]:
+            row["latest_ts"] = item["ts"]
+            row["latest_ts_text"] = item["ts_text"]
+
+    rows = [
+        RecentFlowView(
+            taker=taker,
+            taker_side=side,
+            qty=value["qty"],
+            trades=value["trades"],
+            min_px=value["min_px"],
+            max_px=value["max_px"],
+            latest_ts=value["latest_ts_text"],
+        )
+        for (taker, side), value in grouped.items()
+    ]
+    rows.sort(key=lambda item: (-item.qty, -item.trades, item.taker, item.taker_side))
+    return tuple(rows)
 
 
 def _message_payload(message: object) -> dict | None:
@@ -549,6 +635,7 @@ def build_candidate_scan(
     )
     leaders = _leader_universe(snapshots=snapshots, current_mark=mark)
     seen_trade_ids: set[str] = set()
+    verified_trades: list[dict] = []
     offer_records: list[tuple[str, dict]] = []
     rejected = 0
 
@@ -561,9 +648,10 @@ def build_candidate_scan(
                 continue
             kind = parsed.get("t")
             if kind == "trade":
-                trade_id = _verified_trade_id(room, message)
-                if trade_id is not None:
-                    seen_trade_ids.add(trade_id)
+                details = _verified_trade_details(room, message)
+                if details is not None and details["trade_id"] not in seen_trade_ids:
+                    seen_trade_ids.add(details["trade_id"])
+                    verified_trades.append(details)
             elif kind == "offer":
                 offer_records.append((room, message))
 
@@ -597,6 +685,7 @@ def build_candidate_scan(
             rejected_offers=rejected,
             candidates=(),
             strategy_gate="reference_stale",
+            recent_flows=_recent_flow_views(verified_trades),
         )
 
     candidate_rows: list[CandidateView] = []
@@ -714,6 +803,7 @@ def build_candidate_scan(
         candidates=tuple(candidate_rows),
         strategy_gate="ready" if stable_count == len(leaders) and len(leaders) >= 3 else "leader_coverage_incomplete",
         baskets=tuple(basket_rows),
+        recent_flows=_recent_flow_views(verified_trades),
     )
 
 
