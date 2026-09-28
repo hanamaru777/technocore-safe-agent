@@ -473,6 +473,73 @@ def test_watcher_renders_base_fee_only_flat_target(monkeypatch, tmp_path):
     assert "clawback未反映" in sent[0]
 
 
+def test_high_turnover_flow_renders_ratio_without_changing_alert_gate(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 28, 15, 30, tzinfo=UTC)
+    flow = scanner.RecentFlowView(
+        taker="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+        taker_side="buy",
+        qty=Decimal("1000.04"),
+        trades=23,
+        min_px=Decimal("218.53"),
+        max_px=Decimal("218.53"),
+        latest_ts="2026-09-28T15:29:35Z",
+    )
+    scan = replace(
+        _scan(move="0.040"),
+        recent_flows=(flow,),
+        max_visible_abs_position=Decimal("46.30"),
+    )
+    sent = []
+
+    result = watch.run_once(fetcher=lambda: scan, sender=sent.append, now=now)
+
+    assert result["sent"] is True
+    assert "大口フロー" in result["reasons"]
+    assert "turnover 21.6x HIGH" in sent[-1]
+    assert "回転売買の可能性" in sent[-1]
+
+
+def test_normal_flow_ratio_is_not_labeled_high_turnover(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    flow = scanner.RecentFlowView(
+        taker="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+        taker_side="buy",
+        qty=Decimal("43.00"),
+        trades=1,
+        min_px=Decimal("229.00"),
+        max_px=Decimal("229.00"),
+        latest_ts="2026-09-28T15:29:00Z",
+    )
+    scan = replace(
+        _scan(move="0.040"),
+        recent_flows=(flow,),
+        max_visible_abs_position=Decimal("46.30"),
+    )
+    rendered = watch._render(scan, ["大口フロー"])
+
+    assert "turnover 0.9x" in rendered
+    assert "turnover 0.9x HIGH" not in rendered
+    assert "回転売買の可能性" not in rendered
+
+
+def test_missing_position_scale_keeps_existing_flow_rendering():
+    flow = scanner.RecentFlowView(
+        taker="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+        taker_side="buy",
+        qty=Decimal("45"),
+        trades=1,
+        min_px=Decimal("229.00"),
+        max_px=Decimal("229.00"),
+        latest_ts="2026-09-28T15:29:00Z",
+    )
+    scan = replace(_scan(move="0.040"), recent_flows=(flow,))
+    rendered = watch._render(scan, ["大口フロー"])
+
+    assert "recent gross taker flow #1: BUY 45 contracts / 1 trades" in rendered
+    assert "turnover" not in rendered
+
+
 def test_large_recent_flow_alerts_once_then_requires_material_increase(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)

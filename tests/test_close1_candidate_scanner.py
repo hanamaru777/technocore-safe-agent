@@ -86,6 +86,18 @@ def _rooms(*, age=10, newest_only_leader=None):
     return {"messages": [price]}, {"messages": pnl_messages}
 
 
+def _positions_room(*, n=5, values=("-46.30", "45.99")):
+    top = [[LEADERS[index], value] for index, value in enumerate(values)]
+    return {"messages": [_referee("positions", {
+        "n": n,
+        "file": "f" * 64,
+        "longs": 1,
+        "shorts": 1,
+        "open": "100.00",
+        "top": top,
+    }, nonce=1000 + n)]}
+
+
 def _rooms_with_shadow_longs(*, age=10):
     marks = [
         Decimal("220.00"),
@@ -199,7 +211,7 @@ def _verify_referee_with_fixture(monkeypatch):
     original = public_record.verify_signed_record
 
     def verify(room, message):
-        if room in {"d-close1-price", "d-close1-pnl"}:
+        if room in {"d-close1-price", "d-close1-pnl", "d-close1-positions"}:
             assert message["from"] == close_call.REFEREE_DID
             return None
         return original(room, message)
@@ -224,6 +236,32 @@ def test_top3_delta_10m_fails_safe_without_three_rows_or_history():
         {"top": [[LEADERS[0], "2"], [LEADERS[1], "1"]]},
         {"top": [[LEADERS[0], "3"], [LEADERS[1], "2"]]},
     ]) is None
+
+
+def test_scanner_carries_sweep_aligned_visible_position_scale(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        positions_room=_positions_room(),
+        negotiation_rooms={"close1": {"messages": []}, "close1-offers": {"messages": []}},
+    )
+    assert report.max_visible_abs_position == Decimal("46.30")
+
+
+def test_scanner_ignores_positions_context_from_another_sweep(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms()
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        positions_room=_positions_room(n=4),
+        negotiation_rooms={"close1": {"messages": []}, "close1-offers": {"messages": []}},
+    )
+    assert report.max_visible_abs_position is None
 
 
 def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(monkeypatch):
@@ -601,6 +639,7 @@ def test_fetch_candidate_scan_reads_only_expected_public_rooms(monkeypatch):
     payloads = {
         "d-close1-price": price,
         "d-close1-pnl": pnl,
+        "d-close1-positions": _positions_room(),
         "close1": {"messages": []},
         "close1-offers": {"messages": []},
     }
@@ -612,9 +651,11 @@ def test_fetch_candidate_scan_reads_only_expected_public_rooms(monkeypatch):
 
     assert report.candidates == ()
     assert report.recent_flows == ()
+    assert report.max_visible_abs_position == Decimal("46.30")
     assert calls == [
         ("d-close1-price", 2),
         ("d-close1-pnl", 36),
+        ("d-close1-positions", 2),
         ("close1", 200),
         ("close1-offers", 200),
     ]

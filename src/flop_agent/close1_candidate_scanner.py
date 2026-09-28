@@ -104,6 +104,7 @@ class CandidateScan:
     strategy_gate: str
     baskets: tuple[BasketCandidateView, ...] = ()
     recent_flows: tuple[RecentFlowView, ...] = ()
+    max_visible_abs_position: Decimal | None = None
     top3_delta_10m: Decimal | None = None
     flat_target_score: Decimal | None = None
 
@@ -132,6 +133,33 @@ def _latest_price(price_room: object) -> dict:
     message = price_room["messages"][-1]
     public_record.verify_signed_record("d-close1-price", message)
     return close_call._referee_payload(message, "price")
+
+
+def _latest_positions(positions_room: object | None) -> dict | None:
+    if positions_room is None:
+        return None
+    if not isinstance(positions_room, dict) or not isinstance(positions_room.get("messages"), list):
+        raise ValueError("close1_scanner_positions_room_invalid")
+    if not positions_room["messages"]:
+        return None
+    message = positions_room["messages"][-1]
+    public_record.verify_signed_record("d-close1-positions", message)
+    return close_call._referee_payload(message, "positions")
+
+
+def _max_visible_abs_position(snapshot: dict | None) -> Decimal | None:
+    if snapshot is None:
+        return None
+    top = snapshot.get("top")
+    if not isinstance(top, list):
+        raise ValueError("close1_scanner_positions_top_invalid")
+    values: list[Decimal] = []
+    for row in top:
+        if not isinstance(row, list) or len(row) != 2:
+            raise ValueError("close1_scanner_positions_top_invalid")
+        close_call._did(row[0], label="position_owner")
+        values.append(abs(_signed_decimal(row[1], label="visible_position")))
+    return max(values) if values else None
 
 
 def _project_candidate_score(*, side: str, qty: Decimal, px: Decimal, fee: Decimal, final: Decimal) -> Decimal:
@@ -624,6 +652,7 @@ def build_candidate_scan(
     price_room: object,
     pnl_room: object,
     negotiation_rooms: dict[str, object],
+    positions_room: object | None = None,
     available_cash: str = "10000",
     current_position: str = "0",
 ) -> CandidateScan:
@@ -636,6 +665,12 @@ def build_candidate_scan(
         raise ValueError("close1_scanner_sweep_mismatch")
 
     sweep = price["n"]
+    positions = _latest_positions(positions_room)
+    max_visible_abs_position = (
+        _max_visible_abs_position(positions)
+        if positions is not None and positions.get("n") == sweep
+        else None
+    )
     age = price.get("age_s")
     if type(age) is not int or age < 0:
         raise ValueError("close1_scanner_reference_age_invalid")
@@ -704,6 +739,7 @@ def build_candidate_scan(
             candidates=(),
             strategy_gate="reference_stale",
             recent_flows=_recent_flow_views(verified_trades),
+            max_visible_abs_position=max_visible_abs_position,
             top3_delta_10m=top3_delta_10m,
             flat_target_score=flat_target_score,
         )
@@ -824,6 +860,7 @@ def build_candidate_scan(
         strategy_gate="ready" if stable_count == len(leaders) and len(leaders) >= 3 else "leader_coverage_incomplete",
         baskets=tuple(basket_rows),
         recent_flows=_recent_flow_views(verified_trades),
+        max_visible_abs_position=max_visible_abs_position,
         top3_delta_10m=top3_delta_10m,
         flat_target_score=flat_target_score,
     )
@@ -840,6 +877,7 @@ def fetch_candidate_scan(
         our_did=our_did,
         price_room=core.read_room("d-close1-price", limit=2),
         pnl_room=core.read_room("d-close1-pnl", limit=36),
+        positions_room=core.read_room("d-close1-positions", limit=2),
         negotiation_rooms={
             "close1": core.read_room("close1", limit=200),
             "close1-offers": core.read_room("close1-offers", limit=200),
