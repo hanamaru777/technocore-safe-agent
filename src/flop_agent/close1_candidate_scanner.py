@@ -43,6 +43,9 @@ class CandidateView:
     flat_target_score: Decimal | None = None
     base_fee_flat_exit_price: Decimal | None = None
     base_fee_flat_move_percent: Decimal | None = None
+    victory_target_score: Decimal | None = None
+    base_fee_victory_exit_price: Decimal | None = None
+    base_fee_victory_move_percent: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,9 @@ class BasketCandidateView:
     flat_target_score: Decimal | None = None
     base_fee_flat_exit_price: Decimal | None = None
     base_fee_flat_move_percent: Decimal | None = None
+    victory_target_score: Decimal | None = None
+    base_fee_victory_exit_price: Decimal | None = None
+    base_fee_victory_move_percent: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +113,7 @@ class CandidateScan:
     max_visible_abs_position: Decimal | None = None
     top3_delta_10m: Decimal | None = None
     flat_target_score: Decimal | None = None
+    victory_target_score: Decimal | None = None
 
 
 def _signed_decimal(value: object, *, label: str) -> Decimal:
@@ -182,6 +189,19 @@ def _score_for_did(snapshot: dict, did: str) -> Decimal | None:
         if row[0] == did:
             return _signed_decimal(row[1], label="leader_score")
     return None
+
+
+def _leader_score_from_snapshot(snapshot: dict) -> Decimal | None:
+    top = snapshot.get("top")
+    if not isinstance(top, list):
+        raise ValueError("close1_scanner_pnl_top_invalid")
+    if not top:
+        return None
+    row = top[0]
+    if not isinstance(row, list) or len(row) != 2:
+        raise ValueError("close1_scanner_pnl_top_invalid")
+    close_call._did(row[0], label="leader")
+    return _signed_decimal(row[1], label="leader_score")
 
 
 def _top3_cutoff_from_snapshot(snapshot: dict) -> Decimal | None:
@@ -400,6 +420,7 @@ def _build_same_side_basket(
     current_mark: Decimal,
     leaders: list[LeaderView],
     flat_target_score: Decimal,
+    victory_target_score: Decimal,
 ) -> BasketCandidateView | None:
     """Build one conservative full-offer basket for a single taker side.
 
@@ -487,6 +508,18 @@ def _build_same_side_basket(
         flat_move = None
     else:
         flat_exit, flat_move = flat_plan
+    victory_plan = _flat_target_plan(
+        side=side,
+        qty=qty,
+        entry_px=weighted_px,
+        entry_fee=base_fee,
+        target_score=victory_target_score,
+    )
+    if victory_plan is None:
+        victory_exit = None
+        victory_move = None
+    else:
+        victory_exit, victory_move = victory_plan
 
     return BasketCandidateView(
         taker_side=side,
@@ -509,6 +542,9 @@ def _build_same_side_basket(
         flat_target_score=flat_target_score,
         base_fee_flat_exit_price=flat_exit,
         base_fee_flat_move_percent=flat_move,
+        victory_target_score=victory_target_score,
+        base_fee_victory_exit_price=victory_exit,
+        base_fee_victory_move_percent=victory_move,
     )
 
 
@@ -680,11 +716,16 @@ def build_candidate_scan(
     reference = close_call._amount(ref.get("px"), label="reference")
     mark = close_call._amount(str(pnl.get("mark")), label="pnl_mark")
 
+    leader_score = _leader_score_from_snapshot(pnl)
     top3_cutoff = _top3_cutoff_from_snapshot(pnl)
     top3_delta_10m = _top3_delta_10m(snapshots)
     flat_target_score = max(
         Decimal("100"),
         (top3_cutoff + Decimal("25")) if top3_cutoff is not None else Decimal("100"),
+    )
+    victory_target_score = max(
+        Decimal("100"),
+        (leader_score + Decimal("25")) if leader_score is not None else Decimal("100"),
     )
     leaders = _leader_universe(snapshots=snapshots, current_mark=mark)
     seen_trade_ids: set[str] = set()
@@ -742,6 +783,7 @@ def build_candidate_scan(
             max_visible_abs_position=max_visible_abs_position,
             top3_delta_10m=top3_delta_10m,
             flat_target_score=flat_target_score,
+            victory_target_score=victory_target_score,
         )
 
     candidate_rows: list[CandidateView] = []
@@ -791,6 +833,18 @@ def build_candidate_scan(
             flat_move = None
         else:
             flat_exit, flat_move = flat_plan
+        victory_plan = _flat_target_plan(
+            side=offer.taker_side,
+            qty=offer.qty,
+            entry_px=offer.px,
+            entry_fee=fee,
+            target_score=victory_target_score,
+        )
+        if victory_plan is None:
+            victory_exit = None
+            victory_move = None
+        else:
+            victory_exit, victory_move = victory_plan
         candidate_rows.append(CandidateView(
             room=room,
             seq=offer.seq,
@@ -815,6 +869,9 @@ def build_candidate_scan(
             flat_target_score=flat_target_score,
             base_fee_flat_exit_price=flat_exit,
             base_fee_flat_move_percent=flat_move,
+            victory_target_score=victory_target_score,
+            base_fee_victory_exit_price=victory_exit,
+            base_fee_victory_move_percent=victory_move,
         ))
 
     candidate_rows.sort(key=lambda item: (
@@ -836,6 +893,7 @@ def build_candidate_scan(
                 current_mark=mark,
                 leaders=leaders,
                 flat_target_score=flat_target_score,
+                victory_target_score=victory_target_score,
             )
             if basket is not None:
                 basket_rows.append(basket)
@@ -863,6 +921,7 @@ def build_candidate_scan(
         max_visible_abs_position=max_visible_abs_position,
         top3_delta_10m=top3_delta_10m,
         flat_target_score=flat_target_score,
+        victory_target_score=victory_target_score,
     )
 
 

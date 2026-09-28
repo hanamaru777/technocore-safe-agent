@@ -280,6 +280,8 @@ def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(mon
     assert report.reference == Decimal("224.33")
     assert report.reference_age_seconds == 10
     assert report.top3_cutoff == Decimal("210.00")
+    assert report.flat_target_score == Decimal("235.00")
+    assert report.victory_target_score == Decimal("243.00")
     assert len(report.visible_leaders) == 4
     assert all(item.stable for item in report.visible_leaders)
     assert all(item.position is not None and item.position < 0 for item in report.visible_leaders)
@@ -295,6 +297,11 @@ def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(mon
     assert candidate.base_fee_flat_exit_price is not None
     assert candidate.base_fee_flat_exit_price > candidate.px
     assert candidate.base_fee_flat_move_percent > Decimal("0")
+    assert candidate.victory_target_score == Decimal("243.00")
+    assert candidate.base_fee_victory_exit_price is not None
+    assert candidate.base_fee_victory_move_percent is not None
+    assert candidate.base_fee_victory_exit_price > candidate.base_fee_flat_exit_price
+    assert candidate.base_fee_victory_move_percent > candidate.base_fee_flat_move_percent
     assert "clawback" in candidate.warning
 
 
@@ -354,6 +361,11 @@ def test_scanner_builds_same_side_basket_from_verified_offers(monkeypatch):
     assert basket.base_fee_flat_exit_price is not None
     assert basket.base_fee_flat_exit_price > basket.weighted_px
     assert basket.base_fee_flat_move_percent > Decimal("0")
+    assert basket.victory_target_score == Decimal("243.00")
+    assert basket.base_fee_victory_exit_price is not None
+    assert basket.base_fee_victory_move_percent is not None
+    assert basket.base_fee_victory_exit_price > basket.base_fee_flat_exit_price
+    assert basket.base_fee_victory_move_percent > basket.base_fee_flat_move_percent
     assert abs(basket.move_percent_from_mark) < min(
         abs(candidate.move_percent_from_mark)
         for candidate in report.candidates

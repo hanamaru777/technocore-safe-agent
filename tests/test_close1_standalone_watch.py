@@ -456,6 +456,9 @@ def test_watcher_renders_base_fee_only_flat_target(monkeypatch, tmp_path):
         flat_target_score=Decimal("125"),
         base_fee_flat_exit_price=Decimal("231.25"),
         base_fee_flat_move_percent=Decimal("0.028"),
+        victory_target_score=Decimal("150"),
+        base_fee_victory_exit_price=Decimal("232.75"),
+        base_fee_victory_move_percent=Decimal("0.035"),
     )
     scan = replace(base, candidates=(candidate,))
     sent = []
@@ -470,7 +473,12 @@ def test_watcher_renders_base_fee_only_flat_target(monkeypatch, tmp_path):
     assert "flat +125 POLF" in sent[0]
     assert "SELL >= 231.25" in sent[0]
     assert "entry比 +2.80%" in sent[0]
+    assert "victory target score: n/a" in sent[0]
+    assert "優勝目標(base-fee only): +150 POLF" in sent[0]
+    assert "SELL >= 232.75" in sent[0]
+    assert "entry比 +3.50%" in sent[0]
     assert "clawback未反映" in sent[0]
+    assert "将来のleader変化未反映" in sent[0]
 
 
 def test_high_turnover_flow_renders_ratio_without_changing_alert_gate(monkeypatch, tmp_path):
