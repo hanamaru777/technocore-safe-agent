@@ -305,7 +305,12 @@ def _discord_post(message: str) -> None:
         raise RuntimeError("discord_network_error") from error
 
 
-def _remember_scan(state: dict, scan: close1_candidate_scanner.CandidateScan, current: datetime) -> None:
+def _remember_scan(
+    state: dict,
+    scan: close1_candidate_scanner.CandidateScan,
+    current: datetime,
+    reasons: list[str],
+) -> None:
     opportunity = _best_opportunity(scan)
     if opportunity is None:
         kind = None
@@ -313,8 +318,12 @@ def _remember_scan(state: dict, scan: close1_candidate_scanner.CandidateScan, cu
     else:
         kind, candidate = opportunity
     flow = _top_flow(scan)
-    flow_key = f"{flow.taker}:{flow.taker_side}" if flow is not None else None
-    flow_qty = str(flow.qty) if flow is not None else None
+    if "大口フロー" in reasons and flow is not None:
+        flow_key = f"{flow.taker}:{flow.taker_side}"
+        flow_qty = str(flow.qty)
+    else:
+        flow_key = state.get("last_flow_key")
+        flow_qty = state.get("last_flow_qty")
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
@@ -377,7 +386,7 @@ def run_once(
             return {"status": "send_error", "sent": False, "sweep": scan.sweep}
         state["last_alert_at"] = current.isoformat()
 
-    _remember_scan(state, scan, current)
+    _remember_scan(state, scan, current, reasons)
     _save_state(state)
     return {
         "status": scan.strategy_gate,
