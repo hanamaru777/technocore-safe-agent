@@ -360,8 +360,15 @@ def _remember_scan(
         flow_key = _flow_key(primary)
         flow_qty = str(primary.qty)
     else:
-        flow_key = state.get("last_flow_key")
-        flow_qty = state.get("last_flow_qty")
+        old_flow_key = state.get("last_flow_key")
+        if isinstance(old_flow_key, str) and old_flow_key in current_keys:
+            flow_key = old_flow_key
+            flow_qty = state.get("last_flow_qty")
+        else:
+            # If the flow leaves the active ten-minute window, clear the
+            # compatibility fields too so a later wave can alert as new.
+            flow_key = None
+            flow_qty = None
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
