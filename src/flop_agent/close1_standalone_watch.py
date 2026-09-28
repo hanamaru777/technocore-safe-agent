@@ -51,6 +51,7 @@ def _default_state() -> dict:
         "last_candidate_trade_id": None,
         "last_flow_key": None,
         "last_flow_qty": None,
+        "flow_alerted_qty": {},
         "last_alert_at": None,
         "last_error": None,
     }
@@ -147,23 +148,47 @@ def _top3_shift(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bo
     return bool(current is not None and previous is not None and abs(current - previous) >= TOP3_DELTA)
 
 
-def _top_flow(scan: close1_candidate_scanner.CandidateScan):
-    for flow in scan.recent_flows:
-        if flow.taker != OWNER_DID:
-            return flow
-    return None
+def _large_flows(scan: close1_candidate_scanner.CandidateScan):
+    rows = [
+        flow
+        for flow in scan.recent_flows
+        if flow.taker != OWNER_DID and flow.qty >= FLOW_SHOCK_QTY
+    ]
+    return tuple(rows[:3])
 
 
-def _flow_signal(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bool:
-    flow = _top_flow(scan)
-    if flow is None or flow.qty < FLOW_SHOCK_QTY:
-        return False
-    key = f"{flow.taker}:{flow.taker_side}"
-    previous_key = state.get("last_flow_key")
-    previous_qty = _decimal(state.get("last_flow_qty"))
-    if previous_key != key or previous_qty is None:
-        return True
-    return flow.qty - previous_qty >= FLOW_SHOCK_IMPROVEMENT
+def _flow_key(flow) -> str:
+    return f"{flow.taker}:{flow.taker_side}"
+
+
+def _flow_alerted_qty(state: dict) -> dict[str, Decimal]:
+    raw = state.get("flow_alerted_qty")
+    result: dict[str, Decimal] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if not isinstance(key, str):
+                continue
+            parsed = _decimal(value)
+            if parsed is not None and parsed >= 0:
+                result[key] = parsed
+
+    # Backward-compatible migration from the single-flow state already
+    # deployed in Production.
+    old_key = state.get("last_flow_key")
+    old_qty = _decimal(state.get("last_flow_qty"))
+    if isinstance(old_key, str) and old_qty is not None and old_qty >= 0:
+        result.setdefault(old_key, old_qty)
+    return result
+
+
+def _flow_signals(scan: close1_candidate_scanner.CandidateScan, state: dict):
+    alerted = _flow_alerted_qty(state)
+    signals = []
+    for flow in _large_flows(scan):
+        previous = alerted.get(_flow_key(flow))
+        if previous is None or flow.qty - previous >= FLOW_SHOCK_IMPROVEMENT:
+            signals.append(flow)
+    return tuple(signals)
 
 
 def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) -> list[str]:
@@ -176,7 +201,7 @@ def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) ->
         reasons.append("TOP3変化")
     if _candidate_signal(scan, state):
         reasons.append("勝ち筋候補接近")
-    if _flow_signal(scan, state):
+    if _flow_signals(scan, state):
         reasons.append("大口フロー")
     return reasons
 
@@ -197,13 +222,14 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
         f"strategy gate: {scan.strategy_gate} / verified offers {scan.verified_offers}",
     ]
 
-    flow = _top_flow(scan)
-    if flow is not None and flow.qty >= FLOW_SHOCK_QTY:
+    large_flows = _large_flows(scan)
+    for index, flow in enumerate(large_flows, start=1):
         lines.append(
-            "recent gross taker flow: "
+            f"recent gross taker flow #{index}: "
             f"{flow.taker_side.upper()} {flow.qty} contracts / {flow.trades} trades "
-            f"/ px {flow.min_px}-{flow.max_px}"
+            f"/ px {flow.min_px}-{flow.max_px} / taker {flow.taker}"
         )
+    if large_flows:
         lines.append("gross flowは新規ポジション量とは限りません。PnL反映前の早期警戒です。")
 
     opportunity = _best_opportunity(scan)
@@ -317,13 +343,32 @@ def _remember_scan(
         candidate = None
     else:
         kind, candidate = opportunity
-    flow = _top_flow(scan)
-    if "大口フロー" in reasons and flow is not None:
-        flow_key = f"{flow.taker}:{flow.taker_side}"
-        flow_qty = str(flow.qty)
+    large_flows = _large_flows(scan)
+    current_keys = {_flow_key(flow) for flow in large_flows}
+    alerted = {
+        key: qty
+        for key, qty in _flow_alerted_qty(state).items()
+        if key in current_keys
+    }
+    signaled = _flow_signals(scan, state) if "大口フロー" in reasons else ()
+    for flow in signaled:
+        alerted[_flow_key(flow)] = flow.qty
+
+    if signaled:
+        # Preserve the legacy single-flow fields during the migration window.
+        primary = signaled[0]
+        flow_key = _flow_key(primary)
+        flow_qty = str(primary.qty)
     else:
-        flow_key = state.get("last_flow_key")
-        flow_qty = state.get("last_flow_qty")
+        old_flow_key = state.get("last_flow_key")
+        if isinstance(old_flow_key, str) and old_flow_key in current_keys:
+            flow_key = old_flow_key
+            flow_qty = state.get("last_flow_qty")
+        else:
+            # If the flow leaves the active ten-minute window, clear the
+            # compatibility fields too so a later wave can alert as new.
+            flow_key = None
+            flow_qty = None
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
@@ -343,6 +388,7 @@ def _remember_scan(
         ),
         last_flow_key=flow_key,
         last_flow_qty=flow_qty,
+        flow_alerted_qty={key: str(value) for key, value in alerted.items()},
         last_error=None,
     )
 
