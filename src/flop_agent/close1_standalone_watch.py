@@ -95,12 +95,12 @@ def _opportunity_key(kind: str, candidate) -> str:
     return "basket:" + ",".join(leg.trade_id for leg in candidate.legs)
 
 
-def _opportunity_rank_move(candidate) -> tuple[Decimal, str]:
+def _opportunity_rank_move(candidate) -> tuple[int, Decimal, str]:
     if candidate.move_percent_from_mark is not None:
-        return abs(candidate.move_percent_from_mark), "dynamic_top3"
+        return 0, abs(candidate.move_percent_from_mark), "dynamic_top3"
     if candidate.base_fee_flat_move_percent is not None:
-        return abs(candidate.base_fee_flat_move_percent), "flat_target_fallback"
-    return Decimal("999"), "unranked"
+        return 1, abs(candidate.base_fee_flat_move_percent), "flat_target_fallback"
+    return 2, Decimal("999"), "unranked"
 
 
 def _best_opportunity(scan: close1_candidate_scanner.CandidateScan):
@@ -111,6 +111,7 @@ def _best_opportunity(scan: close1_candidate_scanner.CandidateScan):
         rows.append(("basket", basket))
     rows.sort(key=lambda item: (
         _opportunity_rank_move(item[1])[0],
+        _opportunity_rank_move(item[1])[1],
         -item[1].qty,
         0 if item[0] == "basket" else 1,
     ))
@@ -277,7 +278,7 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
                 f" / until {candidate.until}"
             )
         if candidate.dynamic_top3_price is None or candidate.move_percent_from_mark is None:
-            _, rank_source = _opportunity_rank_move(candidate)
+            _, _, rank_source = _opportunity_rank_move(candidate)
             if rank_source == "flat_target_fallback":
                 lines.append(
                     f"best WATCH: {prefix} / dynamic top3未確定"
