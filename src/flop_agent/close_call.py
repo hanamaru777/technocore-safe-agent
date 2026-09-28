@@ -40,6 +40,7 @@ DID_RE = re.compile(r"did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}")
 TRADE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
 AMOUNT_RE = re.compile(r"[0-9]{1,7}(?:\.[0-9]{1,2})?")
+AGGREGATE_AMOUNT_RE = re.compile(r"[0-9]{1,12}(?:\.[0-9]{1,2})?")
 
 
 @dataclass(frozen=True)
