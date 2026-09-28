@@ -192,6 +192,7 @@ def test_best_opportunity_uses_flat_target_fallback_when_dynamic_is_unavailable(
     assert kind == "single"
     assert candidate.trade_id == "single-b"
     assert watch._opportunity_rank_move(candidate) == (
+        1,
         Decimal("0.050"),
         "flat_target_fallback",
     )
@@ -215,12 +216,10 @@ def test_best_opportunity_prefers_dynamic_rank_over_flat_fallback():
 
     kind, candidate = watch._best_opportunity(scan)
 
-    # A dynamic-top3 rank is not globally privileged: ranking remains numeric.
-    # The fallback is intentionally closer and should be shown first, but the
-    # binding candidate alert remains gated by strategy_gate + dynamic move.
     assert kind == "single"
-    assert candidate.trade_id == "fallback"
+    assert candidate.trade_id == "dynamic"
     assert watch._opportunity_rank_move(dynamic) == (
+        0,
         Decimal("0.025"),
         "dynamic_top3",
     )
