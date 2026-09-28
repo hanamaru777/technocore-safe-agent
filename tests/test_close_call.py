@@ -181,6 +181,44 @@ def test_build_live_snapshot_from_latest_referee_rows():
     assert snapshot.shorts == 2571
 
 
+def test_live_snapshot_accepts_large_positions_open_aggregate_without_relaxing_trade_amounts():
+    price = {"messages": [msg("price", {
+        "n": 742, "age_s": 1,
+        "ref": {"px": "224.38", "time": "2026-09-28T01:49:59Z", "tid": 1},
+    })]}
+    state = {"messages": [msg("state", {
+        "n": 742, "owners": 5746759, "rooms": 180, "root": "a" * 64, "file": "b" * 64,
+    })]}
+    pnl = {"messages": [msg("pnl", {
+        "n": 742, "mark": "223.62", "file": "b" * 64, "top": [],
+    })]}
+    positions = {"messages": [msg("positions", {
+        "n": 742, "open": "22388090.22", "longs": 533035, "shorts": 548377,
+        "top": [], "file": "b" * 64,
+    })]}
+
+    snapshot = close_call.build_live_snapshot(
+        price_room=price,
+        state_room=state,
+        pnl_room=pnl,
+        positions_room=positions,
+    )
+
+    assert snapshot.open_notional == Decimal("22388090.22")
+
+    # Trade-related amount validation remains intentionally bounded to 7
+    # integer digits. Only the referee aggregate gets the wider parser.
+    with pytest.raises(ValueError, match="price_invalid"):
+        close_call.canonical_terms(sample_terms(px="22388090.22"))
+
+
+def test_aggregate_amount_is_bounded_and_allows_zero():
+    assert close_call._aggregate_amount("0", label="open_notional") == Decimal("0")
+    assert close_call._aggregate_amount("999999999999.99", label="open_notional") == Decimal("999999999999.99")
+    with pytest.raises(ValueError, match="open_notional_invalid"):
+        close_call._aggregate_amount("1000000000000.00", label="open_notional")
+
+
 def test_fetch_live_snapshot_is_read_only(monkeypatch):
     payloads = {
         "d-close1-price": {"messages": [msg("price", {
