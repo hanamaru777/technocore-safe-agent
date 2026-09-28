@@ -218,7 +218,7 @@ def test_large_recent_flow_alerts_once_then_requires_material_increase(monkeypat
 
     assert first["sent"] is True
     assert "大口フロー" in first["reasons"]
-    assert "recent gross taker flow: BUY 40 contracts / 2 trades" in sent[-1]
+    assert "recent gross taker flow #1: BUY 40 contracts / 2 trades" in sent[-1]
     assert "PnL反映前の早期警戒" in sent[-1]
 
     sent.clear()
@@ -236,6 +236,128 @@ def test_large_recent_flow_alerts_once_then_requires_material_increase(monkeypat
     increased = watch.run_once(fetcher=lambda: increased_scan, sender=sent.append, now=now)
     assert increased["sent"] is True
     assert increased["reasons"] == ["大口フロー"]
+
+
+def test_multiple_large_flows_are_tracked_independently(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    flow_a = scanner.RecentFlowView(
+        taker="did:key:z6MkhofStkaUftV6iqiEL9oYckZjfNBYCrybEQ7sp53mfLKm",
+        taker_side="buy",
+        qty=Decimal("43.21"),
+        trades=1,
+        min_px=Decimal("233.58"),
+        max_px=Decimal("233.58"),
+        latest_ts="2026-09-27T14:59:00Z",
+    )
+    flow_b = scanner.RecentFlowView(
+        taker="did:key:z6MknBwYcpzXkazAuiuhD8pia4Kgw1NynrBq8xNFKnnquwpM",
+        taker_side="buy",
+        qty=Decimal("43.13"),
+        trades=2,
+        min_px=Decimal("232.90"),
+        max_px=Decimal("233.20"),
+        latest_ts="2026-09-27T14:58:30Z",
+    )
+    scan = replace(_scan(move="0.040"), recent_flows=(flow_a, flow_b))
+    sent = []
+
+    first = watch.run_once(fetcher=lambda: scan, sender=sent.append, now=now)
+
+    assert first["sent"] is True
+    assert "大口フロー" in first["reasons"]
+    assert "gross taker flow #1" in sent[-1]
+    assert "gross taker flow #2" in sent[-1]
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["flow_alerted_qty"] == {
+        f"{flow_a.taker}:buy": "43.21",
+        f"{flow_b.taker}:buy": "43.13",
+    }
+
+    sent.clear()
+    flow_a_55 = replace(flow_a, qty=Decimal("55.00"))
+    flow_b_64 = replace(flow_b, qty=Decimal("64.00"), trades=3)
+    changed = replace(_scan(move="0.040"), recent_flows=(flow_a_55, flow_b_64))
+    second = watch.run_once(fetcher=lambda: changed, sender=sent.append, now=now)
+
+    assert second["sent"] is True
+    assert second["reasons"] == ["大口フロー"]
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    # A grew by <20 and keeps its old notified baseline. B grew by >=20 and advances.
+    assert state["flow_alerted_qty"][f"{flow_a.taker}:buy"] == "43.21"
+    assert state["flow_alerted_qty"][f"{flow_b.taker}:buy"] == "64.00"
+
+
+def test_large_flow_baseline_resets_after_flow_leaves_window(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    flow = scanner.RecentFlowView(
+        taker="did:key:z6MkhofStkaUftV6iqiEL9oYckZjfNBYCrybEQ7sp53mfLKm",
+        taker_side="buy",
+        qty=Decimal("45"),
+        trades=1,
+        min_px=Decimal("233.00"),
+        max_px=Decimal("233.00"),
+        latest_ts="2026-09-27T14:59:00Z",
+    )
+    sent = []
+    watch.run_once(
+        fetcher=lambda: replace(_scan(move="0.040"), recent_flows=(flow,)),
+        sender=sent.append,
+        now=now,
+    )
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["flow_alerted_qty"]
+
+    sent.clear()
+    watch.run_once(
+        fetcher=lambda: replace(_scan(move="0.040"), recent_flows=()),
+        sender=sent.append,
+        now=now,
+    )
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["flow_alerted_qty"] == {}
+
+    sent.clear()
+    reappeared = replace(flow, qty=Decimal("41"))
+    result = watch.run_once(
+        fetcher=lambda: replace(_scan(move="0.040"), recent_flows=(reappeared,)),
+        sender=sent.append,
+        now=now,
+    )
+    assert result["sent"] is True
+    assert result["reasons"] == ["大口フロー"]
+
+
+def test_legacy_single_flow_state_migrates_without_duplicate_alert(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    flow = scanner.RecentFlowView(
+        taker="did:key:z6MkhofStkaUftV6iqiEL9oYckZjfNBYCrybEQ7sp53mfLKm",
+        taker_side="buy",
+        qty=Decimal("43.21"),
+        trades=1,
+        min_px=Decimal("233.58"),
+        max_px=Decimal("233.58"),
+        latest_ts="2026-09-27T14:59:00Z",
+    )
+    legacy = watch._default_state()
+    legacy.update(
+        activated=True,
+        last_flow_key=f"{flow.taker}:buy",
+        last_flow_qty="43.21",
+    )
+    (tmp_path / watch.STATE_FILE).write_text(json.dumps(legacy), "utf-8")
+    sent = []
+
+    result = watch.run_once(
+        fetcher=lambda: replace(_scan(move="0.040"), recent_flows=(flow,)),
+        sender=sent.append,
+        now=datetime(2026, 9, 27, 15, 0, tzinfo=UTC),
+    )
+
+    assert result["sent"] is False
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["flow_alerted_qty"][f"{flow.taker}:buy"] == "43.21"
 
 
 def test_flow_below_threshold_does_not_alert(monkeypatch, tmp_path):
