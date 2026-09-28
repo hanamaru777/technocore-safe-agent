@@ -249,6 +249,145 @@ def test_render_labels_flat_target_fallback_without_claiming_dynamic_top3():
     assert "flat +650 POLF" in message
 
 
+def _fallback_scan(move: str):
+    base = _scan(move="0.040", trade_id="fallback")
+    candidate = replace(
+        base.candidates[0],
+        dynamic_top3_price=None,
+        dynamic_condition=None,
+        move_percent_from_mark=None,
+        flat_target_score=Decimal("650"),
+        base_fee_flat_exit_price=Decimal("245"),
+        base_fee_flat_move_percent=Decimal(move),
+    )
+    return replace(
+        base,
+        candidates=(candidate,),
+        strategy_gate="leader_coverage_incomplete",
+    )
+
+
+def test_fallback_compression_baselines_then_alerts_at_25_percent(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    sent = []
+
+    first = watch.run_once(
+        fetcher=lambda: _fallback_scan("0.175"),
+        sender=sent.append,
+        now=now,
+    )
+    assert first["sent"] is True
+    assert first["reasons"] == ["監視開始"]
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] == "0.175"
+
+    sent.clear()
+    near = watch.run_once(
+        fetcher=lambda: _fallback_scan("0.131"),
+        sender=sent.append,
+        now=now,
+    )
+    assert near["sent"] is True
+    assert near["reasons"] == ["flat目標接近"]
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] == "0.131"
+
+
+def test_fallback_compression_requires_another_25_percent_after_alert(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    sent = []
+
+    watch.run_once(fetcher=lambda: _fallback_scan("0.175"), sender=sent.append, now=now)
+    sent.clear()
+    watch.run_once(fetcher=lambda: _fallback_scan("0.131"), sender=sent.append, now=now)
+    sent.clear()
+
+    modest = watch.run_once(
+        fetcher=lambda: _fallback_scan("0.110"),
+        sender=sent.append,
+        now=now,
+    )
+    assert modest["sent"] is False
+    assert sent == []
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] == "0.131"
+
+    closer = watch.run_once(
+        fetcher=lambda: _fallback_scan("0.098"),
+        sender=sent.append,
+        now=now,
+    )
+    assert closer["sent"] is True
+    assert closer["reasons"] == ["flat目標接近"]
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] == "0.098"
+
+
+def test_fallback_worsening_resets_baseline_without_alert(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    sent = []
+
+    watch.run_once(fetcher=lambda: _fallback_scan("0.100"), sender=sent.append, now=now)
+    sent.clear()
+
+    worse = watch.run_once(
+        fetcher=lambda: _fallback_scan("0.126"),
+        sender=sent.append,
+        now=now,
+    )
+    assert worse["sent"] is False
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] == "0.126"
+
+    sent.clear()
+    compressed = watch.run_once(
+        fetcher=lambda: _fallback_scan("0.094"),
+        sender=sent.append,
+        now=now,
+    )
+    assert compressed["sent"] is True
+    assert compressed["reasons"] == ["flat目標接近"]
+
+
+def test_fallback_baseline_clears_when_dynamic_top3_returns(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    sent = []
+
+    watch.run_once(fetcher=lambda: _fallback_scan("0.175"), sender=sent.append, now=now)
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] == "0.175"
+
+    sent.clear()
+    dynamic = replace(_scan(move="0.040"), strategy_gate="ready")
+    result = watch.run_once(fetcher=lambda: dynamic, sender=sent.append, now=now)
+    assert "flat目標接近" not in result["reasons"]
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] is None
+
+
+def test_failed_fallback_alert_does_not_advance_baseline(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    now = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
+    watch.run_once(
+        fetcher=lambda: _fallback_scan("0.175"),
+        sender=lambda message: None,
+        now=now,
+    )
+
+    failed = watch.run_once(
+        fetcher=lambda: _fallback_scan("0.131"),
+        sender=lambda message: (_ for _ in ()).throw(RuntimeError("nope")),
+        now=now,
+    )
+    assert failed["status"] == "send_error"
+    state = json.loads((tmp_path / watch.STATE_FILE).read_text("utf-8"))
+    assert state["last_fallback_watch_move"] == "0.175"
+
+
 def test_watcher_prefers_nearer_basket_over_single(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     base = _scan(move="0.040", trade_id="single")
