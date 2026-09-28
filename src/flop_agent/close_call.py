@@ -40,6 +40,7 @@ DID_RE = re.compile(r"did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}")
 TRADE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
 AMOUNT_RE = re.compile(r"[0-9]{1,7}(?:\.[0-9]{1,2})?")
+AGGREGATE_AMOUNT_RE = re.compile(r"[0-9]{1,12}(?:\.[0-9]{1,2})?")
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,19 @@ def _amount(value: object, *, label: str) -> Decimal:
     except InvalidOperation as error:
         raise ValueError(f"close1_{label}_invalid") from error
     if amount <= 0:
+        raise ValueError(f"close1_{label}_invalid")
+    return amount
+
+
+def _aggregate_amount(value: object, *, label: str) -> Decimal:
+    """Parse referee-wide aggregates without relaxing trade amount bounds."""
+    if not isinstance(value, str) or not AGGREGATE_AMOUNT_RE.fullmatch(value):
+        raise ValueError(f"close1_{label}_invalid")
+    try:
+        amount = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(f"close1_{label}_invalid") from error
+    if amount < 0:
         raise ValueError(f"close1_{label}_invalid")
     return amount
 
@@ -454,7 +468,7 @@ def build_live_snapshot(
     shorts = positions.get("shorts")
     if type(longs) is not int or longs < 0 or type(shorts) is not int or shorts < 0:
         raise ValueError("close1_positions_count_invalid")
-    open_notional = _amount(str(positions.get("open")), label="open_notional")
+    open_notional = _aggregate_amount(positions.get("open"), label="open_notional")
 
     cutoff = top[2][1] if len(top) >= 3 else None
     return LiveSnapshot(
