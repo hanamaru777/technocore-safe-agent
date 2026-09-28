@@ -198,10 +198,70 @@ def test_fetch_live_snapshot_is_read_only(monkeypatch):
         })]},
     }
     calls = []
-    monkeypatch.setattr(close_call.core, "read_room", lambda room, limit=5: calls.append((room, limit)) or payloads[room])
+    monkeypatch.setattr(close_call.core, "read_room", lambda room, limit=12: calls.append((room, limit)) or payloads[room])
     snapshot = close_call.fetch_live_snapshot()
     assert snapshot.sweep == 1
     assert len(calls) == 4
+    assert all(limit == 12 for _, limit in calls)
+
+
+def test_fetch_live_snapshot_aligns_newest_common_sweep(monkeypatch):
+    def price(n):
+        return msg("price", {
+            "n": n, "age_s": 1,
+            "ref": {"px": "225.00", "time": "2026-09-25T12:04:59Z", "tid": n},
+        })
+
+    def state(n):
+        return msg("state", {
+            "n": n, "owners": 2, "rooms": 1, "root": "a" * 64, "file": "b" * 64,
+        })
+
+    def pnl(n):
+        return msg("pnl", {
+            "n": n, "mark": "225.00", "file": "b" * 64, "top": [],
+        })
+
+    def positions(n):
+        return msg("positions", {
+            "n": n, "open": "1.00", "longs": 0, "shorts": 0, "top": [], "file": "b" * 64,
+        })
+
+    payloads = {
+        "d-close1-price": {"messages": [price(7), price(8)]},
+        "d-close1-state": {"messages": [state(7)]},
+        "d-close1-pnl": {"messages": [pnl(6), pnl(7)]},
+        "d-close1-positions": {"messages": [positions(7), positions(8)]},
+    }
+    monkeypatch.setattr(
+        close_call.core,
+        "read_room",
+        lambda room, limit=12: payloads[room],
+    )
+
+    snapshot = close_call.fetch_live_snapshot()
+
+    assert snapshot.sweep == 7
+
+
+def test_latest_common_referee_sweep_fails_closed_without_overlap():
+    payloads = {
+        "d-close1-price": {"messages": [msg("price", {
+            "n": 8, "age_s": 1,
+            "ref": {"px": "225.00", "time": "2026-09-25T12:04:59Z", "tid": 8},
+        })]},
+        "d-close1-state": {"messages": [msg("state", {
+            "n": 7, "owners": 2, "rooms": 1, "root": "a" * 64, "file": "b" * 64,
+        })]},
+        "d-close1-pnl": {"messages": [msg("pnl", {
+            "n": 6, "mark": "225.00", "file": "b" * 64, "top": [],
+        })]},
+        "d-close1-positions": {"messages": [msg("positions", {
+            "n": 5, "open": "1.00", "longs": 0, "shorts": 0, "top": [], "file": "b" * 64,
+        })]},
+    }
+    with pytest.raises(ValueError, match="no_common_sweep"):
+        close_call._latest_common_referee_sweep(payloads)
 
 
 B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"

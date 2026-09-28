@@ -135,18 +135,45 @@ def infer_exposure(
             "insufficient_meaningful_moves",
         )
 
-    ordered = sorted(slopes)
+    # Infer the *current* exposure from the newest contiguous stable slope
+    # regime.  Older slopes may belong to a previous position before the
+    # account traded again; they must not poison a newly stable current regime.
+    recent_reversed: list[Decimal] = []
+    for slope in reversed(slopes):
+        trial = recent_reversed + [slope]
+        ordered_trial = sorted(trial)
+        trial_spread = ordered_trial[-1] - ordered_trial[0]
+        if trial_spread > spread_limit:
+            break
+        recent_reversed = trial
+
+    recent = list(reversed(recent_reversed))
+    if len(recent) < min_slopes:
+        trailing = slopes[-min_slopes:]
+        ordered_trailing = sorted(trailing)
+        trailing_estimate = median(ordered_trailing)
+        trailing_spread = ordered_trailing[-1] - ordered_trailing[0]
+        return ExposureEstimate(
+            did,
+            trailing_estimate,
+            tuple(trailing),
+            len(trailing),
+            trailing_spread,
+            False,
+            "unstable_recent_score_mark_slope",
+        )
+
+    ordered = sorted(recent)
     estimate = median(ordered)
     spread = ordered[-1] - ordered[0]
-    stable = spread <= spread_limit
     return ExposureEstimate(
         did,
         estimate,
-        tuple(slopes),
-        len(slopes),
+        tuple(recent),
+        len(recent),
         spread,
-        stable,
-        "stable" if stable else "unstable_score_mark_slope",
+        True,
+        "stable_recent_regime",
     )
 
 
