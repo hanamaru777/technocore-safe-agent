@@ -104,6 +104,8 @@ class CandidateScan:
     strategy_gate: str
     baskets: tuple[BasketCandidateView, ...] = ()
     recent_flows: tuple[RecentFlowView, ...] = ()
+    top3_delta_10m: Decimal | None = None
+    flat_target_score: Decimal | None = None
 
 
 def _signed_decimal(value: object, *, label: str) -> Decimal:
@@ -152,6 +154,29 @@ def _score_for_did(snapshot: dict, did: str) -> Decimal | None:
         if row[0] == did:
             return _signed_decimal(row[1], label="leader_score")
     return None
+
+
+def _top3_cutoff_from_snapshot(snapshot: dict) -> Decimal | None:
+    top = snapshot.get("top")
+    if not isinstance(top, list):
+        raise ValueError("close1_scanner_pnl_top_invalid")
+    scores: list[Decimal] = []
+    for row in top:
+        if not isinstance(row, list) or len(row) != 2:
+            raise ValueError("close1_scanner_pnl_top_invalid")
+        scores.append(_signed_decimal(row[1], label="leader_score"))
+    return scores[2] if len(scores) >= 3 else None
+
+
+def _top3_delta_10m(snapshots: list[dict]) -> Decimal | None:
+    """Approximate ten-minute cutoff change from the 5-minute referee cadence."""
+    if len(snapshots) < 3:
+        return None
+    current = _top3_cutoff_from_snapshot(snapshots[-1])
+    previous = _top3_cutoff_from_snapshot(snapshots[-3])
+    if current is None or previous is None:
+        return None
+    return current - previous
 
 
 def _leader_universe(
@@ -620,15 +645,8 @@ def build_candidate_scan(
     reference = close_call._amount(ref.get("px"), label="reference")
     mark = close_call._amount(str(pnl.get("mark")), label="pnl_mark")
 
-    top = pnl.get("top")
-    if not isinstance(top, list):
-        raise ValueError("close1_scanner_pnl_top_invalid")
-    current_scores = []
-    for row in top:
-        if not isinstance(row, list) or len(row) != 2:
-            raise ValueError("close1_scanner_pnl_top_invalid")
-        current_scores.append(_signed_decimal(row[1], label="leader_score"))
-    top3_cutoff = current_scores[2] if len(current_scores) >= 3 else None
+    top3_cutoff = _top3_cutoff_from_snapshot(pnl)
+    top3_delta_10m = _top3_delta_10m(snapshots)
     flat_target_score = max(
         Decimal("100"),
         (top3_cutoff + Decimal("25")) if top3_cutoff is not None else Decimal("100"),
@@ -686,6 +704,8 @@ def build_candidate_scan(
             candidates=(),
             strategy_gate="reference_stale",
             recent_flows=_recent_flow_views(verified_trades),
+            top3_delta_10m=top3_delta_10m,
+            flat_target_score=flat_target_score,
         )
 
     candidate_rows: list[CandidateView] = []
@@ -804,6 +824,8 @@ def build_candidate_scan(
         strategy_gate="ready" if stable_count == len(leaders) and len(leaders) >= 3 else "leader_coverage_incomplete",
         baskets=tuple(basket_rows),
         recent_flows=_recent_flow_views(verified_trades),
+        top3_delta_10m=top3_delta_10m,
+        flat_target_score=flat_target_score,
     )
 
 

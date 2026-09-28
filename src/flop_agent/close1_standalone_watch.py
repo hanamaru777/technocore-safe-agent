@@ -29,6 +29,8 @@ CANDIDATE_NEAR = Decimal("0.03")
 CANDIDATE_IMPROVEMENT = Decimal("0.005")
 FLOW_SHOCK_QTY = Decimal("40")
 FLOW_SHOCK_IMPROVEMENT = Decimal("20")
+HURDLE_ACCEL = Decimal("50")
+HURDLE_ACCEL_IMPROVEMENT = Decimal("50")
 
 DISCORD_API = "https://discord.com/api/v10"
 DISCORD_LIMIT = 2000
@@ -52,6 +54,7 @@ def _default_state() -> dict:
         "last_flow_key": None,
         "last_flow_qty": None,
         "flow_alerted_qty": {},
+        "last_hurdle_alert_delta": None,
         "last_alert_at": None,
         "last_error": None,
     }
@@ -191,6 +194,16 @@ def _flow_signals(scan: close1_candidate_scanner.CandidateScan, state: dict):
     return tuple(signals)
 
 
+def _hurdle_accel_signal(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bool:
+    current = scan.top3_delta_10m
+    if current is None or current < HURDLE_ACCEL:
+        return False
+    previous_alert = _decimal(state.get("last_hurdle_alert_delta"))
+    if previous_alert is None:
+        return True
+    return current - previous_alert >= HURDLE_ACCEL_IMPROVEMENT
+
+
 def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) -> list[str]:
     reasons: list[str] = []
     if state.get("activated") is not True:
@@ -199,6 +212,8 @@ def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) ->
         reasons.append("5分価格急変")
     if _top3_shift(scan, state):
         reasons.append("TOP3変化")
+    if _hurdle_accel_signal(scan, state):
+        reasons.append("TOP3急騰")
     if _candidate_signal(scan, state):
         reasons.append("勝ち筋候補接近")
     if _flow_signals(scan, state):
@@ -218,6 +233,14 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
         f"sweep: {scan.sweep}",
         f"reference: {scan.reference} / age {scan.reference_age_seconds}s / mark {scan.mark}",
         f"visible top3 cutoff: {cutoff} POLF",
+        (
+            "top3 10m delta: "
+            + (f"{scan.top3_delta_10m:+f} POLF" if scan.top3_delta_10m is not None else "n/a")
+        ),
+        (
+            "flat target score: "
+            + (f"{scan.flat_target_score:+f} POLF" if scan.flat_target_score is not None else "n/a")
+        ),
         f"leader envelope: stable {stable}/{len(scan.visible_leaders)}",
         f"strategy gate: {scan.strategy_gate} / verified offers {scan.verified_offers}",
     ]
@@ -369,6 +392,13 @@ def _remember_scan(
             # compatibility fields too so a later wave can alert as new.
             flow_key = None
             flow_qty = None
+    if scan.top3_delta_10m is None or scan.top3_delta_10m < HURDLE_ACCEL:
+        hurdle_alert_delta = None
+    elif "TOP3急騰" in reasons:
+        hurdle_alert_delta = str(scan.top3_delta_10m)
+    else:
+        hurdle_alert_delta = state.get("last_hurdle_alert_delta")
+
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
@@ -389,6 +419,7 @@ def _remember_scan(
         last_flow_key=flow_key,
         last_flow_qty=flow_qty,
         flow_alerted_qty={key: str(value) for key, value in alerted.items()},
+        last_hurdle_alert_delta=hurdle_alert_delta,
         last_error=None,
     )
 
