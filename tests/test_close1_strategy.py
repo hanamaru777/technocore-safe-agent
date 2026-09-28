@@ -31,7 +31,7 @@ def test_infer_exposure_from_realistic_short_leader_history():
     estimate = close1_strategy.infer_exposure(DID, history)
 
     assert estimate.stable is True
-    assert estimate.reason == "stable"
+    assert estimate.reason == "stable_recent_regime"
     assert estimate.observations == 7
     assert Decimal("-42.20") < estimate.position < Decimal("-41.20")
     assert estimate.spread < Decimal("2.50")
@@ -77,6 +77,50 @@ def test_insufficient_or_unstable_history_does_not_claim_stable_exposure():
     assert unstable.position == Decimal("-45")
     assert unstable.stable is False
     assert unstable.reason == "unstable_score_mark_slope"
+
+
+def test_recent_stable_regime_recovers_after_older_position_change():
+    history = [
+        snap("220.00", "100.00"),
+        snap("220.20", "92.00"),   # old position about -40
+        snap("220.40", "84.00"),   # old position about -40
+        snap("220.60", "76.00"),   # old position about -40
+        # Position changes here; the transition slope is intentionally noisy.
+        snap("220.80", "60.00"),   # -80 transition
+        snap("221.00", "51.60"),   # new stable -42
+        snap("221.20", "43.20"),   # -42
+        snap("221.40", "34.80"),   # -42
+        snap("221.60", "26.40"),   # -42
+    ]
+
+    estimate = close1_strategy.infer_exposure(DID, history)
+
+    assert estimate.stable is True
+    assert estimate.reason == "stable_recent_regime"
+    assert estimate.position == Decimal("-42")
+    assert estimate.observations == 4
+    assert estimate.slopes == (
+        Decimal("-42"),
+        Decimal("-42"),
+        Decimal("-42"),
+        Decimal("-42"),
+    )
+
+
+def test_recent_unstable_slope_prevents_reusing_old_stable_regime():
+    history = [
+        snap("220.00", "100.00"),
+        snap("220.20", "91.60"),
+        snap("220.40", "83.20"),
+        snap("220.60", "74.80"),
+        snap("220.80", "66.40"),   # old stable -42 regime
+        snap("221.00", "56.40"),   # latest slope -50: current regime changed
+    ]
+
+    estimate = close1_strategy.infer_exposure(DID, history)
+
+    assert estimate.stable is False
+    assert estimate.reason == "unstable_recent_score_mark_slope"
 
 
 def test_project_score_uses_current_position_slope():
