@@ -140,9 +140,17 @@ def _candidate_signal(scan: close1_candidate_scanner.CandidateScan, state: dict)
     if move_abs > CANDIDATE_WATCH:
         return False
 
+    # Preserve activation-only behavior and migrate the previously deployed
+    # state, which has latest-candidate fields but no alert-baseline fields.
+    if state.get("activated") is not True and move_abs > CANDIDATE_NEAR:
+        return False
     previous_move = _decimal(state.get("last_candidate_alert_move_abs"))
     previous_side = state.get("last_candidate_alert_side")
     previous_key = state.get("last_candidate_alert_trade_id")
+    if previous_move is None:
+        previous_move = _decimal(state.get("last_candidate_move_abs"))
+        previous_side = state.get("last_candidate_side")
+        previous_key = state.get("last_candidate_trade_id")
     current_key = _opportunity_key(kind, candidate)
     if previous_move is None or previous_side != candidate.taker_side:
         return True
@@ -529,14 +537,30 @@ def _remember_scan(
         if candidate is not None and kind is not None
         else None
     )
+    was_activated = state.get("activated") is True
+    alert_side = state.get("last_candidate_alert_side")
+    alert_move = state.get("last_candidate_alert_move_abs")
+    alert_key = state.get("last_candidate_alert_trade_id")
+    if alert_move is None and was_activated:
+        # One-time migration from the deployed latest-candidate baseline.
+        alert_side = state.get("last_candidate_side")
+        alert_move = state.get("last_candidate_move_abs")
+        alert_key = state.get("last_candidate_trade_id")
     if "勝ち筋候補接近" in reasons:
         alert_side = candidate_side
         alert_move = candidate_move
         alert_key = candidate_key
-    else:
-        alert_side = state.get("last_candidate_alert_side")
-        alert_move = state.get("last_candidate_alert_move_abs")
-        alert_key = state.get("last_candidate_alert_trade_id")
+    elif (
+        not was_activated
+        and candidate is not None
+        and candidate_move is not None
+        and Decimal(candidate_move) <= CANDIDATE_WATCH
+    ):
+        # Activation itself is not a broad-band candidate alert, but it becomes
+        # the baseline so cumulative improvement is measured from here.
+        alert_side = candidate_side
+        alert_move = candidate_move
+        alert_key = candidate_key
 
     state.update(
         activated=True,
