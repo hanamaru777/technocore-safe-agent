@@ -222,6 +222,7 @@ def _candidate_lines(
         )
     lines.extend([
         "前提: 当方 10,000 POLF / position 0（初回settle前のread-only仮定）",
+        "注意: shadow leaders込み。leader/future trades・未観測account・clawbackで勝利条件は変動します。",
         "取引: WATCHのみ。binding実行はexact tradeごとの個別承認が必要。",
     ])
     return lines
