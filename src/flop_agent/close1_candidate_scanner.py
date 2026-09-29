@@ -112,6 +112,7 @@ class TwoStageCushionPlan:
     final_price: Decimal
     condition: str
     required_cash: Decimal
+    final_move_limit: Decimal
     warning: str
 
 
@@ -513,6 +514,7 @@ def _minimum_realized_cushion(
     fee: Decimal,
     current_mark: Decimal,
     leaders: list[LeaderView],
+    final_move_limit: Decimal = Decimal("0.15"),
 ) -> tuple[Decimal, Decimal, str] | None:
     """Minimum banked score needed before a second-stage position can win.
 
@@ -525,6 +527,13 @@ def _minimum_realized_cushion(
     if len(stable) != len(leaders) or len(stable) < 3:
         return None
 
+    if final_move_limit <= 0:
+        raise ValueError("close1_scanner_two_stage_move_limit_invalid")
+    low = current_mark * (Decimal("1") - final_move_limit)
+    high = current_mark * (Decimal("1") + final_move_limit)
+    if low <= 0:
+        low = Decimal("0.01")
+
     direct = _nearest_dynamic_victory(
         side=side,
         qty=qty,
@@ -535,7 +544,8 @@ def _minimum_realized_cushion(
     )
     if direct is not None:
         price, condition, _ = direct
-        return Decimal("0"), price, condition
+        if low <= price <= high:
+            return Decimal("0"), price, condition
 
     # Hurdle lines are affine in final price.  After subtracting the supplied
     # position's affine score, the required cushion is the maximum of affine
@@ -548,13 +558,13 @@ def _minimum_realized_cushion(
         intercept = leader.score + Decimal("25") - position * current_mark
         lines.append((intercept, position))
 
-    prices: set[Decimal] = {Decimal("0.01"), current_mark}
+    prices: set[Decimal] = {low, current_mark, high}
     for index, (a1, m1) in enumerate(lines):
         for a2, m2 in lines[index + 1:]:
             if m1 == m2:
                 continue
             price = (a2 - a1) / (m1 - m2)
-            if price > 0:
+            if low <= price <= high:
                 prices.add(price)
 
     rows: list[tuple[Decimal, Decimal, Decimal]] = []
@@ -586,6 +596,7 @@ def _best_two_stage_cushion_plan(
     fee_mode: str,
     current_mark: Decimal,
     leaders: list[LeaderView],
+    final_move_limit: Decimal = Decimal("0.15"),
 ) -> TwoStageCushionPlan | None:
     """Choose a near-max second-stage position with the smallest cushion floor."""
     if fee_mode not in {"maker_clawback_neutral_lower_bound", "taker_base_fee_lower_bound"}:
@@ -609,6 +620,7 @@ def _best_two_stage_cushion_plan(
                 fee=fee,
                 current_mark=current_mark,
                 leaders=stable,
+                final_move_limit=final_move_limit,
             )
             if result is None:
                 continue
@@ -619,15 +631,17 @@ def _best_two_stage_cushion_plan(
                 continue
             if fee_mode == "maker_clawback_neutral_lower_bound":
                 warning = (
-                    "theoretical lower bound assuming a favorable maker quote whose price edge is "
-                    "fully neutralized by sweep-close clawback, so effective entry is near the "
-                    "sweep close with no additional modeled fee; actual fill/close can differ and "
-                    "posting any offer is a separate binding action requiring approval"
+                    "theoretical lower bound inside the project-local +/-15% final-price planning "
+                    "band, assuming a favorable maker quote whose price edge is fully neutralized "
+                    "by sweep-close clawback, so effective entry is near the sweep close with no "
+                    "additional modeled fee; actual fill/close can differ and posting any offer is "
+                    "a separate binding action requiring approval"
                 )
             else:
                 warning = (
-                    "taker/base-fee lower bound only; actual sweep-close clawback can exceed the "
-                    "1% fee and future leader trades or unseen accounts can raise the hurdle"
+                    "taker/base-fee lower bound inside the project-local +/-15% final-price "
+                    "planning band only; actual sweep-close clawback can exceed the 1% fee and "
+                    "future leader trades or unseen accounts can raise the hurdle"
                 )
             plan = TwoStageCushionPlan(
                 fee_mode=fee_mode,
@@ -639,6 +653,7 @@ def _best_two_stage_cushion_plan(
                 final_price=final_price,
                 condition=condition,
                 required_cash=required_cash,
+                final_move_limit=final_move_limit,
                 warning=warning,
             )
             rows.append((cushion, abs(final_price - current_mark), -qty, plan))
