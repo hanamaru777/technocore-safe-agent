@@ -10,7 +10,7 @@ def s():
 def test_exact_transition_is_pinned():
     x=s()
     assert "OLD=bf2be7d8de2dbc6b063d780642f764121deb60a4" in x
-    assert "TARGET=3bc837fa1c1b4422607ff7b1966052d56763c3a3" in x
+    assert "TARGET=2092ee877cd2bf5656e9265308736419716405e0" in x
     assert 'git_owner merge --ff-only "$TARGET"' in x
     assert "umask 022" in x
 
