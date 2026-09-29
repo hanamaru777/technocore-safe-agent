@@ -643,7 +643,7 @@ def _best_two_stage_cushion_plan(
             )
             rows.append((cushion, abs(final_price - current_mark), -qty, plan))
 
-    return min(rows)[3] if rows else None
+    return min(rows, key=lambda item: item[:3])[3] if rows else None
 
 
 def _flat_target_plan(
