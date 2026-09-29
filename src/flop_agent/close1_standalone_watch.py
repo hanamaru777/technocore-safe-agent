@@ -152,7 +152,9 @@ def _candidate_signal(scan: close1_candidate_scanner.CandidateScan, state: dict)
         previous_side = state.get("last_candidate_side")
         previous_key = state.get("last_candidate_trade_id")
     current_key = _opportunity_key(kind, candidate)
-    if previous_move is None or previous_side != candidate.taker_side:
+    if previous_move is None:
+        return move_abs <= CANDIDATE_NEAR
+    if previous_side != candidate.taker_side:
         return True
     if previous_move > CANDIDATE_WATCH:
         return True
