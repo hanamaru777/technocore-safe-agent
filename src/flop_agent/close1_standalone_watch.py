@@ -26,6 +26,7 @@ CURRENT_POSITION = "0"
 PRICE_SHOCK = Decimal("0.0075")
 TOP3_DELTA = Decimal("10")
 CANDIDATE_NEAR = Decimal("0.03")
+CANDIDATE_WATCH = Decimal("0.10")
 CANDIDATE_IMPROVEMENT = Decimal("0.005")
 FLOW_SHOCK_QTY = Decimal("40")
 FLOW_SHOCK_IMPROVEMENT = Decimal("20")
@@ -53,6 +54,9 @@ def _default_state() -> dict:
         "last_candidate_side": None,
         "last_candidate_move_abs": None,
         "last_candidate_trade_id": None,
+        "last_candidate_alert_side": None,
+        "last_candidate_alert_move_abs": None,
+        "last_candidate_alert_trade_id": None,
         "last_flow_key": None,
         "last_flow_qty": None,
         "flow_alerted_qty": {},
@@ -133,20 +137,34 @@ def _candidate_signal(scan: close1_candidate_scanner.CandidateScan, state: dict)
     rank, move_abs, source = _opportunity_rank_move(candidate)
     if source not in {"dynamic_victory", "dynamic_top3"}:
         return False
-    if move_abs > CANDIDATE_NEAR:
+    if move_abs > CANDIDATE_WATCH:
         return False
 
-    previous_move = _decimal(state.get("last_candidate_move_abs"))
-    previous_side = state.get("last_candidate_side")
-    previous_key = state.get("last_candidate_trade_id")
+    # Preserve activation-only behavior and migrate the previously deployed
+    # state, which has latest-candidate fields but no alert-baseline fields.
+    if state.get("activated") is not True and move_abs > CANDIDATE_NEAR:
+        return False
+    previous_move = _decimal(state.get("last_candidate_alert_move_abs"))
+    previous_side = state.get("last_candidate_alert_side")
+    previous_key = state.get("last_candidate_alert_trade_id")
+    if previous_move is None:
+        previous_move = _decimal(state.get("last_candidate_move_abs"))
+        previous_side = state.get("last_candidate_side")
+        previous_key = state.get("last_candidate_trade_id")
     current_key = _opportunity_key(kind, candidate)
-    if previous_move is None or previous_side != candidate.taker_side:
+    if previous_move is None:
+        return move_abs <= CANDIDATE_NEAR
+    if previous_side != candidate.taker_side:
         return True
-    if previous_move > CANDIDATE_NEAR:
+    if previous_move > CANDIDATE_WATCH:
         return True
     if previous_move - move_abs >= CANDIDATE_IMPROVEMENT:
         return True
-    return previous_key != current_key and move_abs <= previous_move
+    if move_abs <= CANDIDATE_NEAR:
+        if previous_move > CANDIDATE_NEAR:
+            return True
+        return previous_key != current_key and move_abs <= previous_move
+    return False
 
 
 def _price_shock(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bool:
@@ -509,24 +527,55 @@ def _remember_scan(
     else:
         fallback_baseline = previous_fallback
 
+    candidate_side = candidate.taker_side if candidate is not None else None
+    candidate_move = (
+        str(_opportunity_rank_move(candidate)[1])
+        if candidate is not None
+        and _opportunity_rank_move(candidate)[2] in {"dynamic_victory", "dynamic_top3"}
+        else None
+    )
+    candidate_key = (
+        _opportunity_key(kind, candidate)
+        if candidate is not None and kind is not None
+        else None
+    )
+    was_activated = state.get("activated") is True
+    alert_side = state.get("last_candidate_alert_side")
+    alert_move = state.get("last_candidate_alert_move_abs")
+    alert_key = state.get("last_candidate_alert_trade_id")
+    if alert_move is None and was_activated:
+        # One-time migration from the deployed latest-candidate baseline.
+        alert_side = state.get("last_candidate_side")
+        alert_move = state.get("last_candidate_move_abs")
+        alert_key = state.get("last_candidate_trade_id")
+    if "勝ち筋候補接近" in reasons:
+        alert_side = candidate_side
+        alert_move = candidate_move
+        alert_key = candidate_key
+    elif (
+        not was_activated
+        and candidate is not None
+        and candidate_move is not None
+        and Decimal(candidate_move) <= CANDIDATE_WATCH
+    ):
+        # Activation itself is not a broad-band candidate alert, but it becomes
+        # the baseline so cumulative improvement is measured from here.
+        alert_side = candidate_side
+        alert_move = candidate_move
+        alert_key = candidate_key
+
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
         last_sweep=scan.sweep,
         last_reference=str(scan.reference),
         last_top3_cutoff=str(scan.top3_cutoff) if scan.top3_cutoff is not None else None,
-        last_candidate_side=candidate.taker_side if candidate is not None else None,
-        last_candidate_move_abs=(
-            str(_opportunity_rank_move(candidate)[1])
-            if candidate is not None
-            and _opportunity_rank_move(candidate)[2] in {"dynamic_victory", "dynamic_top3"}
-            else None
-        ),
-        last_candidate_trade_id=(
-            _opportunity_key(kind, candidate)
-            if candidate is not None and kind is not None
-            else None
-        ),
+        last_candidate_side=candidate_side,
+        last_candidate_move_abs=candidate_move,
+        last_candidate_trade_id=candidate_key,
+        last_candidate_alert_side=alert_side,
+        last_candidate_alert_move_abs=alert_move,
+        last_candidate_alert_trade_id=alert_key,
         last_flow_key=flow_key,
         last_flow_qty=flow_qty,
         flow_alerted_qty={key: str(value) for key, value in alerted.items()},
