@@ -207,6 +207,10 @@ def test_manual_status_distinguishes_dynamic_victory_from_top3():
 
     assert "dynamic first-place +25推定" in message
     assert "visible-top3推定" in message
+    assert "shadow leaders込み" in message
+    assert "leader/future trades" in message
+    assert "未観測account" in message
+    assert "clawback" in message
 
 
 def test_candidate_near_threshold_notifies_before_thirty_minutes(monkeypatch, tmp_path):
