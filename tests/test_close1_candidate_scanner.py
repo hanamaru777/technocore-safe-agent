@@ -805,3 +805,168 @@ def test_fetch_candidate_scan_reads_only_expected_public_rooms(monkeypatch):
         ("close1", 200),
         ("close1-offers", 200),
     ]
+
+
+def test_two_stage_cushion_is_positive_with_opposing_leader_envelope():
+    leaders = [
+        scanner.LeaderView(
+            did="did:key:z6MkeTcR7He7sY6imuJguhifiNKrWceKNus5HGuajbAwymdK",
+            score=Decimal("950"),
+            position=Decimal("46"),
+            stable=True,
+            reason="stable",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MkeVj5ofGVVYiBgBL2se7GHN7TkgPP4vPAJpYB8n5bh3G".replace("gPP", "gP"),
+            score=Decimal("900"),
+            position=Decimal("-45"),
+            stable=True,
+            reason="stable",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+            score=Decimal("100"),
+            position=Decimal("0"),
+            stable=True,
+            reason="stable",
+        ),
+    ]
+
+    result = scanner._minimum_realized_cushion(
+        side="buy",
+        qty=Decimal("46"),
+        px=Decimal("230"),
+        fee=Decimal("0"),
+        current_mark=Decimal("230"),
+        leaders=leaders,
+    )
+
+    assert result is not None
+    cushion, final_price, condition = result
+    assert Decimal("800") < cushion < Decimal("1100")
+    assert final_price > 0
+    assert condition in {"above", "below", "at"}
+
+
+def test_two_stage_cushion_zero_when_one_stage_already_has_victory_crossing():
+    leaders = [
+        scanner.LeaderView(
+            did="did:key:z6MkeTcR7He7sY6imuJguhifiNKrWceKNus5HGuajbAwymdK",
+            score=Decimal("200"),
+            position=Decimal("40"),
+            stable=True,
+            reason="stable",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MkeVj5ofGVVYiBgBL2se7GHN7TkgP4vPAJpYB8n5bh3Gx",
+            score=Decimal("190"),
+            position=Decimal("39"),
+            stable=True,
+            reason="stable",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+            score=Decimal("180"),
+            position=Decimal("38"),
+            stable=True,
+            reason="stable",
+        ),
+    ]
+
+    result = scanner._minimum_realized_cushion(
+        side="buy",
+        qty=Decimal("46"),
+        px=Decimal("230"),
+        fee=Decimal("0"),
+        current_mark=Decimal("230"),
+        leaders=leaders,
+    )
+
+    assert result is not None
+    assert result[0] == Decimal("0")
+
+
+def test_two_stage_cushion_fails_closed_with_incomplete_leader_coverage():
+    leaders = [
+        scanner.LeaderView(
+            did="did:key:z6MkeTcR7He7sY6imuJguhifiNKrWceKNus5HGuajbAwymdK",
+            score=Decimal("950"),
+            position=Decimal("46"),
+            stable=True,
+            reason="stable",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MkeVj5ofGVVYiBgBL2se7GHN7TkgP4vPAJpYB8n5bh3Gx",
+            score=Decimal("900"),
+            position=None,
+            stable=False,
+            reason="insufficient",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+            score=Decimal("100"),
+            position=Decimal("0"),
+            stable=True,
+            reason="stable",
+        ),
+    ]
+
+    assert scanner._minimum_realized_cushion(
+        side="sell",
+        qty=Decimal("44"),
+        px=Decimal("230"),
+        fee=Decimal("0"),
+        current_mark=Decimal("230"),
+        leaders=leaders,
+    ) is None
+    assert scanner._best_two_stage_cushion_plan(
+        fee_mode="maker_clawback_neutral_lower_bound",
+        current_mark=Decimal("230"),
+        leaders=leaders,
+    ) is None
+
+
+def test_two_stage_plan_keeps_maker_and_taker_lower_bounds_separate():
+    leaders = [
+        scanner.LeaderView(
+            did="did:key:z6MkeTcR7He7sY6imuJguhifiNKrWceKNus5HGuajbAwymdK",
+            score=Decimal("950"),
+            position=Decimal("46"),
+            stable=True,
+            reason="stable",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MkeVj5ofGVVYiBgBL2se7GHN7TkgP4vPAJpYB8n5bh3Gx",
+            score=Decimal("900"),
+            position=Decimal("-45"),
+            stable=True,
+            reason="stable",
+        ),
+        scanner.LeaderView(
+            did="did:key:z6MktKSLKLKHwEfLbYT4kP1cxSCdaKhCNuvEu9xJnuYb9bLP",
+            score=Decimal("100"),
+            position=Decimal("0"),
+            stable=True,
+            reason="stable",
+        ),
+    ]
+
+    maker = scanner._best_two_stage_cushion_plan(
+        fee_mode="maker_clawback_neutral_lower_bound",
+        current_mark=Decimal("230"),
+        leaders=leaders,
+    )
+    taker = scanner._best_two_stage_cushion_plan(
+        fee_mode="taker_base_fee_lower_bound",
+        current_mark=Decimal("230"),
+        leaders=leaders,
+    )
+
+    assert maker is not None and taker is not None
+    assert maker.fee_mode == "maker_clawback_neutral_lower_bound"
+    assert taker.fee_mode == "taker_base_fee_lower_bound"
+    assert maker.entry_fee == Decimal("0")
+    assert taker.entry_fee > 0
+    assert maker.required_realized_cushion <= taker.required_realized_cushion
+    assert "binding action requiring approval" in maker.warning
+    assert "clawback" in taker.warning
