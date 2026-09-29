@@ -225,6 +225,46 @@ def test_best_opportunity_prefers_dynamic_rank_over_flat_fallback():
     )
 
 
+def test_best_opportunity_prefers_dynamic_victory_over_nearer_top3():
+    base = _scan(move="0.010", trade_id="top3-near")
+    top3_near = replace(base.candidates[0], dynamic_victory_move_percent=None)
+    victory = replace(
+        base.candidates[0],
+        trade_id="victory",
+        move_percent_from_mark=Decimal("0.030"),
+        dynamic_victory_price=Decimal("233"),
+        dynamic_victory_condition="above",
+        dynamic_victory_move_percent=Decimal("0.025"),
+    )
+    scan = replace(base, candidates=(top3_near, victory))
+
+    kind, candidate = watch._best_opportunity(scan)
+
+    assert kind == "single"
+    assert candidate.trade_id == "victory"
+    assert watch._opportunity_rank_move(candidate) == (
+        -1,
+        Decimal("0.025"),
+        "dynamic_victory",
+    )
+
+
+def test_render_distinguishes_dynamic_victory_from_dynamic_top3():
+    base = _scan(move="0.010", trade_id="victory")
+    candidate = replace(
+        base.candidates[0],
+        dynamic_victory_price=Decimal("234"),
+        dynamic_victory_condition="above",
+        dynamic_victory_move_percent=Decimal("0.040"),
+    )
+
+    message = watch._render(replace(base, candidates=(candidate,)), ["監視開始"])
+
+    assert "dynamic first-place +25推定" in message
+    assert "visible-top3推定" in message
+    assert message.index("dynamic first-place +25推定") < message.index("visible-top3推定")
+
+
 def test_render_labels_flat_target_fallback_without_claiming_dynamic_top3():
     base = _scan(move="0.040", trade_id="fallback")
     candidate = replace(

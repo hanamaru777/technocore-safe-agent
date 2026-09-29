@@ -153,7 +153,24 @@ def _candidate_fetch() -> close1_candidate_scanner.CandidateScan:
 
 
 def _best_candidate(scan: close1_candidate_scanner.CandidateScan):
-    return scan.candidates[0] if scan.candidates else None
+    if not scan.candidates:
+        return None
+    return min(scan.candidates, key=lambda candidate: (
+        candidate.dynamic_victory_move_percent is None,
+        abs(candidate.dynamic_victory_move_percent)
+        if candidate.dynamic_victory_move_percent is not None else Decimal("999"),
+        candidate.move_percent_from_mark is None,
+        abs(candidate.move_percent_from_mark)
+        if candidate.move_percent_from_mark is not None else Decimal("999"),
+        -candidate.qty,
+        candidate.seq,
+    ))
+
+
+def _candidate_move(candidate) -> Decimal | None:
+    if candidate.dynamic_victory_move_percent is not None:
+        return candidate.dynamic_victory_move_percent
+    return candidate.move_percent_from_mark
 
 
 def _candidate_lines(
@@ -176,18 +193,29 @@ def _candidate_lines(
     candidate = _best_candidate(scan)
     if candidate is None:
         lines.append("best WATCH: 現在、資金・鮮度・署名条件を満たす公開候補なし")
-    elif candidate.dynamic_top3_price is None or candidate.move_percent_from_mark is None:
+    elif (
+        candidate.dynamic_victory_price is None
+        or candidate.dynamic_victory_move_percent is None
+    ):
         lines.append(
             f"best WATCH: {candidate.taker_side.upper()} {candidate.qty} @ {candidate.px} "
-            f"/ until {candidate.until} / dynamic top3 未確定"
+            f"/ until {candidate.until} / dynamic victory 未確定"
         )
     else:
-        relation = ">=" if candidate.dynamic_condition == "above" else "<="
-        move_pct = candidate.move_percent_from_mark * Decimal("100")
+        relation = ">=" if candidate.dynamic_victory_condition == "above" else "<="
+        move_pct = candidate.dynamic_victory_move_percent * Decimal("100")
         lines.append(
             f"best WATCH: {candidate.taker_side.upper()} {candidate.qty} @ {candidate.px} "
             f"/ until {candidate.until}"
         )
+        lines.append(
+            "dynamic first-place +25推定: final S "
+            f"{relation} {candidate.dynamic_victory_price.quantize(Decimal('0.01'))} "
+            f"/ 現在mark比 {move_pct:+.2f}%"
+        )
+    if candidate is not None and candidate.dynamic_top3_price is not None and candidate.move_percent_from_mark is not None:
+        relation = ">=" if candidate.dynamic_condition == "above" else "<="
+        move_pct = candidate.move_percent_from_mark * Decimal("100")
         lines.append(
             f"visible-top3推定: final S {relation} {candidate.dynamic_top3_price.quantize(Decimal('0.01'))} "
             f"/ 現在mark比 {move_pct:+.2f}%"
@@ -206,9 +234,10 @@ def _candidate_signal(
     if scan is None or scan.strategy_gate != "ready":
         return False
     candidate = _best_candidate(scan)
-    if candidate is None or candidate.move_percent_from_mark is None:
+    move = _candidate_move(candidate) if candidate is not None else None
+    if candidate is None or move is None:
         return False
-    move_abs = abs(candidate.move_percent_from_mark)
+    move_abs = abs(move)
     if move_abs > CANDIDATE_NEAR_THRESHOLD:
         return False
     previous_side = state.get("last_candidate_side")
@@ -225,12 +254,13 @@ def _remember_candidate(
     state: dict,
 ) -> None:
     candidate = _best_candidate(scan) if scan is not None else None
-    if candidate is None or candidate.move_percent_from_mark is None:
+    move = _candidate_move(candidate) if candidate is not None else None
+    if candidate is None or move is None:
         state["last_candidate_side"] = None
         state["last_candidate_move_abs"] = None
         return
     state["last_candidate_side"] = candidate.taker_side
-    state["last_candidate_move_abs"] = str(abs(candidate.move_percent_from_mark))
+    state["last_candidate_move_abs"] = str(abs(move))
 
 
 def render_snapshot(

@@ -99,6 +99,8 @@ def _opportunity_key(kind: str, candidate) -> str:
 
 
 def _opportunity_rank_move(candidate) -> tuple[int, Decimal, str]:
+    if candidate.dynamic_victory_move_percent is not None:
+        return -1, abs(candidate.dynamic_victory_move_percent), "dynamic_victory"
     if candidate.move_percent_from_mark is not None:
         return 0, abs(candidate.move_percent_from_mark), "dynamic_top3"
     if candidate.base_fee_flat_move_percent is not None:
@@ -128,9 +130,9 @@ def _candidate_signal(scan: close1_candidate_scanner.CandidateScan, state: dict)
     if opportunity is None:
         return False
     kind, candidate = opportunity
-    if candidate.move_percent_from_mark is None:
+    rank, move_abs, source = _opportunity_rank_move(candidate)
+    if source not in {"dynamic_victory", "dynamic_top3"}:
         return False
-    move_abs = abs(candidate.move_percent_from_mark)
     if move_abs > CANDIDATE_NEAR:
         return False
 
@@ -330,33 +332,47 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
                 f"{candidate.taker_side.upper()} {candidate.qty} @ {candidate.px}"
                 f" / until {candidate.until}"
             )
-        if candidate.dynamic_top3_price is None or candidate.move_percent_from_mark is None:
+        if (
+            candidate.dynamic_victory_price is None
+            or candidate.dynamic_victory_move_percent is None
+        ):
             _, _, rank_source = _opportunity_rank_move(candidate)
-            if rank_source == "flat_target_fallback":
+            if rank_source == "dynamic_top3":
+                lines.append(f"best WATCH: {prefix} / ranking=dynamic top3")
+            elif rank_source == "flat_target_fallback":
                 lines.append(
-                    f"best WATCH: {prefix} / dynamic top3未確定"
+                    f"best WATCH: {prefix} / dynamic victory未確定 / dynamic top3未確定"
                     " / ranking=flat target fallback"
                 )
             else:
-                lines.append(f"best WATCH: {prefix} / dynamic top3未確定")
+                lines.append(f"best WATCH: {prefix} / dynamic victory未確定")
         else:
-            relation = ">=" if candidate.dynamic_condition == "above" else "<="
-            move = candidate.move_percent_from_mark * Decimal("100")
+            relation = ">=" if candidate.dynamic_victory_condition == "above" else "<="
+            move = candidate.dynamic_victory_move_percent * Decimal("100")
             lines.extend([
                 f"best WATCH: {prefix}",
-                f"visible-top3推定: final S {relation} "
-                f"{candidate.dynamic_top3_price.quantize(Decimal('0.01'))}"
+                "dynamic first-place +25推定: final S "
+                f"{relation} {candidate.dynamic_victory_price.quantize(Decimal('0.01'))}"
                 f" / mark比 {move:+.2f}%",
                 f"base fee: {candidate.base_fee} / required cash: {candidate.required_cash}",
             ])
-            if kind == "basket":
-                leg_text = ", ".join(
-                    f"{leg.trade_id}:{leg.qty}@{leg.px}" for leg in candidate.legs[:8]
-                )
-                if len(candidate.legs) > 8:
-                    leg_text += f", +{len(candidate.legs) - 8} more"
-                lines.append(f"basket legs: {leg_text}")
-                lines.append("basketは複数の別trade。各legごとにexact承認が必要です。")
+
+        if candidate.dynamic_top3_price is not None and candidate.move_percent_from_mark is not None:
+            relation = ">=" if candidate.dynamic_condition == "above" else "<="
+            move = candidate.move_percent_from_mark * Decimal("100")
+            lines.append(
+                f"visible-top3推定: final S {relation} "
+                f"{candidate.dynamic_top3_price.quantize(Decimal('0.01'))}"
+                f" / mark比 {move:+.2f}%"
+            )
+        if kind == "basket":
+            leg_text = ", ".join(
+                f"{leg.trade_id}:{leg.qty}@{leg.px}" for leg in candidate.legs[:8]
+            )
+            if len(candidate.legs) > 8:
+                leg_text += f", +{len(candidate.legs) - 8} more"
+            lines.append(f"basket legs: {leg_text}")
+            lines.append("basketは複数の別trade。各legごとにexact承認が必要です。")
 
         if (
             candidate.flat_target_score is not None
@@ -501,8 +517,9 @@ def _remember_scan(
         last_top3_cutoff=str(scan.top3_cutoff) if scan.top3_cutoff is not None else None,
         last_candidate_side=candidate.taker_side if candidate is not None else None,
         last_candidate_move_abs=(
-            str(abs(candidate.move_percent_from_mark))
-            if candidate is not None and candidate.move_percent_from_mark is not None
+            str(_opportunity_rank_move(candidate)[1])
+            if candidate is not None
+            and _opportunity_rank_move(candidate)[2] in {"dynamic_victory", "dynamic_top3"}
             else None
         ),
         last_candidate_trade_id=(

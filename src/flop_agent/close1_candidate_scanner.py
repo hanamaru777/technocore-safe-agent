@@ -46,6 +46,9 @@ class CandidateView:
     victory_target_score: Decimal | None = None
     base_fee_victory_exit_price: Decimal | None = None
     base_fee_victory_move_percent: Decimal | None = None
+    dynamic_victory_price: Decimal | None = None
+    dynamic_victory_condition: str | None = None
+    dynamic_victory_move_percent: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,9 @@ class BasketCandidateView:
     victory_target_score: Decimal | None = None
     base_fee_victory_exit_price: Decimal | None = None
     base_fee_victory_move_percent: Decimal | None = None
+    dynamic_victory_price: Decimal | None = None
+    dynamic_victory_condition: str | None = None
+    dynamic_victory_move_percent: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -391,6 +397,77 @@ def _nearest_dynamic_top3(
     return price, condition, (price - current_mark) / current_mark
 
 
+def _nearest_dynamic_victory(
+    *,
+    side: str,
+    qty: Decimal,
+    px: Decimal,
+    fee: Decimal,
+    current_mark: Decimal,
+    leaders: list[LeaderView],
+) -> tuple[Decimal, str, Decimal] | None:
+    """Nearest final price that beats every stable leader by 25 POLF.
+
+    The hurdle is dynamic at each possible final price and includes the full
+    visible plus stable-shadow leader universe.  The 100 POLF floor is kept as
+    a conservative minimum.  Incomplete leader coverage is never extrapolated.
+    """
+    stable = [leader for leader in leaders if leader.stable and leader.position is not None]
+    if len(stable) != len(leaders) or len(stable) < 3:
+        return None
+
+    margin = Decimal("25")
+
+    def qualifies(price: Decimal) -> bool:
+        ours = _project_candidate_score(side=side, qty=qty, px=px, fee=fee, final=price)
+        projected = [
+            close1_strategy.project_score(
+                current_score=leader.score,
+                current_mark=current_mark,
+                position=leader.position,
+                final_price=price,
+            ) + margin
+            for leader in stable
+        ]
+        hurdle = max([Decimal("100"), *projected])
+        # Crossover division can leave a sub-attounit Decimal rounding residue.
+        # Treat only that arithmetic residue as equality; this is far below any
+        # score precision exposed by the contest telemetry.
+        return ours >= hurdle or hurdle - ours <= Decimal("1e-18")
+
+    if qualifies(current_mark):
+        return current_mark, "at", Decimal("0")
+
+    crossings: set[Decimal] = set()
+    candidate_position = qty if side == "buy" else -qty
+    floor_crossing = px + (Decimal("100") + fee) / candidate_position
+    if floor_crossing > 0:
+        crossings.add(floor_crossing)
+
+    for leader in stable:
+        try:
+            cross = close1_strategy.crossover_vs_competitor(
+                side=side,
+                qty=qty,
+                px=px,
+                current_mark=current_mark,
+                competitor_score=leader.score + margin,
+                competitor_position=leader.position,
+                fee=fee,
+            )
+        except ValueError:
+            continue
+        if cross.price > 0:
+            crossings.add(cross.price)
+
+    qualifying = [price for price in crossings if qualifies(price)]
+    if not qualifying:
+        return None
+    price = min(qualifying, key=lambda value: abs(value - current_mark))
+    condition = "above" if price > current_mark else "below"
+    return price, condition, (price - current_mark) / current_mark
+
+
 def _flat_target_plan(
     *,
     side: str,
@@ -484,6 +561,20 @@ def _build_same_side_basket(
         move = None
     else:
         dynamic_top3_price, condition, move = dynamic
+    dynamic_victory = _nearest_dynamic_victory(
+        side=side,
+        qty=qty,
+        px=weighted_px,
+        fee=base_fee,
+        current_mark=current_mark,
+        leaders=leaders,
+    )
+    if dynamic_victory is None:
+        dynamic_victory_price = None
+        dynamic_victory_condition = None
+        dynamic_victory_move = None
+    else:
+        dynamic_victory_price, dynamic_victory_condition, dynamic_victory_move = dynamic_victory
 
     legs = tuple(BasketLegView(
         room=candidate.room,
@@ -545,6 +636,9 @@ def _build_same_side_basket(
         victory_target_score=victory_target_score,
         base_fee_victory_exit_price=victory_exit,
         base_fee_victory_move_percent=victory_move,
+        dynamic_victory_price=dynamic_victory_price,
+        dynamic_victory_condition=dynamic_victory_condition,
+        dynamic_victory_move_percent=dynamic_victory_move,
     )
 
 
@@ -821,6 +915,20 @@ def build_candidate_scan(
             move = None
         else:
             price_value, condition, move = dynamic
+        dynamic_victory = _nearest_dynamic_victory(
+            side=offer.taker_side,
+            qty=offer.qty,
+            px=offer.px,
+            fee=fee,
+            current_mark=mark,
+            leaders=leaders,
+        )
+        if dynamic_victory is None:
+            dynamic_victory_price = None
+            dynamic_victory_condition = None
+            dynamic_victory_move = None
+        else:
+            dynamic_victory_price, dynamic_victory_condition, dynamic_victory_move = dynamic_victory
         flat_plan = _flat_target_plan(
             side=offer.taker_side,
             qty=offer.qty,
@@ -872,9 +980,15 @@ def build_candidate_scan(
             victory_target_score=victory_target_score,
             base_fee_victory_exit_price=victory_exit,
             base_fee_victory_move_percent=victory_move,
+            dynamic_victory_price=dynamic_victory_price,
+            dynamic_victory_condition=dynamic_victory_condition,
+            dynamic_victory_move_percent=dynamic_victory_move,
         ))
 
     candidate_rows.sort(key=lambda item: (
+        item.dynamic_victory_price is None,
+        abs(item.dynamic_victory_move_percent)
+        if item.dynamic_victory_move_percent is not None else Decimal("999"),
         item.dynamic_top3_price is None,
         abs(item.move_percent_from_mark) if item.move_percent_from_mark is not None else Decimal("999"),
         -item.qty,
@@ -898,6 +1012,9 @@ def build_candidate_scan(
             if basket is not None:
                 basket_rows.append(basket)
     basket_rows.sort(key=lambda item: (
+        item.dynamic_victory_price is None,
+        abs(item.dynamic_victory_move_percent)
+        if item.dynamic_victory_move_percent is not None else Decimal("999"),
         item.dynamic_top3_price is None,
         abs(item.move_percent_from_mark) if item.move_percent_from_mark is not None else Decimal("999"),
         -item.qty,

@@ -302,6 +302,10 @@ def test_scanner_ranks_verified_long_candidate_against_dynamic_short_leaders(mon
     assert candidate.base_fee_victory_move_percent is not None
     assert candidate.base_fee_victory_exit_price > candidate.base_fee_flat_exit_price
     assert candidate.base_fee_victory_move_percent > candidate.base_fee_flat_move_percent
+    assert candidate.dynamic_victory_price is not None
+    assert candidate.dynamic_victory_condition == "above"
+    assert candidate.dynamic_victory_price > candidate.dynamic_top3_price
+    assert candidate.dynamic_victory_move_percent > candidate.move_percent_from_mark
     assert "clawback" in candidate.warning
 
 
@@ -329,6 +333,132 @@ def test_scanner_keeps_stable_shadow_longs_after_they_fall_out_of_latest_top(mon
     # crossover. Keeping three stable shadow longs correctly pushes the hurdle
     # far away because they re-enter the top3 on a rally.
     assert candidate.dynamic_top3_price > Decimal("400")
+    assert candidate.dynamic_victory_price is not None
+    assert candidate.dynamic_victory_condition == "above"
+    assert candidate.dynamic_victory_price > candidate.dynamic_top3_price
+
+
+def test_dynamic_victory_requires_plus_25_over_every_stable_leader():
+    leaders = [
+        scanner.LeaderView(
+            did=f"leader-{index}",
+            score=score,
+            position=Decimal("0"),
+            stable=True,
+            reason="visible",
+        )
+        for index, score in enumerate((Decimal("80"), Decimal("70"), Decimal("60")))
+    ]
+
+    result = scanner._nearest_dynamic_victory(
+        side="buy",
+        qty=Decimal("10"),
+        px=Decimal("100"),
+        fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=leaders,
+    )
+
+    assert result == (Decimal("110.5"), "above", Decimal("0.105"))
+
+
+def test_dynamic_victory_keeps_100_polf_floor():
+    leaders = [
+        scanner.LeaderView(
+            did=f"leader-{index}",
+            score=score,
+            position=Decimal("0"),
+            stable=True,
+            reason="visible",
+        )
+        for index, score in enumerate((Decimal("0"), Decimal("-10"), Decimal("-20")))
+    ]
+
+    result = scanner._nearest_dynamic_victory(
+        side="buy",
+        qty=Decimal("10"),
+        px=Decimal("100"),
+        fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=leaders,
+    )
+
+    assert result == (Decimal("110"), "above", Decimal("0.1"))
+
+
+def test_dynamic_victory_includes_opposite_direction_shadow_leader():
+    leaders = [
+        scanner.LeaderView(
+            "shadow-short",
+            Decimal("300"),
+            Decimal("-20"),
+            True,
+            "stable_shadow_leader",
+        ),
+        scanner.LeaderView("visible-a", Decimal("0"), Decimal("0"), True, "visible"),
+        scanner.LeaderView("visible-b", Decimal("0"), Decimal("0"), True, "visible"),
+    ]
+
+    result = scanner._nearest_dynamic_victory(
+        side="buy",
+        qty=Decimal("30"),
+        px=Decimal("100"),
+        fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=leaders,
+    )
+
+    assert result == (Decimal("106.5"), "above", Decimal("0.065"))
+
+
+def test_dynamic_victory_does_not_ignore_unbeatable_opposite_shadow_leader():
+    visible = [
+        scanner.LeaderView("current-long", Decimal("90"), Decimal("10"), True, "visible"),
+        scanner.LeaderView("visible-a", Decimal("0"), Decimal("0"), True, "visible"),
+        scanner.LeaderView("visible-b", Decimal("0"), Decimal("0"), True, "visible"),
+    ]
+    without_shadow = scanner._nearest_dynamic_victory(
+        side="sell",
+        qty=Decimal("30"),
+        px=Decimal("100"),
+        fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=visible,
+    )
+    shadow = scanner.LeaderView(
+        "shadow-short",
+        Decimal("300"),
+        Decimal("-50"),
+        True,
+        "stable_shadow_leader",
+    )
+
+    assert without_shadow is not None
+    assert scanner._nearest_dynamic_victory(
+        side="sell",
+        qty=Decimal("30"),
+        px=Decimal("100"),
+        fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=[*visible, shadow],
+    ) is None
+
+
+def test_dynamic_victory_fails_closed_for_incomplete_leader_coverage():
+    leaders = [
+        scanner.LeaderView("a", Decimal("80"), Decimal("0"), True, "visible"),
+        scanner.LeaderView("b", Decimal("70"), Decimal("0"), True, "visible"),
+        scanner.LeaderView("c", Decimal("60"), None, False, "unstable"),
+    ]
+
+    assert scanner._nearest_dynamic_victory(
+        side="buy",
+        qty=Decimal("10"),
+        px=Decimal("100"),
+        fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=leaders,
+    ) is None
 
 
 def test_scanner_builds_same_side_basket_from_verified_offers(monkeypatch):
@@ -366,6 +496,10 @@ def test_scanner_builds_same_side_basket_from_verified_offers(monkeypatch):
     assert basket.base_fee_victory_move_percent is not None
     assert basket.base_fee_victory_exit_price > basket.base_fee_flat_exit_price
     assert basket.base_fee_victory_move_percent > basket.base_fee_flat_move_percent
+    assert basket.dynamic_victory_price is not None
+    assert basket.dynamic_victory_condition == "above"
+    assert basket.dynamic_victory_move_percent is not None
+    assert basket.dynamic_victory_price > basket.dynamic_top3_price
     assert abs(basket.move_percent_from_mark) < min(
         abs(candidate.move_percent_from_mark)
         for candidate in report.candidates

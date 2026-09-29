@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -188,6 +189,24 @@ def test_manual_status_surfaces_candidate_scanner_without_binding_action():
     assert "best WATCH: BUY 4 @ 227.40" in message
     assert "visible-top3推定" in message
     assert "個別承認が必要" in message
+
+
+def test_manual_status_distinguishes_dynamic_victory_from_top3():
+    scan = candidate_scan()
+    candidate = replace(
+        scan.candidates[0],
+        dynamic_victory_price=Decimal("235.00"),
+        dynamic_victory_condition="above",
+        dynamic_victory_move_percent=Decimal("0.0385"),
+    )
+
+    message = close1_discord_progress.status_message(
+        fetcher=lambda: snapshot(),
+        candidate_fetcher=lambda: replace(scan, candidates=(candidate,)),
+    )
+
+    assert "dynamic first-place +25推定" in message
+    assert "visible-top3推定" in message
 
 
 def test_candidate_near_threshold_notifies_before_thirty_minutes(monkeypatch, tmp_path):
