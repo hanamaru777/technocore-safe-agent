@@ -1052,7 +1052,7 @@ def fetch_candidate_scan(
     return build_candidate_scan(
         our_did=our_did,
         price_room=core.read_room("d-close1-price", limit=2),
-        pnl_room=core.read_room("d-close1-pnl", limit=36),
+        pnl_room=core.read_room("d-close1-pnl", limit=120),
         positions_room=core.read_room("d-close1-positions", limit=2),
         negotiation_rooms={
             "close1": core.read_room("close1", limit=200),
