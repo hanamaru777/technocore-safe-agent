@@ -800,7 +800,7 @@ def test_fetch_candidate_scan_reads_only_expected_public_rooms(monkeypatch):
     assert report.max_visible_abs_position == Decimal("46.30")
     assert calls == [
         ("d-close1-price", 2),
-        ("d-close1-pnl", 36),
+        ("d-close1-pnl", 120),
         ("d-close1-positions", 2),
         ("close1", 200),
         ("close1-offers", 200),
