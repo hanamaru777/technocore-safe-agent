@@ -163,6 +163,99 @@ def test_near_candidate_and_material_improvement_send(monkeypatch, tmp_path):
     assert "勝ち筋候補接近" in improved["reasons"]
 
 
+def _victory_scan(move: str, *, trade_id: str = "victory", side: str = "buy"):
+    base = _scan(move="0.200", trade_id=trade_id, side=side)
+    candidate = replace(
+        base.candidates[0],
+        dynamic_victory_price=Decimal("250"),
+        dynamic_victory_condition="above" if side == "buy" else "below",
+        dynamic_victory_move_percent=Decimal(move),
+    )
+    return replace(base, candidates=(candidate,))
+
+
+def test_dynamic_victory_watch_band_alerts_on_material_improvement(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    sent = []
+    now = datetime(2026, 9, 29, 14, 0, tzinfo=UTC)
+
+    first = watch.run_once(
+        fetcher=lambda: _victory_scan("0.120"),
+        sender=sent.append,
+        now=now,
+    )
+    assert first["sent"] is True
+    assert first["reasons"] == ["監視開始"]
+    sent.clear()
+
+    enters_watch = watch.run_once(
+        fetcher=lambda: _victory_scan("0.099"),
+        sender=sent.append,
+        now=now,
+    )
+    assert enters_watch["sent"] is True
+    assert "勝ち筋候補接近" in enters_watch["reasons"]
+    sent.clear()
+
+    small_step = watch.run_once(
+        fetcher=lambda: _victory_scan("0.097", trade_id="churn-a"),
+        sender=sent.append,
+        now=now,
+    )
+    assert small_step["sent"] is False
+    assert sent == []
+
+    cumulative = watch.run_once(
+        fetcher=lambda: _victory_scan("0.094", trade_id="churn-b"),
+        sender=sent.append,
+        now=now,
+    )
+    assert cumulative["sent"] is True
+    assert "勝ち筋候補接近" in cumulative["reasons"]
+
+
+def test_dynamic_victory_watch_band_suppresses_nonmaterial_id_churn(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    sent = []
+    now = datetime(2026, 9, 29, 14, 0, tzinfo=UTC)
+
+    watch.run_once(
+        fetcher=lambda: _victory_scan("0.099"),
+        sender=sent.append,
+        now=now,
+    )
+    sent.clear()
+
+    churn = watch.run_once(
+        fetcher=lambda: _victory_scan("0.098", trade_id="new-basket"),
+        sender=sent.append,
+        now=now,
+    )
+    assert churn["sent"] is False
+    assert sent == []
+
+
+def test_dynamic_victory_near_band_keeps_new_key_alert(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    sent = []
+    now = datetime(2026, 9, 29, 14, 0, tzinfo=UTC)
+
+    watch.run_once(
+        fetcher=lambda: _victory_scan("0.028", trade_id="near-a"),
+        sender=sent.append,
+        now=now,
+    )
+    sent.clear()
+
+    near_churn = watch.run_once(
+        fetcher=lambda: _victory_scan("0.027", trade_id="near-b"),
+        sender=sent.append,
+        now=now,
+    )
+    assert near_churn["sent"] is True
+    assert "勝ち筋候補接近" in near_churn["reasons"]
+
+
 def test_best_opportunity_uses_flat_target_fallback_when_dynamic_is_unavailable():
     base = _scan(move="0.040", trade_id="single-a")
     a = replace(
