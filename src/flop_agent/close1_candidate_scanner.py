@@ -102,6 +102,20 @@ class RecentFlowView:
 
 
 @dataclass(frozen=True)
+class TwoStageCushionPlan:
+    fee_mode: str
+    second_side: str
+    qty: Decimal
+    entry_px: Decimal
+    entry_fee: Decimal
+    required_realized_cushion: Decimal
+    final_price: Decimal
+    condition: str
+    required_cash: Decimal
+    warning: str
+
+
+@dataclass(frozen=True)
 class CandidateScan:
     sweep: int
     reference: Decimal
@@ -120,6 +134,8 @@ class CandidateScan:
     top3_delta_10m: Decimal | None = None
     flat_target_score: Decimal | None = None
     victory_target_score: Decimal | None = None
+    maker_two_stage_plan: TwoStageCushionPlan | None = None
+    taker_two_stage_plan: TwoStageCushionPlan | None = None
 
 
 def _signed_decimal(value: object, *, label: str) -> Decimal:
@@ -466,6 +482,168 @@ def _nearest_dynamic_victory(
     price = min(qualifying, key=lambda value: abs(value - current_mark))
     condition = "above" if price > current_mark else "below"
     return price, condition, (price - current_mark) / current_mark
+
+
+def _dynamic_victory_hurdle(
+    *,
+    final: Decimal,
+    current_mark: Decimal,
+    leaders: list[LeaderView],
+) -> Decimal:
+    stable = [leader for leader in leaders if leader.stable and leader.position is not None]
+    if len(stable) != len(leaders) or len(stable) < 3:
+        raise ValueError("close1_scanner_incomplete_victory_leaders")
+    projected = [
+        close1_strategy.project_score(
+            current_score=leader.score,
+            current_mark=current_mark,
+            position=leader.position,
+            final_price=final,
+        ) + Decimal("25")
+        for leader in stable
+    ]
+    return max([Decimal("100"), *projected])
+
+
+def _minimum_realized_cushion(
+    *,
+    side: str,
+    qty: Decimal,
+    px: Decimal,
+    fee: Decimal,
+    current_mark: Decimal,
+    leaders: list[LeaderView],
+) -> tuple[Decimal, Decimal, str] | None:
+    """Minimum banked score needed before a second-stage position can win.
+
+    This solves the lower envelope of the required realized-score cushion
+    against the full dynamic first-place +25 hurdle.  It is read-only strategy
+    math.  A zero result means the supplied position can already win in one
+    stage under the same model.
+    """
+    stable = [leader for leader in leaders if leader.stable and leader.position is not None]
+    if len(stable) != len(leaders) or len(stable) < 3:
+        return None
+
+    direct = _nearest_dynamic_victory(
+        side=side,
+        qty=qty,
+        px=px,
+        fee=fee,
+        current_mark=current_mark,
+        leaders=stable,
+    )
+    if direct is not None:
+        price, condition, _ = direct
+        return Decimal("0"), price, condition
+
+    # Hurdle lines are affine in final price.  After subtracting the supplied
+    # position's affine score, the required cushion is the maximum of affine
+    # lines, hence convex.  Its finite minimum occurs at a line intersection
+    # or the positive-price boundary.
+    lines: list[tuple[Decimal, Decimal]] = [(Decimal("100"), Decimal("0"))]
+    for leader in stable:
+        position = leader.position
+        assert position is not None
+        intercept = leader.score + Decimal("25") - position * current_mark
+        lines.append((intercept, position))
+
+    prices: set[Decimal] = {Decimal("0.01"), current_mark}
+    for index, (a1, m1) in enumerate(lines):
+        for a2, m2 in lines[index + 1:]:
+            if m1 == m2:
+                continue
+            price = (a2 - a1) / (m1 - m2)
+            if price > 0:
+                prices.add(price)
+
+    rows: list[tuple[Decimal, Decimal, Decimal]] = []
+    for price in prices:
+        hurdle = _dynamic_victory_hurdle(
+            final=price,
+            current_mark=current_mark,
+            leaders=stable,
+        )
+        ours = _project_candidate_score(
+            side=side,
+            qty=qty,
+            px=px,
+            fee=fee,
+            final=price,
+        )
+        cushion = max(Decimal("0"), hurdle - ours)
+        rows.append((cushion, abs(price - current_mark), price))
+
+    if not rows:
+        return None
+    cushion, _, price = min(rows)
+    condition = "at" if price == current_mark else ("above" if price > current_mark else "below")
+    return cushion, price, condition
+
+
+def _best_two_stage_cushion_plan(
+    *,
+    fee_mode: str,
+    current_mark: Decimal,
+    leaders: list[LeaderView],
+) -> TwoStageCushionPlan | None:
+    """Choose a near-max second-stage position with the smallest cushion floor."""
+    if fee_mode not in {"maker_clawback_neutral_lower_bound", "taker_base_fee_lower_bound"}:
+        raise ValueError("close1_scanner_two_stage_fee_mode_invalid")
+    stable = [leader for leader in leaders if leader.stable and leader.position is not None]
+    if len(stable) != len(leaders) or len(stable) < 3:
+        return None
+
+    rows: list[tuple[Decimal, Decimal, Decimal, TwoStageCushionPlan]] = []
+    for side in ("buy", "sell"):
+        for qty in (Decimal("40"), Decimal("42"), Decimal("44"), Decimal("46")):
+            fee = (
+                Decimal("0")
+                if fee_mode == "maker_clawback_neutral_lower_bound"
+                else close1_strategy.base_fee(qty=qty, px=current_mark)
+            )
+            result = _minimum_realized_cushion(
+                side=side,
+                qty=qty,
+                px=current_mark,
+                fee=fee,
+                current_mark=current_mark,
+                leaders=stable,
+            )
+            if result is None:
+                continue
+            cushion, final_price, condition = result
+            required_cash = qty * current_mark + fee
+            # Once flat, banked score is cash above the 10,000 POLF mint.
+            if close_call.MINT + cushion < required_cash:
+                continue
+            if fee_mode == "maker_clawback_neutral_lower_bound":
+                warning = (
+                    "theoretical lower bound assuming a favorable maker quote whose price edge is "
+                    "fully neutralized by sweep-close clawback, so effective entry is near the "
+                    "sweep close with no additional modeled fee; actual fill/close can differ and "
+                    "posting any offer is a separate binding action requiring approval"
+                )
+            else:
+                warning = (
+                    "taker/base-fee lower bound only; actual sweep-close clawback can exceed the "
+                    "1% fee and future leader trades or unseen accounts can raise the hurdle"
+                )
+            plan = TwoStageCushionPlan(
+                fee_mode=fee_mode,
+                second_side=side,
+                qty=qty,
+                entry_px=current_mark,
+                entry_fee=fee,
+                required_realized_cushion=cushion,
+                final_price=final_price,
+                condition=condition,
+                required_cash=required_cash,
+                warning=warning,
+            )
+            rows.append((cushion, abs(final_price - current_mark), -qty, plan))
+
+    return min(rows)[3] if rows else None
 
 
 def _flat_target_plan(
@@ -878,6 +1056,8 @@ def build_candidate_scan(
             top3_delta_10m=top3_delta_10m,
             flat_target_score=flat_target_score,
             victory_target_score=victory_target_score,
+            maker_two_stage_plan=None,
+            taker_two_stage_plan=None,
         )
 
     candidate_rows: list[CandidateView] = []
@@ -1021,6 +1201,17 @@ def build_candidate_scan(
         item.until,
     ))
 
+    maker_two_stage_plan = _best_two_stage_cushion_plan(
+        fee_mode="maker_clawback_neutral_lower_bound",
+        current_mark=mark,
+        leaders=leaders,
+    )
+    taker_two_stage_plan = _best_two_stage_cushion_plan(
+        fee_mode="taker_base_fee_lower_bound",
+        current_mark=mark,
+        leaders=leaders,
+    )
+
     return CandidateScan(
         sweep=sweep,
         reference=reference,
@@ -1039,6 +1230,8 @@ def build_candidate_scan(
         top3_delta_10m=top3_delta_10m,
         flat_target_score=flat_target_score,
         victory_target_score=victory_target_score,
+        maker_two_stage_plan=maker_two_stage_plan,
+        taker_two_stage_plan=taker_two_stage_plan,
     )
 
 
