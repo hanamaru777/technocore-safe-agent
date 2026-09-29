@@ -5,7 +5,7 @@ umask 022
 APP=/opt/technocore-safe-agent
 PY=$APP/.venv/bin/python
 OLD=bf2be7d8de2dbc6b063d780642f764121deb60a4
-TARGET=3bc837fa1c1b4422607ff7b1966052d56763c3a3
+TARGET=2092ee877cd2bf5656e9265308736419716405e0
 OBS=/var/lib/technocore-safe-agent/observer/observer-state.json
 WATCH_STATE=/var/lib/technocore-safe-agent/observer/close1-standalone-watch.json
 
