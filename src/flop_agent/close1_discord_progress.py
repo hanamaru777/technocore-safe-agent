@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
-from . import close1_candidate_scanner, close_call, observer, resident
+from . import close1_account_reconciliation, close1_candidate_scanner, close_call, observer, resident
 
 LOG = logging.getLogger(__name__)
 
@@ -20,8 +20,6 @@ TOP3_MATERIAL_DELTA = Decimal("10")
 CANDIDATE_NEAR_THRESHOLD = Decimal("0.02")
 CANDIDATE_IMPROVEMENT_DELTA = Decimal("0.005")
 OWNER_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
-ASSUMED_AVAILABLE_CASH = "10000"
-ASSUMED_CURRENT_POSITION = "0"
 PRESSURE_MIN_MEM_AVAILABLE_BYTES = 256 * 1024 * 1024
 PRESSURE_MAX_MEMORY_PSI_FULL_AVG10 = Decimal("5")
 PRESSURE_MAX_IO_PSI_FULL_AVG10 = Decimal("10")
@@ -145,10 +143,12 @@ def _leader_score(snapshot: close_call.LiveSnapshot) -> Decimal | None:
 
 
 def _candidate_fetch() -> close1_candidate_scanner.CandidateScan:
+    ledger = close1_account_reconciliation.reconcile_pending(owner_did=OWNER_DID)
+    available_cash, current_position = close1_account_reconciliation.scanner_account(ledger)
     return close1_candidate_scanner.fetch_candidate_scan(
         our_did=OWNER_DID,
-        available_cash=ASSUMED_AVAILABLE_CASH,
-        current_position=ASSUMED_CURRENT_POSITION,
+        available_cash=available_cash,
+        current_position=current_position,
     )
 
 
@@ -221,7 +221,7 @@ def _candidate_lines(
             f"/ 現在mark比 {move_pct:+.2f}%"
         )
     lines.extend([
-        "前提: 当方 10,000 POLF / position 0（初回settle前のread-only仮定）",
+        "前提: strategy scannerはreconciled owner ledgerのみ使用。pending/unreconciled時は候補停止。",
         "注意: shadow leaders込み。leader/future trades・未観測account・clawbackで勝利条件は変動します。",
         "取引: WATCHのみ。binding実行はexact tradeごとの個別承認が必要。",
     ])
