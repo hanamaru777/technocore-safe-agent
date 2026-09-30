@@ -15,13 +15,11 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable
 
-from . import close1_candidate_scanner, observer, resident
+from . import close1_account_reconciliation, close1_candidate_scanner, observer, resident
 
 SCHEMA_VERSION = 1
 STATE_FILE = "close1-standalone-watch.json"
 OWNER_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
-AVAILABLE_CASH = "10000"
-CURRENT_POSITION = "0"
 
 PRICE_SHOCK = Decimal("0.0075")
 TOP3_DELTA = Decimal("10")
@@ -599,13 +597,31 @@ def run_once(
     current = current.astimezone(UTC)
 
     state = _load_state()
-    fetch = fetcher or (
-        lambda: close1_candidate_scanner.fetch_candidate_scan(
+    if fetcher is None:
+        ledger = None
+        try:
+            ledger = close1_account_reconciliation.reconcile_pending(owner_did=OWNER_DID)
+            available_cash, current_position = close1_account_reconciliation.scanner_account(ledger)
+        except Exception:
+            own_status = (
+                ledger.get("status", "own_state_unreconciled")
+                if isinstance(ledger, dict)
+                else "own_state_unreconciled"
+            )
+            state["last_error"] = f"own_state:{own_status}"
+            _save_state(state)
+            return {
+                "status": "own_state_unreconciled",
+                "own_state_status": own_status,
+                "sent": False,
+            }
+        fetch = lambda: close1_candidate_scanner.fetch_candidate_scan(
             our_did=OWNER_DID,
-            available_cash=AVAILABLE_CASH,
-            current_position=CURRENT_POSITION,
+            available_cash=available_cash,
+            current_position=current_position,
         )
-    )
+    else:
+        fetch = fetcher
     send = sender or _discord_post
 
     try:
