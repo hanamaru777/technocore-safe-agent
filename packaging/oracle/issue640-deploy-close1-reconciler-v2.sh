@@ -28,6 +28,7 @@ OWNER=''
 SOURCE_UPDATED=NO
 TIMER_STOPPED=NO
 COMMITTED=NO
+SOURCE_MODE=''
 
 git_owner() { runuser -u "$OWNER" -- git -C "$APP" "$@"; }
 
@@ -103,7 +104,14 @@ OWNER=$(stat -c %U "$APP/.git" 2>/dev/null || true)
 HEAD=$(git_owner rev-parse HEAD)
 BRANCH=$(git_owner branch --show-current)
 WORKTREE=$(git_owner status --porcelain=v1 --untracked-files=all)
-[[ "$HEAD" == "$OLD" && "$BRANCH" == main && -z "$WORKTREE" ]] || stop_now repo_baseline_changed
+[[ "$BRANCH" == main && -z "$WORKTREE" ]] || stop_now repo_baseline_changed
+if [[ "$HEAD" == "$OLD" ]]; then
+  SOURCE_MODE=old_needs_update
+elif [[ "$HEAD" == "$TARGET" ]]; then
+  SOURCE_MODE=target_already_present
+else
+  stop_now repo_baseline_changed
+fi
 
 [[ "$(systemctl is-enabled "$WATCH_TIMER" 2>/dev/null || true)" == enabled ]] || stop_now watcher_timer_not_enabled
 [[ "$(systemctl is-active "$WATCH_TIMER" 2>/dev/null || true)" == active ]] || stop_now watcher_timer_not_active
@@ -130,8 +138,12 @@ active=$(systemctl is-active "$WATCH_SERVICE" 2>/dev/null || true)
 git_owner fetch --no-tags origin refs/heads/main
 FETCHED=$(git_owner rev-parse FETCH_HEAD)
 [[ "$FETCHED" == "$TARGET" ]] || false
-git_owner merge --ff-only "$TARGET"
-SOURCE_UPDATED=YES
+if [[ "$SOURCE_MODE" == old_needs_update ]]; then
+  git_owner merge --ff-only "$TARGET"
+  SOURCE_UPDATED=YES
+else
+  [[ "$(git_owner rev-parse HEAD)" == "$TARGET" ]] || false
+fi
 
 [[ "$(git_owner rev-parse HEAD)" == "$TARGET" ]] || false
 [[ "$(git_owner branch --show-current)" == main ]] || false

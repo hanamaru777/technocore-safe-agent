@@ -11,6 +11,8 @@ def test_exact_transition_is_pinned():
     x=s()
     assert "OLD=2092ee877cd2bf5656e9265308736419716405e0" in x
     assert "TARGET=facf67e8b8565dd311fabcea1920dc14dd2088f0" in x
+    assert 'SOURCE_MODE=old_needs_update' in x
+    assert 'SOURCE_MODE=target_already_present' in x
     assert 'git_owner merge --ff-only "$TARGET"' in x
     assert "umask 022" in x
     assert 'close1_account_reconciliation.py' in x
