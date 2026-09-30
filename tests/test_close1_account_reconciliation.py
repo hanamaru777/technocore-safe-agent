@@ -88,7 +88,8 @@ def _index(*entries):
 def _pending(trade_id="trade-a", sweep=200):
     ledger = account.checkpoint_ledger()
     ledger["pending_trades"][trade_id] = {
-        "expected_sweep": sweep,
+        "search_start_sweep": sweep,
+        "next_search_sweep": sweep,
         "marked_at": "2026-09-30T00:00:00+00:00",
     }
     ledger["pending_trade_ids"] = [trade_id]
@@ -110,10 +111,10 @@ def test_trusted_checkpoint_is_exact_flat_account():
 def test_pending_marker_is_durable_idempotent_and_blocks_scanner(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     first = account.mark_pending(
-        "future-trade", expected_sweep=201, now="2026-09-30T01:00:00+00:00"
+        "future-trade", search_start_sweep=201, now="2026-09-30T01:00:00+00:00"
     )
     second = account.mark_pending(
-        "future-trade", expected_sweep=201, now="2026-09-30T02:00:00+00:00"
+        "future-trade", search_start_sweep=202, now="2026-09-30T02:00:00+00:00"
     )
 
     assert first == second
@@ -122,11 +123,11 @@ def test_pending_marker_is_durable_idempotent_and_blocks_scanner(monkeypatch, tm
         account.scanner_account(second)
 
 
-def test_pending_marker_rejects_binding_conflict(monkeypatch, tmp_path):
+def test_pending_marker_reuses_original_search_cursor(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
-    account.mark_pending("future-trade", expected_sweep=201)
-    with pytest.raises(RuntimeError, match="pending_binding_conflict"):
-        account.mark_pending("future-trade", expected_sweep=202)
+    first = account.mark_pending("future-trade", search_start_sweep=201)
+    second = account.mark_pending("future-trade", search_start_sweep=202)
+    assert second == first
 
 
 def test_settled_maker_buy_and_sell_use_exact_fees_and_fifo():
@@ -151,7 +152,8 @@ def test_settled_maker_buy_and_sell_use_exact_fees_and_fifo():
         taker_fee="4.4",
     )
     opened["pending_trades"]["trade-b"] = {
-        "expected_sweep": 201,
+        "search_start_sweep": 201,
+        "next_search_sweep": 201,
         "marked_at": "2026-09-30T01:00:00+00:00",
     }
     opened["pending_trade_ids"] = ["trade-b"]
@@ -198,7 +200,8 @@ def test_fifo_partial_close_and_flip_matches_frozen_account_transition():
         maker_fee="10.5",
     )
     opened["pending_trades"]["trade-b"] = {
-        "expected_sweep": 201,
+        "search_start_sweep": 201,
+        "next_search_sweep": 201,
         "marked_at": "2026-09-30T01:00:00+00:00",
     }
     opened["pending_trade_ids"] = ["trade-b"]
@@ -225,7 +228,8 @@ def test_long_partial_then_full_close_preserves_fifo_cash_semantics():
         (202, "trade-c", "2", "220", "4.4"),
     ):
         ledger["pending_trades"][trade_id] = {
-            "expected_sweep": sweep,
+            "search_start_sweep": sweep,
+            "next_search_sweep": sweep,
             "marked_at": "2026-09-30T01:00:00+00:00",
         }
         ledger["pending_trade_ids"] = [trade_id]
@@ -261,7 +265,8 @@ def test_short_open_partial_and_full_close_preserves_fifo_cash_semantics():
         (202, "trade-c", "2", "180", "3.6"),
     ):
         ledger["pending_trades"][trade_id] = {
-            "expected_sweep": sweep,
+            "search_start_sweep": sweep,
+            "next_search_sweep": sweep,
             "marked_at": "2026-09-30T01:00:00+00:00",
         }
         ledger["pending_trade_ids"] = [trade_id]
@@ -313,7 +318,7 @@ def test_hash_mismatch_fails_closed_without_balance_mutation():
     assert result["pending_trades"] == before["pending_trades"]
 
 
-def test_missing_outcome_and_missing_pending_input_fail_closed():
+def test_found_trade_with_missing_outcome_fails_closed_but_absence_advances_cursor():
     entry, raw = _record()
     value = json.loads(raw)
     value["output"]["trades"] = []
@@ -326,12 +331,52 @@ def test_missing_outcome_and_missing_pending_input_fail_closed():
     assert result["status"] == "own_state_unreconciled"
     assert result["reason"] == "close1_archive_trade_alignment_invalid"
 
-    other_entry, other_raw = _record(trade_id="different")
+    other_entry, other_raw = _record(
+        trade_id="different",
+        maker=OTHER,
+        countersigner="did:key:z6MkeVj5ofGVVYiBgBL2se7GHN7TkgTPP4vPAJpYB8n5bh3G",
+    )
     missing = account.reconcile_records(
         _pending(), archive_tip_sweep=200, records=[(other_entry, other_raw)]
     )
-    assert missing["status"] == "own_state_unreconciled"
-    assert missing["reason"] == "close1_archive_pending_trade_missing"
+    assert missing["status"] == "own_state_pending"
+    assert missing["reason"] == "binding_awaiting_archive"
+    assert missing["pending_trades"]["trade-a"]["next_search_sweep"] == 201
+
+
+def test_found_trade_with_mismatched_output_id_fails_closed():
+    entry, raw = _record()
+    value = json.loads(raw)
+    value["output"]["trades"][0]["id"] = "different"
+    malformed = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    digest = hashlib.sha256(malformed).hexdigest()
+    entry.update(file=digest, path=f"sweeps/{digest}.json", bytes=len(malformed))
+
+    result = account.reconcile_records(
+        _pending(), archive_tip_sweep=200, records=[(entry, malformed)]
+    )
+
+    assert result["status"] == "own_state_unreconciled"
+    assert result["reason"] == "close1_archive_trade_outcome_missing"
+    assert result["cash"] == "10000"
+
+
+def test_duplicate_trade_occurrence_in_one_sweep_fails_closed():
+    entry, raw = _record()
+    value = json.loads(raw)
+    value["input"]["trades"].append(deepcopy(value["input"]["trades"][0]))
+    value["output"]["trades"].append(deepcopy(value["output"]["trades"][0]))
+    duplicate = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    digest = hashlib.sha256(duplicate).hexdigest()
+    entry.update(file=digest, path=f"sweeps/{digest}.json", bytes=len(duplicate))
+
+    result = account.reconcile_records(
+        _pending(), archive_tip_sweep=200, records=[(entry, duplicate)]
+    )
+
+    assert result["status"] == "own_state_unreconciled"
+    assert result["reason"] == "close1_archive_duplicate_trade_id"
+    assert result["cash"] == "10000"
 
 
 def test_reconciliation_is_idempotent_and_conflicting_duplicate_fails_closed():
@@ -371,6 +416,7 @@ def test_archive_lag_keeps_pending_and_does_not_fetch_a_sweep(monkeypatch, tmp_p
     assert result["status"] == "own_state_pending"
     assert result["reason"] == "archive_lag"
     assert result["pending_trades"]
+    assert result["pending_trades"]["trade-a"]["next_search_sweep"] == 201
     assert calls == [(account.INDEX_URL, account.INDEX_MAX_BYTES)]
 
 
@@ -388,7 +434,7 @@ def test_unrelated_archive_trade_does_not_change_owner_account():
     assert result["as_of_sweep"] == account.CHECKPOINT_SWEEP
 
 
-def test_exact_pending_sweep_is_hash_checked_fetched_and_persisted(monkeypatch, tmp_path):
+def test_pending_trade_is_hash_checked_fetched_and_persisted(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     account.save_ledger(_pending())
     entry, raw = _record()
@@ -418,6 +464,69 @@ def test_exact_pending_sweep_is_hash_checked_fetched_and_persisted(monkeypatch, 
     assert len(calls) == 2
 
 
+def test_pending_trade_absent_then_present_next_sweep_reconciles(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    account.save_ledger(_pending())
+    unrelated_entry, unrelated_raw = _record(
+        sweep=200,
+        trade_id="unrelated",
+        maker=OTHER,
+        countersigner="did:key:z6MkeVj5ofGVVYiBgBL2se7GHN7TkgTPP4vPAJpYB8n5bh3G",
+    )
+    settled_entry, settled_raw = _record(sweep=201)
+    entries = (unrelated_entry, settled_entry)
+    payloads = {
+        account.ARCHIVE_BASE + unrelated_entry["path"]: unrelated_raw,
+        account.ARCHIVE_BASE + settled_entry["path"]: settled_raw,
+    }
+
+    result = account.reconcile_pending(
+        fetcher=lambda url, limit: _index(*entries) if url == account.INDEX_URL else payloads[url]
+    )
+
+    assert result["status"] == "reconciled"
+    assert result["settled_trade_ids"] == ["trade-a"]
+    assert result["as_of_sweep"] == 201
+    assert [row["sweep"] for row in result["source_evidence"][1:]] == [200, 201]
+    assert result["source_evidence"][1]["trade_ids"] == []
+
+
+def test_bounded_search_cursor_resumes_without_refetching_prior_sweeps(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    account.save_ledger(_pending())
+    third = "did:key:z6MkeVj5ofGVVYiBgBL2se7GHN7TkgTPP4vPAJpYB8n5bh3G"
+    entries = []
+    payloads = {}
+    for sweep in range(200, 207):
+        kwargs = (
+            {"trade_id": "trade-a", "maker": OWNER, "countersigner": OTHER}
+            if sweep == 206
+            else {"trade_id": f"unrelated-{sweep}", "maker": OTHER, "countersigner": third}
+        )
+        entry, raw = _record(sweep=sweep, **kwargs)
+        entries.append(entry)
+        payloads[account.ARCHIVE_BASE + entry["path"]] = raw
+    calls = []
+
+    def fetch(url, limit):
+        calls.append(url)
+        return _index(*entries) if url == account.INDEX_URL else payloads[url]
+
+    first = account.reconcile_pending(fetcher=fetch)
+    assert first["status"] == "own_state_pending"
+    assert first["reason"] == "bounded_reconciliation_remaining"
+    assert first["pending_trades"]["trade-a"]["next_search_sweep"] == 204
+    first_calls = list(calls)
+
+    second = account.reconcile_pending(fetcher=fetch)
+    assert second["status"] == "reconciled"
+    assert second["settled_trade_ids"] == ["trade-a"]
+    second_sweep_urls = calls[len(first_calls) + 1 :]
+    assert second_sweep_urls == [
+        account.ARCHIVE_BASE + entries[index]["path"] for index in (4, 5, 6)
+    ]
+
+
 def test_transient_archive_failure_can_recover_without_binding_retry(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     account.save_ledger(_pending())
@@ -444,7 +553,8 @@ def test_reconciliation_fetch_count_is_bounded_per_run(monkeypatch, tmp_path):
         sweep = 200 + offset
         trade_id = f"trade-{offset}"
         ledger["pending_trades"][trade_id] = {
-            "expected_sweep": sweep,
+            "search_start_sweep": sweep,
+            "next_search_sweep": sweep,
             "marked_at": "2026-09-30T00:00:00+00:00",
         }
         entry, raw = _record(sweep=sweep, trade_id=trade_id, qty="1", maker_fee="2")
@@ -467,7 +577,7 @@ def test_reconciliation_fetch_count_is_bounded_per_run(monkeypatch, tmp_path):
     assert len(calls) == 1 + account.MAX_PENDING_SWEEPS_PER_RUN
 
 
-def test_redacted_exact_pending_sweep_fails_closed(monkeypatch, tmp_path):
+def test_redacted_candidate_search_sweep_fails_closed(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     account.save_ledger(_pending())
     digest = "a" * 64
@@ -485,6 +595,22 @@ def test_redacted_exact_pending_sweep_fails_closed(monkeypatch, tmp_path):
 
     assert result["status"] == "own_state_unreconciled"
     assert result["reason"] == "close1_archive_relevant_sweep_redacted"
+
+
+@pytest.mark.parametrize("mapping_name", ["void_trades", "trade_evidence"])
+def test_invalid_terminal_mapping_key_loads_fail_closed(monkeypatch, tmp_path, mapping_name):
+    _state_dir(monkeypatch, tmp_path)
+    ledger = account.checkpoint_ledger()
+    ledger[mapping_name]["invalid key!"] = (
+        "reason" if mapping_name == "void_trades" else "a" * 64
+    )
+    account.state_path().write_text(json.dumps(ledger), encoding="utf-8")
+
+    loaded = account.load_ledger()
+
+    assert loaded["status"] == "own_state_unreconciled"
+    assert loaded["reason"] == "ledger_invalid"
+    assert loaded["cash"] is None
 
 
 def test_corrupt_ledger_is_not_reset_to_flat(monkeypatch, tmp_path):

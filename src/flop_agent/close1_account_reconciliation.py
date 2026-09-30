@@ -22,7 +22,7 @@ from typing import Callable
 
 from . import close_call, observer, resident
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 STATE_FILE = "close1-own-account.json"
 OWNER_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
 CHECKPOINT_SWEEP = 189
@@ -167,7 +167,13 @@ def _validate_ledger(value: object, *, owner_did: str = OWNER_DID) -> dict:
     if any(not isinstance(item, str) or not close_call.TRADE_ID_RE.fullmatch(item) for item in settled):
         raise ValueError("close1_account_settled_ids_invalid")
     for name in ("void_trades", "pending_trades", "trade_evidence"):
-        if not isinstance(value.get(name), dict):
+        mapping = value.get(name)
+        if not isinstance(mapping, dict):
+            raise ValueError(f"close1_account_{name}_invalid")
+        if any(
+            not isinstance(key, str) or not close_call.TRADE_ID_RE.fullmatch(key)
+            for key in mapping
+        ):
             raise ValueError(f"close1_account_{name}_invalid")
     pending_ids = value.get("pending_trade_ids")
     if (
@@ -181,22 +187,26 @@ def _validate_ledger(value: object, *, owner_did: str = OWNER_DID) -> dict:
         or pending_ids != sorted(value["pending_trades"])
     ):
         raise ValueError("close1_account_pending_ids_invalid")
-        if any(not isinstance(key, str) or not close_call.TRADE_ID_RE.fullmatch(key) for key in value[name]):
-            raise ValueError(f"close1_account_{name}_invalid")
     if any(not isinstance(reason, str) or not reason for reason in value["void_trades"].values()):
         raise ValueError("close1_account_void_trades_invalid")
     if any(not isinstance(item, str) or not HEX64_RE.fullmatch(item) for item in value["trade_evidence"].values()):
         raise ValueError("close1_account_trade_evidence_invalid")
     for item in value["pending_trades"].values():
-        if not isinstance(item, dict) or set(item) != {"expected_sweep", "marked_at"}:
+        if not isinstance(item, dict) or set(item) != {
+            "search_start_sweep", "next_search_sweep", "marked_at"
+        }:
             raise ValueError("close1_account_pending_invalid")
         if (
-            type(item["expected_sweep"]) is not int
-            or not CHECKPOINT_SWEEP < item["expected_sweep"] <= close_call.LOCK_SWEEP
+            type(item["search_start_sweep"]) is not int
+            or not CHECKPOINT_SWEEP < item["search_start_sweep"] <= close_call.LOCK_SWEEP
         ):
-            raise ValueError("close1_account_pending_sweep_invalid")
-        if item["expected_sweep"] <= value["as_of_sweep"]:
-            raise ValueError("close1_account_pending_sweep_not_future")
+            raise ValueError("close1_account_search_start_invalid")
+        if (
+            type(item["next_search_sweep"]) is not int
+            or not item["search_start_sweep"] <= item["next_search_sweep"] <= close_call.LOCK_SWEEP + 1
+            or item["next_search_sweep"] <= value["as_of_sweep"]
+        ):
+            raise ValueError("close1_account_search_cursor_invalid")
         if not isinstance(item["marked_at"], str):
             raise ValueError("close1_account_pending_time_invalid")
     if not isinstance(value["source_evidence"], list) or len(value["source_evidence"]) > close_call.LOCK_SWEEP + 1:
@@ -226,7 +236,6 @@ def _validate_ledger(value: object, *, owner_did: str = OWNER_DID) -> dict:
                 raise ValueError("close1_account_archive_evidence_invalid")
             if (
                 not isinstance(evidence["trade_ids"], list)
-                or not evidence["trade_ids"]
                 or any(
                     not isinstance(trade_id, str)
                     or not close_call.TRADE_ID_RE.fullmatch(trade_id)
@@ -279,32 +288,35 @@ def save_ledger(ledger: dict) -> None:
 def mark_pending(
     trade_id: str,
     *,
-    expected_sweep: int,
+    search_start_sweep: int,
     owner_did: str = OWNER_DID,
     now: str | None = None,
 ) -> dict:
-    """Persist the public binding identifier before a future irreversible write."""
+    """Persist the binding before a write; the sweep is a search anchor, not a settlement claim."""
     if not isinstance(trade_id, str) or not close_call.TRADE_ID_RE.fullmatch(trade_id):
         raise ValueError("close1_account_trade_id_invalid")
     if (
-        type(expected_sweep) is not int
-        or not CHECKPOINT_SWEEP < expected_sweep <= close_call.LOCK_SWEEP
+        type(search_start_sweep) is not int
+        or not CHECKPOINT_SWEEP < search_start_sweep <= close_call.LOCK_SWEEP
     ):
-        raise ValueError("close1_account_pending_sweep_invalid")
+        raise ValueError("close1_account_search_start_invalid")
     ledger = load_ledger(owner_did=owner_did)
     _validate_ledger(ledger, owner_did=owner_did)
     if ledger["status"] == "own_state_unreconciled":
         raise RuntimeError("close1_own_state_unreconciled")
-    if expected_sweep <= ledger["as_of_sweep"]:
-        raise ValueError("close1_account_pending_sweep_not_future")
     if trade_id in ledger["settled_trade_ids"] or trade_id in ledger["void_trades"]:
         raise RuntimeError("close1_trade_already_terminal")
     existing = ledger["pending_trades"].get(trade_id)
-    marker = {"expected_sweep": expected_sweep, "marked_at": now or _now()}
     if existing is not None:
-        if existing["expected_sweep"] != expected_sweep:
-            raise RuntimeError("close1_pending_binding_conflict")
         return ledger
+    cursor = max(search_start_sweep, ledger["as_of_sweep"] + 1)
+    if cursor > close_call.LOCK_SWEEP:
+        raise ValueError("close1_account_search_start_after_lock")
+    marker = {
+        "search_start_sweep": cursor,
+        "next_search_sweep": cursor,
+        "marked_at": now or _now(),
+    }
     ledger["pending_trades"][trade_id] = marker
     ledger["pending_trade_ids"] = sorted(ledger["pending_trades"])
     ledger.update(status="own_state_pending", reason="binding_awaiting_archive")
@@ -467,7 +479,18 @@ def reconcile_records(
             inputs, outputs = input_value.get("trades"), output_value.get("trades")
             if not isinstance(inputs, list) or not isinstance(outputs, list) or len(inputs) != len(outputs):
                 raise ValueError("close1_archive_trade_alignment_invalid")
-            found_pending: set[str] = set()
+            searching_ids = {
+                trade_id
+                for trade_id, marker in working["pending_trades"].items()
+                if marker["next_search_sweep"] == sweep
+            }
+            if working["pending_trades"]:
+                next_cursor = min(
+                    marker["next_search_sweep"]
+                    for marker in working["pending_trades"].values()
+                )
+                if sweep != next_cursor:
+                    raise ValueError("close1_archive_search_cursor_gap")
             relevant_ids: list[str] = []
             seen_relevant_ids: set[str] = set()
             for terms, outcome in zip(inputs, outputs, strict=True):
@@ -479,9 +502,7 @@ def reconcile_records(
                 pending = working["pending_trades"].get(trade_id)
                 maker = terms.get("maker")
                 countersigner = terms.get("countersigner")
-                relevant = maker == owner or countersigner == owner or (
-                    pending is not None and pending["expected_sweep"] == sweep
-                )
+                relevant = maker == owner or countersigner == owner or pending is not None
                 if not relevant:
                     continue
                 parsed_id, maker, side_name, qty, px, countersigner = _trade_terms(terms)
@@ -489,9 +510,8 @@ def reconcile_records(
                     raise ValueError("close1_archive_duplicate_trade_id")
                 seen_relevant_ids.add(parsed_id)
                 if pending is not None:
-                    if pending["expected_sweep"] != sweep:
-                        raise ValueError("close1_pending_sweep_conflict")
-                    found_pending.add(parsed_id)
+                    if sweep < pending["search_start_sweep"]:
+                        raise ValueError("close1_pending_trade_before_search_start")
                 if owner not in {maker, countersigner}:
                     raise ValueError("close1_pending_owner_binding_mismatch")
                 if not isinstance(outcome, dict) or outcome.get("id") != parsed_id:
@@ -539,14 +559,11 @@ def reconcile_records(
                 working["pending_trades"].pop(parsed_id, None)
                 relevant_ids.append(parsed_id)
 
-            expected_here = {
-                trade_id
-                for trade_id, marker in working["pending_trades"].items()
-                if marker["expected_sweep"] == sweep
-            }
-            if expected_here - found_pending:
-                raise ValueError("close1_archive_pending_trade_missing")
-            if relevant_ids:
+            for trade_id in searching_ids:
+                marker = working["pending_trades"].get(trade_id)
+                if marker is not None:
+                    marker["next_search_sweep"] = sweep + 1
+            if searching_ids or relevant_ids:
                 if not any(
                     evidence.get("sweep") == sweep and evidence.get("file_sha256") == file_hash
                     for evidence in working["source_evidence"]
@@ -617,49 +634,66 @@ def reconcile_pending(
     fetcher: Callable[[str, int], bytes] | None = None,
     reconciled_at: str | None = None,
 ) -> dict:
-    """Reconcile only locally marked pending sweeps using fixed read-only URLs."""
+    """Search fixed official archive sweeps incrementally for pending trade IDs."""
     ledger = load_ledger(owner_did=owner_did)
     if ledger["cash"] is None or not ledger["pending_trades"]:
         return ledger
     read = fetcher or _read_bounded
+    working = ledger
     try:
         tip, entries = _index(read(INDEX_URL, INDEX_MAX_BYTES))
-        due_sweeps = sorted(
-            {
-                marker["expected_sweep"]
-                for marker in ledger["pending_trades"].values()
-                if marker["expected_sweep"] <= tip
-            }
-        )
-        records: list[tuple[dict, bytes]] = []
-        for sweep in due_sweeps[:MAX_PENDING_SWEEPS_PER_RUN]:
+        processed = 0
+        while working["pending_trades"] and processed < MAX_PENDING_SWEEPS_PER_RUN:
+            sweep = min(
+                marker["next_search_sweep"]
+                for marker in working["pending_trades"].values()
+            )
+            if sweep > close_call.LOCK_SWEEP:
+                working.update(
+                    status="own_state_unreconciled",
+                    reason="close1_archive_pending_trade_not_found",
+                )
+                save_ledger(working)
+                return working
+            if tip < sweep:
+                working["archive_tip_sweep"] = max(working["archive_tip_sweep"], tip)
+                working.update(status="own_state_pending", reason="archive_lag")
+                save_ledger(working)
+                return working
             entry = entries.get(sweep)
             if entry is None:
                 raise ValueError("close1_archive_pending_sweep_missing")
             _, _, status, _ = _entry(entry)
             if status != "full":
                 raise ValueError("close1_archive_relevant_sweep_redacted")
-            records.append((entry, read(ARCHIVE_BASE + entry["path"], SWEEP_MAX_BYTES)))
-        updated = reconcile_records(
-            ledger,
-            archive_tip_sweep=tip,
-            records=records,
-            reconciled_at=reconciled_at,
-        )
-        if not due_sweeps:
-            updated["archive_tip_sweep"] = max(updated["archive_tip_sweep"], tip)
-            updated.update(status="own_state_pending", reason="archive_lag")
-        elif len(due_sweeps) > MAX_PENDING_SWEEPS_PER_RUN and updated["status"] != "own_state_unreconciled":
-            updated.update(status="own_state_pending", reason="bounded_reconciliation_remaining")
-        save_ledger(updated)
-        return updated
+            raw = read(ARCHIVE_BASE + entry["path"], SWEEP_MAX_BYTES)
+            working = reconcile_records(
+                working,
+                archive_tip_sweep=tip,
+                records=[(entry, raw)],
+                reconciled_at=reconciled_at,
+            )
+            save_ledger(working)
+            if working["status"] == "own_state_unreconciled":
+                return working
+            processed += 1
+
+        if working["pending_trades"]:
+            next_sweep = min(
+                marker["next_search_sweep"]
+                for marker in working["pending_trades"].values()
+            )
+            reason = "archive_lag" if tip < next_sweep else "bounded_reconciliation_remaining"
+            working.update(status="own_state_pending", reason=reason)
+        save_ledger(working)
+        return working
     except (OSError, ValueError, RuntimeError) as error:
         reason = str(error)
         if isinstance(error, OSError) or not reason.startswith("close1_"):
             reason = "close1_archive_read_failed"
-        ledger.update(status="own_state_unreconciled", reason=reason)
-        save_ledger(ledger)
-        return ledger
+        working.update(status="own_state_unreconciled", reason=reason)
+        save_ledger(working)
+        return working
 
 
 def scanner_account(ledger: dict) -> tuple[str, str]:
