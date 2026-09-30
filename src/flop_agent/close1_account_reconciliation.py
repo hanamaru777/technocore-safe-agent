@@ -2,7 +2,7 @@
 
 The ledger starts at the independently verified sweep-189 mint checkpoint.  A
 future binding lane must call :func:`mark_pending` before its irreversible
-write and provide the exact sweep expected to settle that trade.  This module
+write and provide a conservative sweep search anchor for that trade.  This module
 never signs or posts; it only reads fixed official archive paths and folds
 authoritative outcomes into a public-safe local ledger.
 """
@@ -309,6 +309,8 @@ def mark_pending(
     existing = ledger["pending_trades"].get(trade_id)
     if existing is not None:
         return ledger
+    if ledger["pending_trades"]:
+        raise RuntimeError("close1_pending_binding_inflight")
     cursor = max(search_start_sweep, ledger["as_of_sweep"] + 1)
     if cursor > close_call.LOCK_SWEEP:
         raise ValueError("close1_account_search_start_after_lock")

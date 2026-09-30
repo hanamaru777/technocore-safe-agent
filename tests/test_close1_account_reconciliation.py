@@ -130,6 +130,17 @@ def test_pending_marker_reuses_original_search_cursor(monkeypatch, tmp_path):
     assert second == first
 
 
+def test_pending_marker_blocks_second_distinct_binding(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    first = account.mark_pending("future-trade", search_start_sweep=201)
+
+    with pytest.raises(RuntimeError, match="pending_binding_inflight"):
+        account.mark_pending("second-trade", search_start_sweep=201)
+
+    assert account.load_ledger() == first
+    assert account.load_ledger()["pending_trade_ids"] == ["future-trade"]
+
+
 def test_settled_maker_buy_and_sell_use_exact_fees_and_fifo():
     first_entry, first_raw = _record()
     opened = account.reconcile_records(
