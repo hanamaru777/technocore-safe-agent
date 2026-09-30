@@ -191,21 +191,15 @@ def _nearest_stage2_victory(
     price_floor: Decimal,
     price_ceiling: Decimal,
 ) -> tuple[Decimal, str, Decimal, Decimal] | None:
-    """Solve exact linear crossings, then validate adjacent 0.01 price ticks."""
+    """Intersect exact linear victory inequalities, then validate the nearest tick."""
     stable, complete = _leader_coverage(leaders)
     if not complete or side not in {"buy", "sell"} or qty <= 0:
         return None
     position = qty if side == "buy" else -qty
+    constant = realised_score - position * entry_price - entry_fee
 
     def score(price: Decimal) -> Decimal:
-        return _stage2_score(
-            realised_score=realised_score,
-            side=side,
-            qty=qty,
-            entry_price=entry_price,
-            entry_fee=entry_fee,
-            final_price=price,
-        )
+        return constant + position * price
 
     def qualifies(price: Decimal) -> bool:
         ours = score(price)
@@ -216,46 +210,57 @@ def _nearest_stage2_victory(
         )
         return ours >= hurdle or hurdle - ours <= ROUNDING_TOLERANCE
 
-    boundaries: set[Decimal] = {entry_price, price_floor, price_ceiling}
-    floor_denominator = position
-    floor_numerator = (
-        VICTORY_FLOOR - realised_score + position * entry_price + entry_fee
-    )
-    if floor_denominator != 0:
-        boundaries.add(floor_numerator / floor_denominator)
+    lower = price_floor
+    upper = price_ceiling
+
+    def tighten(denominator: Decimal, rhs: Decimal) -> bool:
+        nonlocal lower, upper
+        if denominator > 0:
+            lower = max(lower, rhs / denominator)
+        elif denominator < 0:
+            upper = min(upper, rhs / denominator)
+        elif rhs > ROUNDING_TOLERANCE:
+            return False
+        return lower <= upper + ROUNDING_TOLERANCE
+
+    if not tighten(position, VICTORY_FLOOR - constant):
+        return None
 
     for leader in stable:
-        denominator = position - leader.position
-        if denominator == 0:
-            continue
-        numerator = (
+        rhs = (
             leader.score
             + VICTORY_MARGIN
             - leader.position * current_mark
-            - realised_score
-            + position * entry_price
-            + entry_fee
+            - constant
         )
-        boundaries.add(numerator / denominator)
+        if not tighten(position - leader.position, rhs):
+            return None
 
-    ticks: set[Decimal] = set()
-    for boundary in boundaries:
-        if not boundary.is_finite():
-            continue
-        lower = _floor_step(boundary, PRICE_STEP)
-        upper = _ceil_step(boundary, PRICE_STEP)
-        ticks.update((lower - PRICE_STEP, lower, upper, upper + PRICE_STEP))
+    first_tick = _ceil_step(max(lower, price_floor), PRICE_STEP)
+    last_tick = _floor_step(min(upper, price_ceiling), PRICE_STEP)
+    if first_tick > last_tick:
+        return None
+
+    entry_floor = _floor_step(entry_price, PRICE_STEP)
+    entry_ceil = _ceil_step(entry_price, PRICE_STEP)
+    candidates = {
+        first_tick,
+        last_tick,
+        entry_floor,
+        entry_ceil,
+        entry_floor - PRICE_STEP,
+        entry_ceil + PRICE_STEP,
+    }
     valid = [
         price
-        for price in ticks
-        if price_floor <= price <= price_ceiling and price > 0 and qualifies(price)
+        for price in candidates
+        if first_tick <= price <= last_tick and price > 0 and qualifies(price)
     ]
     if not valid:
         return None
     final = min(valid, key=lambda price: (abs(price - entry_price), price))
     condition = "at" if final == entry_price else ("above" if final > entry_price else "below")
     return final, condition, final - entry_price, score(final)
-
 
 def _no_path(
     *,

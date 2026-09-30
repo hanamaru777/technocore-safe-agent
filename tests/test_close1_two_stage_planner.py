@@ -298,3 +298,47 @@ def test_planner_does_not_change_existing_single_stage_candidate_or_solver():
 
     assert item.trade_id == "verified"
     assert before == after
+
+
+def test_direct_crossing_rounds_buy_requirement_up_to_next_price_tick():
+    low_leaders = leaders(position="0", score="-100")
+    result = planner._nearest_stage2_victory(
+        realised_score=Decimal("0"),
+        side="buy",
+        qty=Decimal("3"),
+        entry_price=Decimal("100"),
+        entry_fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=low_leaders,
+        price_floor=Decimal("0.01"),
+        price_ceiling=Decimal("200"),
+    )
+
+    assert result is not None
+    final, condition, move, score = result
+    assert final == Decimal("133.34")
+    assert condition == "above"
+    assert move == Decimal("33.34")
+    assert score >= Decimal("100")
+
+
+def test_direct_crossing_rounds_sell_requirement_down_to_previous_price_tick():
+    low_leaders = leaders(position="0", score="-100")
+    result = planner._nearest_stage2_victory(
+        realised_score=Decimal("0"),
+        side="sell",
+        qty=Decimal("3"),
+        entry_price=Decimal("100"),
+        entry_fee=Decimal("0"),
+        current_mark=Decimal("100"),
+        leaders=low_leaders,
+        price_floor=Decimal("0.01"),
+        price_ceiling=Decimal("200"),
+    )
+
+    assert result is not None
+    final, condition, move, score = result
+    assert final == Decimal("66.66")
+    assert condition == "below"
+    assert move == Decimal("-33.34")
+    assert score >= Decimal("100")
