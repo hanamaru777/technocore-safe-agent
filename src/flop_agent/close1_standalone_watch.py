@@ -15,7 +15,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable
 
-from . import close1_account_reconciliation, close1_candidate_scanner, observer, resident
+from . import (
+    close1_account_reconciliation,
+    close1_candidate_scanner,
+    close1_two_stage_planner,
+    observer,
+    resident,
+)
 
 SCHEMA_VERSION = 1
 STATE_FILE = "close1-standalone-watch.json"
@@ -32,6 +38,11 @@ HURDLE_ACCEL = Decimal("50")
 HURDLE_ACCEL_IMPROVEMENT = Decimal("50")
 FALLBACK_COMPRESSION_RATIO = Decimal("0.75")
 FALLBACK_WORSEN_RATIO = Decimal("1.25")
+TWO_STAGE_MAX_EVALS = 16
+TWO_STAGE_ALERT = Decimal("0.15")
+TWO_STAGE_CRITICAL = Decimal("0.10")
+TWO_STAGE_IMPROVEMENT = Decimal("0.02")
+TWO_STAGE_CRITICAL_IMPROVEMENT = Decimal("0.005")
 
 DISCORD_API = "https://discord.com/api/v10"
 DISCORD_LIMIT = 2000
@@ -60,6 +71,13 @@ def _default_state() -> dict:
         "flow_alerted_qty": {},
         "last_hurdle_alert_delta": None,
         "last_fallback_watch_move": None,
+        "last_two_stage_key": None,
+        "last_two_stage_move_abs": None,
+        "last_two_stage_stage1_close": None,
+        "last_two_stage_stage2_side": None,
+        "last_two_stage_victory_price": None,
+        "last_two_stage_alert_key": None,
+        "last_two_stage_alert_move_abs": None,
         "last_alert_at": None,
         "last_error": None,
     }
@@ -123,6 +141,105 @@ def _best_opportunity(scan: close1_candidate_scanner.CandidateScan):
         0 if item[0] == "basket" else 1,
     ))
     return rows[0] if rows else None
+
+
+def _two_stage_candidates(scan: close1_candidate_scanner.CandidateScan):
+    baskets = sorted(
+        (("basket", item) for item in scan.baskets),
+        key=lambda row: (-row[1].qty, _opportunity_key(*row)),
+    )
+    singles_by_size = sorted(
+        (("single", item) for item in scan.candidates),
+        key=lambda row: (-row[1].qty, _opportunity_rank_move(row[1])[:2], row[1].trade_id),
+    )
+    singles_by_rank = sorted(
+        (("single", item) for item in scan.candidates),
+        key=lambda row: (_opportunity_rank_move(row[1])[:2], -row[1].qty, row[1].trade_id),
+    )
+    selected = []
+    seen = set()
+
+    def add(rows):
+        for row in rows:
+            key = _opportunity_key(*row)
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(row)
+            if len(selected) >= TWO_STAGE_MAX_EVALS:
+                return True
+        return False
+
+    add(baskets)
+    remaining = max(TWO_STAGE_MAX_EVALS - len(selected), 0)
+    half = (remaining + 1) // 2
+    add(singles_by_size[:half])
+    add(singles_by_rank[:remaining - half])
+    if len(selected) < TWO_STAGE_MAX_EVALS:
+        add(singles_by_size)
+    if len(selected) < TWO_STAGE_MAX_EVALS:
+        add(singles_by_rank)
+    return tuple(selected[:TWO_STAGE_MAX_EVALS])
+
+
+def _best_two_stage_path(
+    scan: close1_candidate_scanner.CandidateScan,
+    *,
+    starting_cash: str = "10000",
+    current_position: str = "0",
+):
+    if scan.strategy_gate != "ready":
+        return None
+    cash = _decimal(starting_cash)
+    position = _decimal(current_position)
+    # The current planner models a fresh initial flat account. Do not reuse it
+    # after any realised trade or while a position is open.
+    if cash != Decimal("10000") or position != Decimal("0"):
+        return None
+    paths = []
+    for kind, candidate in _two_stage_candidates(scan):
+        try:
+            plan = close1_two_stage_planner.plan_two_stage_victory(
+                candidate,
+                current_mark=scan.mark,
+                leaders=list(scan.visible_leaders),
+                starting_cash=cash,
+            )
+        except (TypeError, ValueError):
+            continue
+        if plan.status != "PATH" or plan.total_path_move_percent is None:
+            continue
+        paths.append((kind, candidate, plan))
+    if not paths:
+        return None
+    return min(
+        paths,
+        key=lambda row: (
+            abs(row[2].total_path_move_percent),
+            -row[1].qty,
+            _opportunity_key(row[0], row[1]),
+        ),
+    )
+
+
+def _two_stage_signal(path, state: dict) -> bool:
+    if path is None:
+        return False
+    kind, candidate, plan = path
+    current = abs(plan.total_path_move_percent)
+    if current > TWO_STAGE_ALERT:
+        return False
+    previous = _decimal(state.get("last_two_stage_alert_move_abs"))
+    previous_key = state.get("last_two_stage_alert_key")
+    current_key = _opportunity_key(kind, candidate)
+    if previous is None:
+        return True
+    if previous > TWO_STAGE_CRITICAL and current <= TWO_STAGE_CRITICAL:
+        return True
+    improvement = TWO_STAGE_CRITICAL_IMPROVEMENT if current <= TWO_STAGE_CRITICAL else TWO_STAGE_IMPROVEMENT
+    if previous - current >= improvement:
+        return True
+    return current_key != previous_key and previous - current >= TWO_STAGE_CRITICAL_IMPROVEMENT
 
 
 def _candidate_signal(scan: close1_candidate_scanner.CandidateScan, state: dict) -> bool:
@@ -261,7 +378,7 @@ def _fallback_compression_signal(
     return current <= baseline * FALLBACK_COMPRESSION_RATIO
 
 
-def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) -> list[str]:
+def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict, two_stage=None) -> list[str]:
     reasons: list[str] = []
     if state.get("activated") is not True:
         reasons.append("監視開始")
@@ -275,12 +392,14 @@ def _alert_reasons(scan: close1_candidate_scanner.CandidateScan, state: dict) ->
         reasons.append("勝ち筋候補接近")
     if _fallback_compression_signal(scan, state):
         reasons.append("flat目標接近")
+    if _two_stage_signal(two_stage, state):
+        reasons.append("2段階勝ち筋接近")
     if _flow_signals(scan, state):
         reasons.append("大口フロー")
     return reasons
 
 
-def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) -> str:
+def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str], two_stage=None) -> str:
     stable = sum(
         1
         for leader in scan.visible_leaders
@@ -420,6 +539,17 @@ def _render(scan: close1_candidate_scanner.CandidateScan, reasons: list[str]) ->
             )
             lines.append("優勝目標もclawback・将来のleader変化未反映の楽観下限です。")
 
+    if two_stage is not None and "2段階勝ち筋接近" in reasons:
+        kind, candidate, plan = two_stage
+        relation = ">=" if plan.dynamic_victory_condition == "above" else "<="
+        move = abs(plan.total_path_move_percent) * Decimal("100")
+        lines.append(
+            f"2段階(base-fee only): {_opportunity_key(kind, candidate)} / total {move:.2f}% / "
+            f"stage1 close {plan.stage1_close_price} ⇒ {plan.stage2_side.upper()} {plan.stage2_max_affordable_qty} "
+            f"⇒ final S {relation} {plan.dynamic_victory_price}"
+        )
+        lines.append("2段階計算もclawback未反映。これは監視シグナルであり取引承認ではありません。")
+
     lines.extend([
         "shadow leaders込み。leader/future trades・未観測account・clawbackで条件は変動します。",
         "取引は未実行。binding actionはexact tradeごとの個別承認が必要です。",
@@ -472,6 +602,7 @@ def _remember_scan(
     scan: close1_candidate_scanner.CandidateScan,
     current: datetime,
     reasons: list[str],
+    two_stage=None,
 ) -> None:
     opportunity = _best_opportunity(scan)
     if opportunity is None:
@@ -562,6 +693,33 @@ def _remember_scan(
         alert_move = candidate_move
         alert_key = candidate_key
 
+    if two_stage is None:
+        two_stage_key = None
+        two_stage_move = None
+        two_stage_close = None
+        two_stage_side = None
+        two_stage_victory = None
+        # Missing/incomplete coverage is fail-closed telemetry, not a reason to
+        # forget the last alert and spam again when coverage recovers.
+        two_stage_alert_key = state.get("last_two_stage_alert_key")
+        two_stage_alert_move = state.get("last_two_stage_alert_move_abs")
+    else:
+        two_kind, two_candidate, two_plan = two_stage
+        two_stage_key = _opportunity_key(two_kind, two_candidate)
+        two_stage_move = str(abs(two_plan.total_path_move_percent))
+        two_stage_close = str(two_plan.stage1_close_price)
+        two_stage_side = two_plan.stage2_side
+        two_stage_victory = str(two_plan.dynamic_victory_price)
+        if abs(two_plan.total_path_move_percent) > TWO_STAGE_ALERT:
+            two_stage_alert_key = None
+            two_stage_alert_move = None
+        elif "2段階勝ち筋接近" in reasons:
+            two_stage_alert_key = two_stage_key
+            two_stage_alert_move = two_stage_move
+        else:
+            two_stage_alert_key = state.get("last_two_stage_alert_key")
+            two_stage_alert_move = state.get("last_two_stage_alert_move_abs")
+
     state.update(
         activated=True,
         last_success_at=current.isoformat(),
@@ -581,6 +739,13 @@ def _remember_scan(
         last_fallback_watch_move=(
             str(fallback_baseline) if fallback_baseline is not None else None
         ),
+        last_two_stage_key=two_stage_key,
+        last_two_stage_move_abs=two_stage_move,
+        last_two_stage_stage1_close=two_stage_close,
+        last_two_stage_stage2_side=two_stage_side,
+        last_two_stage_victory_price=two_stage_victory,
+        last_two_stage_alert_key=two_stage_alert_key,
+        last_two_stage_alert_move_abs=two_stage_alert_move,
         last_error=None,
     )
 
@@ -590,6 +755,7 @@ def run_once(
     fetcher: Callable[[], close1_candidate_scanner.CandidateScan] | None = None,
     sender: Callable[[str], None] | None = None,
     now: datetime | None = None,
+    two_stage_enabled: bool | None = None,
 ) -> dict:
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
@@ -597,11 +763,16 @@ def run_once(
     current = current.astimezone(UTC)
 
     state = _load_state()
+    use_two_stage = (fetcher is None) if two_stage_enabled is None else bool(two_stage_enabled)
+    planning_cash = "10000"
+    planning_position = "0"
     if fetcher is None:
         ledger = None
         try:
             ledger = close1_account_reconciliation.reconcile_pending(owner_did=OWNER_DID)
             available_cash, current_position = close1_account_reconciliation.scanner_account(ledger)
+            planning_cash = available_cash
+            planning_position = current_position
         except Exception:
             own_status = (
                 ledger.get("status", "own_state_unreconciled")
@@ -631,10 +802,19 @@ def run_once(
         _save_state(state)
         return {"status": "fetch_error", "sent": False}
 
-    reasons = _alert_reasons(scan, state)
+    two_stage = (
+        _best_two_stage_path(
+            scan,
+            starting_cash=planning_cash,
+            current_position=planning_position,
+        )
+        if use_two_stage
+        else None
+    )
+    reasons = _alert_reasons(scan, state, two_stage)
     if reasons:
         try:
-            send(_render(scan, reasons))
+            send(_render(scan, reasons, two_stage))
         except Exception as error:
             # Do not advance the alert baselines. The next timer run retries.
             state["last_error"] = f"send:{type(error).__name__}"
@@ -642,13 +822,16 @@ def run_once(
             return {"status": "send_error", "sent": False, "sweep": scan.sweep}
         state["last_alert_at"] = current.isoformat()
 
-    _remember_scan(state, scan, current, reasons)
+    _remember_scan(state, scan, current, reasons, two_stage)
     _save_state(state)
     return {
         "status": scan.strategy_gate,
         "sent": bool(reasons),
         "sweep": scan.sweep,
         "reasons": reasons,
+        "two_stage_move": (
+            str(abs(two_stage[2].total_path_move_percent)) if two_stage is not None else None
+        ),
     }
 
 
