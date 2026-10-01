@@ -68,6 +68,19 @@ def test_read_only_scan_and_no_sensitive_surface():
         assert re.search(pat, x, re.I) is None
 
 
+def test_runtime_acceptance_is_strict():
+    x = s()
+    assert "grep -q '^ok ' <<<\"$WATCH_SCAN\" || false" in x
+    assert '[[ "$WATCH_RESULT" == success ]] || false' in x
+    assert "CLASSIFICATION=ACTIVE_TWO_STAGE_WATCH" in x
+    assert "CLASSIFICATION=PRESSURE_SKIP_OR_NO_NEW_SWEEP" in x
+    assert "CLASSIFICATION=RETRYING" in x
+    retry = x.index("CLASSIFICATION=RETRYING")
+    assert "false" in x[retry:retry + 80]
+    active = x.index("CLASSIFICATION=ACTIVE_TWO_STAGE_WATCH")
+    assert "error=None" in x[max(0, active - 160):active]
+
+
 def test_long_running_services_and_protected_counters_are_pinned():
     x = s()
     for token in ("RES_PRE", "CAP_PRE", "SIG_PRE", "DIS_PRE"):
