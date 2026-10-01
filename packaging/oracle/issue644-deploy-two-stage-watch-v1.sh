@@ -293,6 +293,7 @@ else:
     )
 PY
 )
+grep -q '^ok ' <<<"$WATCH_SCAN" || false
 
 BEFORE_SUCCESS=''
 if [[ -f "$WATCH_STATE" ]]; then
@@ -333,12 +334,15 @@ PY
 fi
 
 WATCH_RESULT=$(systemctl show "$WATCH_SERVICE" -p Result --value 2>/dev/null || true)
+[[ "$WATCH_RESULT" == success ]] || false
 if [[ -n "$AFTER_SUCCESS" && "$AFTER_SUCCESS" != "$BEFORE_SUCCESS" ]]; then
+  grep -q 'error=None' <<<"$WATCH_DETAIL" || false
   CLASSIFICATION=ACTIVE_TWO_STAGE_WATCH
 elif grep -q 'error=None' <<<"$WATCH_DETAIL"; then
   CLASSIFICATION=PRESSURE_SKIP_OR_NO_NEW_SWEEP
 else
   CLASSIFICATION=RETRYING
+  false
 fi
 
 [[ "$(snap "$RES")" == "$RES_PRE" ]] || false
