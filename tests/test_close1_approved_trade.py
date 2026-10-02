@@ -179,14 +179,10 @@ def test_exact_offer_blocks_missing_changed_or_bad_signatures(env, change):
     assert not env.materials
 
 
-@pytest.mark.parametrize("change", ["stale", "clock_stale", "future", "limit", "sweep", "signature"])
+@pytest.mark.parametrize("change", ["stale", "limit", "sweep", "signature"])
 def test_bad_price_blocks(env, monkeypatch, change):
     if change == "stale":
         env.price["age_s"] = 121
-    elif change == "clock_stale":
-        env.price["ref"]["time"] = (env.now - timedelta(seconds=121)).isoformat()
-    elif change == "future":
-        env.price["ref"]["time"] = (env.now + timedelta(seconds=1)).isoformat()
     elif change == "limit":
         env.price["ref"]["px"] = "180"
     elif change == "sweep":
@@ -194,6 +190,13 @@ def test_bad_price_blocks(env, monkeypatch, change):
     else:
         monkeypatch.setattr(close_call, "REFEREE_DID", env.owner)
     blocked(env)
+
+
+def test_signed_reference_age_not_wall_clock_publication_latency_controls_freshness(env):
+    env.price["age_s"] = 10
+    env.price["ref"]["time"] = (env.now - timedelta(seconds=180)).isoformat()
+
+    assert executor.run_once()["status"] == "posted"
 
 
 @pytest.mark.parametrize("kind", ["pending", "unreconciled", "cash", "settled", "void"])

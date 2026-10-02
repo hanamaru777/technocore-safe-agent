@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import math
 import os
 import secrets
 import sys
@@ -152,13 +151,10 @@ def _fresh_preflight(approval, cash, position):
     age = price.get("age_s")
     if type(age) is not int or age < 0:
         raise TradeError("price_age_invalid")
-    elapsed = (now - _time(price["ref"]["time"])).total_seconds()
-    if elapsed < 0:
-        raise TradeError("price_age_invalid")
     risk = close_call.evaluate_verified_offer_as_taker(
         offer, current_sweep=wall_sweep, our_did=OWNER_DID, room=room,
         reference_price=price["ref"]["px"],
-        reference_age_seconds=max(age, math.ceil(elapsed)),
+        reference_age_seconds=age,
         available_cash=cash, current_position=position,
     )
     if risk["enough_cash_for_base_fee_and_collateral"] is not True:
