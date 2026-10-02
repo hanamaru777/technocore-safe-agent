@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from cryptography.hazmat.primitives import serialization
@@ -740,6 +741,25 @@ def test_scanner_stops_candidates_when_reference_is_stale(monkeypatch):
         negotiation_rooms={"close1-offers": {"messages": [offer]}},
     )
 
+    assert report.strategy_gate == "reference_stale"
+    assert report.verified_offers == 1
+    assert report.candidates == ()
+
+
+def test_scanner_uses_wall_clock_reference_age_when_observed_at_supplied(monkeypatch):
+    _verify_referee_with_fixture(monkeypatch)
+    price, pnl = _rooms(age=1)
+    offer, _, _ = _offer()
+
+    report = scanner.build_candidate_scan(
+        our_did=OUR_DID,
+        price_room=price,
+        pnl_room=pnl,
+        negotiation_rooms={"close1-offers": {"messages": [offer]}},
+        observed_at=datetime(2026, 9, 26, 12, 12, 0, tzinfo=UTC),
+    )
+
+    assert report.reference_age_seconds == 121
     assert report.strategy_gate == "reference_stale"
     assert report.verified_offers == 1
     assert report.candidates == ()
