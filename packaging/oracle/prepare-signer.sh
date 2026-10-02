@@ -39,6 +39,7 @@ install -o root -g root -m 0755 "$app/packaging/oracle/block-technocore-metadata
 install -o root -g root -m 0755 "$app/packaging/oracle/diagnostic.sh" /usr/local/libexec/technocore-safe-agent-diagnostic
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-metadata-block.service" /etc/systemd/system/technocore-safe-agent-metadata-block.service
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-signer.service" /etc/systemd/system/technocore-safe-agent-signer.service
+install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-close1-approved-trade.service" /etc/systemd/system/technocore-safe-agent-close1-approved-trade.service
 # Refresh the existing resident unit from this checked-out release.  Discord
 # is refreshed only when that optional service is already installed.
 install -o root -g root -m 0644 "$app/packaging/oracle/resident.service" /etc/systemd/system/technocore-safe-agent-resident.service
@@ -51,5 +52,33 @@ extras=(--extra oracle-signer)
 # signer dependency sync.  Do not infer this from untrusted configuration.
 if [[ -e /etc/systemd/system/technocore-safe-agent-discord.service ]]; then extras+=(--extra discord); fi
 uv sync --frozen --no-dev "${extras[@]}"
+# Dedicated owner-account ledger; never broaden observer access.
+close1=$state/close1
+legacy=$state/observer/close1-own-account.json
+shared=$close1/close1-own-account.json
+for directory in "$state" "$state/observer" "$close1"; do
+  if [[ -L $directory || ( -e $directory && ! -d $directory ) ]]; then echo "unsafe Close Call directory" >&2; exit 1; fi
+done
+for ledger in "$legacy" "$shared"; do
+  if [[ -L $ledger || ( -e $ledger && ! -f $ledger ) ]]; then echo "unsafe Close Call ledger" >&2; exit 1; fi
+  if [[ -e $ledger && $(stat -c %h -- "$ledger") != 1 ]]; then echo "hard-linked Close Call ledger" >&2; exit 1; fi
+done
+if [[ -e $legacy && -e $shared ]]; then echo "both legacy and dedicated Close Call ledgers exist; refusing to lose state" >&2; exit 1; fi
+install -d -o technocore -g technocore-autopilot -m 2770 "$close1"
+if [[ -e $legacy ]]; then
+  # Only legacy migration needs quiescence. Resident and isolated oracle signer do
+  # not touch this ledger; Close Call watcher and Discord reconciliation can.
+  for unit in technocore-safe-agent-close1-standalone-watch.service technocore-safe-agent-discord.service; do
+    if systemctl is-active --quiet "$unit"; then echo "stop Close Call ledger users before legacy migration" >&2; exit 1; fi
+  done
+  mv -n -- "$legacy" "$shared"
+  [[ ! -e $legacy ]] || { echo "Close Call migration refused" >&2; exit 1; }
+fi
+if [[ -e $shared ]]; then
+  chown technocore:technocore-autopilot "$shared"
+  chmod 0660 "$shared"
+else
+  runuser -u technocore -- env FLOP_STATE_DIR="$state" PYTHONPATH="$app/src" "$app/.venv/bin/python" -c 'from flop_agent.close1_account_reconciliation import checkpoint_ledger, save_ledger; save_ledger(checkpoint_ledger())'
+fi
 systemctl daemon-reload
 echo "Prepared only. Fill $envdir/signer.env and review IAM. No service or metadata blocker unit was enabled or started."

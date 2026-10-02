@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import urllib.request
 from copy import deepcopy
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable
 
-from . import close_call, observer, resident
+from . import close_call, core, observer
 
 SCHEMA_VERSION = 2
 STATE_FILE = "close1-own-account.json"
@@ -46,7 +47,7 @@ def _now() -> str:
 
 
 def state_path() -> Path:
-    return resident.resident_dir() / STATE_FILE
+    return core.STATE / "close1" / STATE_FILE
 
 
 def _decimal(value: object, *, label: str, nonnegative: bool = True) -> Decimal:
@@ -280,9 +281,26 @@ def save_ledger(ledger: dict) -> None:
     _validate_ledger(ledger, owner_did=ledger.get("owner_did", OWNER_DID))
     if ledger["cash"] is None:
         raise ValueError("close1_account_unknown_values_not_persistable")
+    path = state_path()
+    if os.name == "posix":
+        try:
+            parent = path.parent.lstat()
+        except FileNotFoundError as error:
+            raise RuntimeError("close1_account_directory_missing") from error
+        if not stat.S_ISDIR(parent.st_mode) or path.parent.is_symlink():
+            raise RuntimeError("close1_account_directory_invalid")
     observer.atomic_json_write(
-        state_path(), ledger, compact=True, mode=0o640 if os.name == "posix" else None
+        path, ledger, compact=True, mode=0o660 if os.name == "posix" else None
     )
+    if os.name == "posix":
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_gid != parent.st_gid
+            or stat.S_IMODE(info.st_mode) != 0o660
+        ):
+            raise RuntimeError("close1_account_permissions_invalid")
 
 
 def mark_pending(

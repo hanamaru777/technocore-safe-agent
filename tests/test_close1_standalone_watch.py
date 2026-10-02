@@ -52,6 +52,7 @@ def _scan(*, reference="224.92", top3="93.99", move="0.040", trade_id="a", side=
 
 def _state_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(watch.resident, "resident_dir", lambda: tmp_path)
+    monkeypatch.setattr(watch.close1_account_reconciliation, "state_path", lambda: tmp_path / "close1-own-account.json")
 
 
 def test_first_success_sends_activation_once(monkeypatch, tmp_path):

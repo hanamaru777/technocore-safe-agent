@@ -15,7 +15,7 @@ OTHER = "did:key:z6MkeTcR7He7sY6imuJguhifiNKrWceKNus5HGuajbAwymdK"
 
 
 def _state_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(account.resident, "resident_dir", lambda: tmp_path)
+    monkeypatch.setattr(account, "state_path", lambda: tmp_path / account.STATE_FILE)
 
 
 def _record(
@@ -781,3 +781,89 @@ def test_reconciliation_has_no_signing_or_write_surface():
         "sqlite",
     )
     assert all(token not in source for token in forbidden)
+
+
+def test_shared_state_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(account.core, "STATE", tmp_path)
+    assert account.state_path() == tmp_path / "close1" / account.STATE_FILE
+
+
+def test_shared_write_permissions_and_ownership(monkeypatch, tmp_path):
+    import os
+    import stat
+    _state_dir(monkeypatch, tmp_path)
+    ledger = account.checkpoint_ledger()
+    account.save_ledger(ledger)
+    parent = account.state_path().parent.stat()
+    account.mark_pending("shared-trade", search_start_sweep=201)
+    after = account.state_path().stat()
+    assert account.load_ledger()["pending_trade_ids"] == ["shared-trade"]
+    if os.name == "posix":
+        assert stat.S_IMODE(after.st_mode) == 0o660
+        assert after.st_gid == parent.st_gid
+
+
+def test_shared_ledger_packaging():
+    from pathlib import Path
+    root = Path("packaging/oracle")
+    script = (root / "prepare-signer.sh").read_text("utf-8")
+    assert 'close1=$state/close1' in script
+    assert 'legacy=$state/observer/close1-own-account.json' in script
+    assert '[[ -e $legacy && -e $shared ]]' in script
+    assert script.index('both legacy and dedicated Close Call') < script.index('mv -n -- "$legacy" "$shared"')
+    assert 'install -d -o technocore -g technocore-autopilot -m 2770 "$close1"' in script
+    assert 'chown technocore:technocore-autopilot "$shared"' in script
+    assert 'chmod 0660 "$shared"' in script
+    assert 'runuser -u technocore -- env FLOP_STATE_DIR="$state"' in script
+    assert 'save_ledger(checkpoint_ledger())' in script
+    assert '[[ -L $ledger || ( -e $ledger && ! -f $ledger ) ]]' in script
+    assert 'stat -c %h' in script
+    unit = (root / "technocore-safe-agent-signer.service").read_text("utf-8")
+    paths = next(line for line in unit.splitlines() if line.startswith("ReadWritePaths=")).split("=", 1)[1].split()
+    assert paths == ["/var/lib/technocore-safe-agent/" + name for name in
+                     ("autopilot", "signer", "nonces.json", "activities.jsonl", "close1")]
+    watcher = (root / "technocore-safe-agent-close1-standalone-watch.service").read_text("utf-8")
+    assert "ReadWritePaths=/var/lib/technocore-safe-agent/observer /var/lib/technocore-safe-agent/close1" in watcher
+
+
+@pytest.mark.parametrize("existing", ["legacy", "shared", "both", "neither"])
+def test_prepare_shared_ledger_migration(tmp_path, existing):
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if os.name != "posix":
+        pytest.skip("migration filesystem behavior requires POSIX")
+    bash = shutil.which("bash")
+    if not bash or not Path(bash).exists():
+        pytest.skip("bash unavailable")
+    root = tmp_path / "state"
+    (root / "observer").mkdir(parents=True)
+    (root / "close1").mkdir()
+    legacy = root / "observer" / account.STATE_FILE
+    shared = root / "close1" / account.STATE_FILE
+    if existing in ("legacy", "both"):
+        legacy.write_bytes(b'legacy-ledger-evidence')
+    if existing in ("shared", "both"):
+        shared.write_bytes(b'dedicated-ledger-evidence')
+    source = Path("packaging/oracle/prepare-signer.sh").read_text("utf-8")
+    block = source.split('close1=$state/close1', 1)[1].split('systemctl daemon-reload', 1)[0]
+    # Only the migration block runs, in tmp_path. Stub privileged ownership
+    # commands and initial checkpoint creation; verify their real form statically.
+    harness = tmp_path / "migration.sh"
+    harness.write_text('set -euo pipefail\nstate=$1\napp=$2\ninstall() { mkdir -p -- "${@: -1}"; }\nchown() { :; }\nchmod() { :; }\nrunuser() { printf \'initial-checkpoint\' > "$shared"; }\nclose1=$state/close1\n' + block, encoding="utf-8", newline="\n")
+    shell_root = root.as_posix()
+    result = subprocess.run([bash, str(harness), shell_root, tmp_path.as_posix()], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if existing == "both":
+        assert result.returncode != 0
+        assert legacy.read_bytes() == b"legacy-ledger-evidence"
+        assert shared.read_bytes() == b"dedicated-ledger-evidence"
+    else:
+        assert result.returncode == 0, result.stderr
+        assert not legacy.exists()
+        expected = {"legacy": b"legacy-ledger-evidence", "shared": b"dedicated-ledger-evidence", "neither": b"initial-checkpoint"}[existing]
+        assert shared.read_bytes() == expected
+        # Re-running preparation must preserve the ledger bytes.
+        again = subprocess.run([bash, str(harness), shell_root, tmp_path.as_posix()], capture_output=True, text=True, encoding="utf-8", errors="replace")
+        assert again.returncode == 0, again.stderr
+        assert shared.read_bytes() == expected
