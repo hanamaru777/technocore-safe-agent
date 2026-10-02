@@ -8,6 +8,7 @@ Requires=technocore-safe-agent-metadata-block.service
 Type=oneshot
 User=technocore
 Group=technocore
+SupplementaryGroups=technocore-autopilot
 WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
@@ -29,4 +30,4 @@ ProtectKernelTunables=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=169.254.169.254
-ReadWritePaths=/var/lib/technocore-safe-agent/observer
+ReadWritePaths=/var/lib/technocore-safe-agent/observer /var/lib/technocore-safe-agent/close1

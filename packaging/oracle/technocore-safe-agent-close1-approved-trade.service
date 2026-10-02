@@ -1,10 +1,10 @@
 [Unit]
-Description=technocore-safe-agent isolated OCI Vault signer
+Description=Technocore Close Call one-shot approved trade executor
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 User=technocore-signer
 Group=technocore-signer
 SupplementaryGroups=technocore-autopilot
@@ -13,9 +13,8 @@ EnvironmentFile=/etc/technocore-safe-agent/signer.env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
 Environment=UV_CACHE_DIR=/var/lib/technocore-safe-agent/signer/uv-cache
-ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.oracle_signer
-Restart=on-failure
-RestartSec=30
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.close1_approved_trade
+TimeoutStartSec=90
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -27,7 +26,4 @@ ProtectKernelTunables=true
 ProtectKernelLogs=true
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/lib/technocore-safe-agent/autopilot /var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json /var/lib/technocore-safe-agent/activities.jsonl /var/lib/technocore-safe-agent/close1
-
-[Install]
-WantedBy=multi-user.target
+ReadWritePaths=/var/lib/technocore-safe-agent/signer /var/lib/technocore-safe-agent/nonces.json /var/lib/technocore-safe-agent/close1

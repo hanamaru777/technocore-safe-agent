@@ -128,6 +128,7 @@ def test_two_stage_key_change_requires_real_improvement():
 
 def test_run_once_persists_two_stage_telemetry_and_dedupes(monkeypatch, tmp_path):
     monkeypatch.setattr(watch.resident, "resident_dir", lambda: tmp_path)
+    monkeypatch.setattr(watch.close1_account_reconciliation, "state_path", lambda: tmp_path / "close1-own-account.json")
     current = scan(candidates=[candidate(1)])
     holder = {"plan": plan("0.14")}
     monkeypatch.setattr(
@@ -164,6 +165,7 @@ def test_run_once_persists_two_stage_telemetry_and_dedupes(monkeypatch, tmp_path
 
 def test_two_stage_baseline_resets_outside_watch_band(monkeypatch, tmp_path):
     monkeypatch.setattr(watch.resident, "resident_dir", lambda: tmp_path)
+    monkeypatch.setattr(watch.close1_account_reconciliation, "state_path", lambda: tmp_path / "close1-own-account.json")
     current = scan(candidates=[candidate(1)])
     holder = {"plan": plan("0.14")}
     monkeypatch.setattr(
