@@ -6,6 +6,7 @@ offers. It never signs, posts, accepts, or mutates contest state.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -785,6 +786,7 @@ def build_candidate_scan(
     positions_room: object | None = None,
     available_cash: str = "10000",
     current_position: str = "0",
+    observed_at: datetime | None = None,
 ) -> CandidateScan:
     """Build one read-only candidate report from already fetched public data."""
     our_did = close_call._did(our_did)
@@ -807,6 +809,22 @@ def build_candidate_scan(
     ref = price.get("ref")
     if not isinstance(ref, dict):
         raise ValueError("close1_scanner_reference_invalid")
+    if observed_at is not None:
+        if observed_at.tzinfo is None:
+            raise ValueError("close1_scanner_observed_at_invalid")
+        ref_time_raw = ref.get("time")
+        if not isinstance(ref_time_raw, str):
+            raise ValueError("close1_scanner_reference_time_invalid")
+        try:
+            ref_time = datetime.fromisoformat(ref_time_raw.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("close1_scanner_reference_time_invalid") from error
+        if ref_time.tzinfo is None:
+            raise ValueError("close1_scanner_reference_time_invalid")
+        elapsed = (observed_at.astimezone(UTC) - ref_time.astimezone(UTC)).total_seconds()
+        if elapsed < 0:
+            raise ValueError("close1_scanner_reference_time_invalid")
+        age = max(age, math.ceil(elapsed))
     reference = close_call._amount(ref.get("px"), label="reference")
     mark = close_call._amount(str(pnl.get("mark")), label="pnl_mark")
 
@@ -1060,4 +1078,5 @@ def fetch_candidate_scan(
         },
         available_cash=available_cash,
         current_position=current_position,
+        observed_at=datetime.now(UTC),
     )
