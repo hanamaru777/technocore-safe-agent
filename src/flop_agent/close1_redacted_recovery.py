@@ -72,13 +72,6 @@ def recover_pending_redacted(
     fetcher: Callable[[str, int], bytes] | None = None,
     reconciled_at: str | None = None,
 ) -> dict:
-    """Recover locally pending IDs only when they are visible in a redacted sweep.
-
-    Missing pending IDs never advance their cursor: they may be hidden by archive
-    redaction, so absence is not evidence. Likewise, a visible owner-bound trade
-    that is neither already terminal nor locally pending fails closed instead of
-    silently changing the account from an untracked action.
-    """
     ledger = account.load_ledger(owner_did=owner_did)
     account._validate_ledger(ledger, owner_did=owner_did)
     if not ledger["pending_trades"]:
@@ -96,9 +89,7 @@ def recover_pending_redacted(
             return _fail(ledger, tip=tip, reason="archive_lag")
         entry = entries.get(sweep)
         if entry is None:
-            return _fail(
-                ledger, tip=tip, reason="close1_archive_pending_sweep_missing"
-            )
+            return _fail(ledger, tip=tip, reason="close1_archive_pending_sweep_missing")
         _, _, status, _ = account._entry(entry)
         if status != "redacted":
             return account.reconcile_pending(
@@ -154,9 +145,7 @@ def recover_pending_redacted(
         relevant_ids: list[str] = []
         for trade_id in sorted(searching_ids):
             terms, outcome = owner_rows[trade_id]
-            parsed_id, maker, side_name, qty, px, countersigner = account._trade_terms(
-                terms
-            )
+            parsed_id, maker, side_name, qty, px, countersigner = account._trade_terms(terms)
             if parsed_id != trade_id:
                 raise ValueError("close1_archive_trade_id_invalid")
             pending = working["pending_trades"].get(trade_id)
@@ -189,12 +178,8 @@ def recover_pending_redacted(
                     raise ValueError("close1_archive_void_reason_missing")
                 working["void_trades"][trade_id] = reason[:200]
             elif result == "settled":
-                maker_fee = account._decimal(
-                    outcome.get("maker_fee"), label="maker_fee"
-                )
-                taker_fee = account._decimal(
-                    outcome.get("taker_fee"), label="taker_fee"
-                )
+                maker_fee = account._decimal(outcome.get("maker_fee"), label="maker_fee")
+                taker_fee = account._decimal(outcome.get("taker_fee"), label="taker_fee")
                 side = 1 if side_name == "buy" else -1
                 if maker == owner_did and countersigner == owner_did:
                     acct.cash -= maker_fee + taker_fee
@@ -231,22 +216,22 @@ def recover_pending_redacted(
                 }
             )
         if working["pending_trades"]:
-            working.update(
-                status="own_state_pending", reason="binding_awaiting_archive"
-            )
+            working.update(status="own_state_pending", reason="binding_awaiting_archive")
         else:
-            working.update(
-                status="reconciled",
-                reason="official_redacted_archive_reconciled",
-            )
+            working.update(status="reconciled", reason="official_redacted_archive_reconciled")
         account._validate_ledger(working, owner_did=owner_did)
         account.save_ledger(working)
         return working
     except (OSError, ValueError, RuntimeError, TypeError, KeyError) as error:
         reason = str(error)
         if isinstance(error, OSError) or not reason.startswith("close1_"):
-            reason = "close1_redacted_archive_read_failed"
-        return _fail(ledger, tip=locals().get("tip", ledger["archive_tip_sweep"]), reason=reason)
+            detail = str(error).replace(" ", "_").replace("'", "")[:120]
+            reason = f"close1_redacted_archive_read_failed_{type(error).__name__}_{detail}"
+        return _fail(
+            ledger,
+            tip=locals().get("tip", ledger["archive_tip_sweep"]),
+            reason=reason,
+        )
 
 
 def main() -> int:
