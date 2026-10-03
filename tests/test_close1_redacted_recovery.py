@@ -103,8 +103,8 @@ def test_live_shape_redacted_settlement_recovers_exact_short(monkeypatch, tmp_pa
         reconciled_at="2026-10-04T00:00:00+00:00",
     )
 
-    assert result["status"] == "reconciled", result
-    assert result["reason"] == "official_redacted_archive_reconciled"
+    assert result["reason"] == "official_redacted_archive_reconciled", result["reason"]
+    assert result["status"] == "reconciled"
     assert result["cash"] == "9763.0944"
     assert result["lots"] == [["-1", "234.56"]]
     assert result["position"] == "-1"
