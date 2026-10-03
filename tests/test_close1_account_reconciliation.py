@@ -867,3 +867,29 @@ def test_prepare_shared_ledger_migration(tmp_path, existing):
         again = subprocess.run([bash, str(harness), shell_root, tmp_path.as_posix()], capture_output=True, text=True, encoding="utf-8", errors="replace")
         assert again.returncode == 0, again.stderr
         assert shared.read_bytes() == expected
+
+
+def test_batch_pending_helper_allows_exact_batch_without_weakening_single_guard(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    allowed = ["batch-a", "batch-b"]
+    first = account.mark_pending_batch_leg(
+        "batch-a", search_start_sweep=201, allowed_trade_ids=allowed,
+    )
+    second = account.mark_pending_batch_leg(
+        "batch-b", search_start_sweep=201, allowed_trade_ids=allowed,
+    )
+    assert first["pending_trade_ids"] == ["batch-a"]
+    assert second["pending_trade_ids"] == ["batch-a", "batch-b"]
+    with pytest.raises(RuntimeError, match="pending_binding_inflight"):
+        account.mark_pending("outside", search_start_sweep=201)
+
+
+def test_batch_pending_helper_rejects_binding_outside_exact_batch(monkeypatch, tmp_path):
+    _state_dir(monkeypatch, tmp_path)
+    original = account.mark_pending("outside", search_start_sweep=201)
+    with pytest.raises(RuntimeError, match="pending_binding_outside_batch"):
+        account.mark_pending_batch_leg(
+            "batch-a", search_start_sweep=201,
+            allowed_trade_ids=["batch-a", "batch-b"],
+        )
+    assert account.load_ledger() == original

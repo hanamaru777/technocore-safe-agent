@@ -344,6 +344,62 @@ def mark_pending(
     return ledger
 
 
+def mark_pending_batch_leg(
+    trade_id: str,
+    *,
+    search_start_sweep: int,
+    allowed_trade_ids: list[str] | tuple[str, ...],
+    owner_did: str = OWNER_DID,
+    now: str | None = None,
+) -> dict:
+    """Persist one leg of an already-validated same-sweep batch.
+
+    Existing pending bindings are allowed only when every one belongs to the
+    exact batch allow-list.  The ordinary ``mark_pending`` single-flight guard
+    remains unchanged for all non-batch callers.
+    """
+    if not isinstance(trade_id, str) or not close_call.TRADE_ID_RE.fullmatch(trade_id):
+        raise ValueError("close1_account_trade_id_invalid")
+    if (
+        not isinstance(allowed_trade_ids, (list, tuple))
+        or len(allowed_trade_ids) < 2
+        or len(set(allowed_trade_ids)) != len(allowed_trade_ids)
+        or trade_id not in allowed_trade_ids
+        or any(not isinstance(item, str) or not close_call.TRADE_ID_RE.fullmatch(item)
+               for item in allowed_trade_ids)
+    ):
+        raise ValueError("close1_account_batch_ids_invalid")
+    if (
+        type(search_start_sweep) is not int
+        or not CHECKPOINT_SWEEP < search_start_sweep <= close_call.LOCK_SWEEP
+    ):
+        raise ValueError("close1_account_search_start_invalid")
+    ledger = load_ledger(owner_did=owner_did)
+    _validate_ledger(ledger, owner_did=owner_did)
+    if ledger["status"] == "own_state_unreconciled":
+        raise RuntimeError("close1_own_state_unreconciled")
+    if trade_id in ledger["settled_trade_ids"] or trade_id in ledger["void_trades"]:
+        raise RuntimeError("close1_trade_already_terminal")
+    existing = ledger["pending_trades"].get(trade_id)
+    if existing is not None:
+        return ledger
+    allowed = set(allowed_trade_ids)
+    if not set(ledger["pending_trades"]).issubset(allowed):
+        raise RuntimeError("close1_pending_binding_outside_batch")
+    cursor = max(search_start_sweep, ledger["as_of_sweep"] + 1)
+    if cursor > close_call.LOCK_SWEEP:
+        raise ValueError("close1_account_search_start_after_lock")
+    ledger["pending_trades"][trade_id] = {
+        "search_start_sweep": cursor,
+        "next_search_sweep": cursor,
+        "marked_at": now or _now(),
+    }
+    ledger["pending_trade_ids"] = sorted(ledger["pending_trades"])
+    ledger.update(status="own_state_pending", reason="binding_awaiting_archive")
+    save_ledger(ledger)
+    return ledger
+
+
 @dataclass
 class _Account:
     """Exact Decimal port of frozen official ``close_call_fold.Account``."""
