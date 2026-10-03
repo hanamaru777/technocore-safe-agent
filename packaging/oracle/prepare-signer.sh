@@ -40,6 +40,7 @@ install -o root -g root -m 0755 "$app/packaging/oracle/diagnostic.sh" /usr/local
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-metadata-block.service" /etc/systemd/system/technocore-safe-agent-metadata-block.service
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-signer.service" /etc/systemd/system/technocore-safe-agent-signer.service
 install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-close1-approved-trade.service" /etc/systemd/system/technocore-safe-agent-close1-approved-trade.service
+install -o root -g root -m 0644 "$app/packaging/oracle/technocore-safe-agent-close1-batch-trade.service" /etc/systemd/system/technocore-safe-agent-close1-batch-trade.service
 # Refresh the existing resident unit from this checked-out release.  Discord
 # is refreshed only when that optional service is already installed.
 install -o root -g root -m 0644 "$app/packaging/oracle/resident.service" /etc/systemd/system/technocore-safe-agent-resident.service
