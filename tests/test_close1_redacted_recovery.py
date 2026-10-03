@@ -103,7 +103,7 @@ def test_live_shape_redacted_settlement_recovers_exact_short(monkeypatch, tmp_pa
         reconciled_at="2026-10-04T00:00:00+00:00",
     )
 
-    assert result["status"] == "reconciled"
+    assert result["status"] == "reconciled", result
     assert result["reason"] == "official_redacted_archive_reconciled"
     assert result["cash"] == "9763.0944"
     assert result["lots"] == [["-1", "234.56"]]
@@ -116,7 +116,7 @@ def test_live_shape_redacted_settlement_recovers_exact_short(monkeypatch, tmp_pa
     assert account.load_ledger() == result
 
 
-def test_redacted_pending_absence_fails_closed_without_cursor_advance(monkeypatch, tmp_path):
+def test_redacted_unknown_owner_trade_fails_closed_without_cursor_advance(monkeypatch, tmp_path):
     _state_dir(monkeypatch, tmp_path)
     before = _pending()
     account.save_ledger(before)
@@ -127,7 +127,7 @@ def test_redacted_pending_absence_fails_closed_without_cursor_advance(monkeypatc
     )
 
     assert result["status"] == "own_state_unreconciled"
-    assert result["reason"] == "close1_redacted_pending_trade_not_visible"
+    assert result["reason"] == "close1_redacted_untracked_owner_trade"
     assert result["cash"] == "10000"
     assert result["position"] == "0"
     assert result["pending_trades"] == before["pending_trades"]
