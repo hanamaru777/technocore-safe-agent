@@ -1,7 +1,7 @@
 """Non-binding rehearsal for the resident-side Close Call orchestration path.
 
-Consumes the local rehearsal stage after one checked attempt, writes no signer
-approval, never accesses Vault material, and never posts. It independently
+Consumes each valid local rehearsal stage after one checked attempt, writes no
+signer approval, never accesses Vault material, and never posts. It independently
 revalidates a staged offer/account/deadline/policy and reports whether the
 existing exact executor would be eligible to start.
 """
@@ -71,9 +71,7 @@ def _load_stage(*, now: datetime | None = None) -> tuple[dict, str]:
     current = now or _now()
     if current.tzinfo is None:
         raise RuntimeError("close1_auto_rehearsal_time_invalid")
-    age = (current.astimezone(UTC) - _time(value.get("staged_at"))).total_seconds()
-    if not 0 <= age <= MAX_STAGE_AGE_SECONDS:
-        raise RuntimeError("close1_auto_rehearsal_stage_stale")
+    _time(value.get("staged_at"))
     return value, hashlib.sha256(raw).hexdigest()
 
 
@@ -82,6 +80,9 @@ def _fresh_revalidate(stage: dict, *, now: datetime | None = None) -> dict:
     if current.tzinfo is None:
         raise RuntimeError("close1_auto_rehearsal_time_invalid")
     current = current.astimezone(UTC)
+    stage_age = (current - _time(stage.get("staged_at"))).total_seconds()
+    if not 0 <= stage_age <= MAX_STAGE_AGE_SECONDS:
+        raise RuntimeError("close1_auto_rehearsal_stage_stale")
     if current >= close_call.LOCK:
         raise RuntimeError("close1_auto_rehearsal_contest_locked")
     wall_sweep = int((current - close_call.OPENING).total_seconds() // 300)
@@ -211,10 +212,38 @@ def _consume_stage(expected_digest: str) -> None:
             os.close(fd)
 
 
+def _safe_reason(error: Exception) -> str:
+    reason = str(error)
+    return reason if reason.startswith("close1_") else "close1_auto_rehearsal_preflight_failed"
+
+
+def _blocked_result(stage: dict, digest: str, error: Exception, current: datetime) -> dict:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "BLOCKED_PREFLIGHT",
+        "non_binding": True,
+        "trade_id": stage["trade_id"],
+        "stage_sha256": digest,
+        "reason": _safe_reason(error),
+        "signer_access": False,
+        "approval_written": False,
+        "post_attempted": False,
+        "evaluated_at": current.astimezone(UTC).isoformat(),
+    }
+
+
 def run_once(*, now: datetime | None = None) -> dict:
     current = now or _now()
     stage, digest = _load_stage(now=current)
-    fresh = _fresh_revalidate(stage, now=current)
+    try:
+        fresh = _fresh_revalidate(stage, now=current)
+    except Exception as error:
+        result = _blocked_result(stage, digest, error, current)
+        observer.atomic_json_write(result_path(), result, compact=True, mode=0o660)
+        _record_skip(stage["trade_id"])
+        _consume_stage(digest)
+        return result
+
     detected = _time(stage["detected_at"])
     staged = _time(stage["staged_at"])
     capture_to_rehearsal_ms = int((current.astimezone(UTC) - detected).total_seconds() * 1000)
@@ -245,9 +274,11 @@ def main() -> int:
     try:
         result = run_once()
     except Exception as error:
-        print(json.dumps({"status": "blocked", "reason": str(error)}, sort_keys=True))
+        print(json.dumps({"status": "blocked", "reason": _safe_reason(error)}, sort_keys=True))
         return 1
     print(json.dumps(result, sort_keys=True))
+    if result["status"] == "BLOCKED_PREFLIGHT":
+        return 0
     return 0 if result["target_met"] else 2
 
 
