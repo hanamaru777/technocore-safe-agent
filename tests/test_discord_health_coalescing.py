@@ -49,15 +49,25 @@ def raw(monkeypatch, notices):
     )
 
 
+def assert_compact_notice(text: str, title: str) -> list[str]:
+    lines = text.splitlines()
+    assert len(lines) <= 6
+    assert lines[0] == title
+    assert any(line.startswith("影響:") for line in lines)
+    assert any(line.startswith("状態:") for line in lines)
+    assert sum(line.startswith("次:") for line in lines) == 1
+    return lines
+
+
 def test_repeated_same_red_is_coalesced_and_humanized(monkeypatch, tmp_path):
     setup(monkeypatch, tmp_path)
     raw(monkeypatch, [RED_DEGRADED])
     notices = coalescing._coalesced_system_notices(object())
     assert len(notices) == 1
-    assert notices[0].startswith("🔴 監視が不安定")
-    assert "今やること: 基本は待機" in notices[0]
+    assert_compact_notice(notices[0], "⚠️ 監視が不安定")
+    assert "次: 対応不要。自動回復を待つ" in notices[0]
     assert "監視データが5分以上、不安定" in notices[0]
-    assert "必要なら: `/status` で詳細確認" in notices[0]
+    assert "詳細: 最終確認 1分前" in notices[0]
     assert "degraded" not in notices[0]
     assert coalescing._coalesced_system_notices(object()) == []
     state = coalescing._load_state()
@@ -72,8 +82,8 @@ def test_new_failure_class_is_not_hidden_inside_open_incident(monkeypatch, tmp_p
     raw(monkeypatch, [RED_STALE])
     notices = coalescing._coalesced_system_notices(object())
     assert len(notices) == 1
-    assert notices[0].startswith("🔴 監視更新が遅れています")
-    assert "今やること: `/status` で状態確認" in notices[0]
+    assert_compact_notice(notices[0], "⚠️ 監視更新が遅れています")
+    assert "次: `/status` で状態を1回確認する" in notices[0]
     assert len(coalescing._load_state()["seen_red_signatures"]) == 2
 
 
@@ -82,8 +92,8 @@ def test_critical_autopilot_state_keeps_stronger_action(monkeypatch, tmp_path):
     raw(monkeypatch, [RED_AUTOPILOT_OFF])
     notices = coalescing._coalesced_system_notices(object())
     assert len(notices) == 1
-    assert notices[0].startswith("🔴 自動対応が停止")
-    assert "今やること: `/status` で状態確認" in notices[0]
+    assert_compact_notice(notices[0], "⚠️ 自動対応が停止")
+    assert "次: `/status` で状態を1回確認する" in notices[0]
     assert "自動対応機能がOFF" in notices[0]
     assert "Autopilot" not in notices[0]
 
@@ -107,8 +117,8 @@ def test_first_green_is_suppressed_until_five_minutes_stable(monkeypatch, tmp_pa
     raw(monkeypatch, [])
     notices = coalescing._coalesced_system_notices(object())
     assert len(notices) == 1
-    assert notices[0].startswith("🟢 監視復旧")
-    assert "今やること: なし" in notices[0]
+    assert_compact_notice(notices[0], "✅ 監視復旧")
+    assert "次: 対応不要" in notices[0]
     assert "監視と自動対応が5分間安定" in notices[0]
     assert "Autopilot" not in notices[0]
     assert coalescing._load_state()["incident_open"] is False
@@ -119,8 +129,8 @@ def test_green_without_wrapper_incident_state_is_still_humanized(monkeypatch, tm
     raw(monkeypatch, [GREEN])
     notices = coalescing._coalesced_system_notices(object())
     assert len(notices) == 1
-    assert notices[0].startswith("🟢 監視復旧")
-    assert "今やること: なし" in notices[0]
+    assert_compact_notice(notices[0], "✅ 監視復旧")
+    assert "次: 対応不要" in notices[0]
     assert "通常状態に戻りました" in notices[0]
     assert "Observer" not in notices[0]
 
@@ -148,11 +158,10 @@ def test_gap_notice_is_humanized_without_changing_gap_logic(monkeypatch, tmp_pat
     raw(monkeypatch, [YELLOW_GAP])
     notices = coalescing._coalesced_system_notices(object())
     assert len(notices) == 1
-    assert notices[0].startswith("🟡 通信抜けを複数検出")
-    assert "今やること: 基本は待機" in notices[0]
+    assert_compact_notice(notices[0], "⚠️ 通信抜けを複数検出")
+    assert "次: 対応不要。監視を継続する" in notices[0]
     assert "今回 3件" in notices[0]
     assert "最終監視 1分前" in notices[0]
-    assert "必要なら: `/status` で詳細確認" in notices[0]
     assert "gap" not in notices[0]
 
 
