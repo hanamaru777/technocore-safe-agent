@@ -119,6 +119,17 @@ def _status_activity() -> dict:
     return activity
 
 
+def _problem_label(value: object) -> str:
+    text = str(value)
+    labels = {
+        "Autopilot OFF": "自動対応が停止",
+        "Autopilot 一時停止": "自動対応が一時停止",
+        "Resident監視遅延": "監視更新が遅延",
+        "Observer監視異常": "監視に異常",
+    }
+    return labels.get(text, base.safe_excerpt(text, 100) or "状態不明")
+
+
 def status_message() -> str:
     activity = _status_activity()
     snapshot = activity["snapshot"]
@@ -128,7 +139,7 @@ def status_message() -> str:
             "WARNING",
             "FLOP Agent 異常",
             impact="安全性に関わる異常があるため通常処理を保留します。",
-            state=" / ".join(str(item) for item in problems),
+            state=" / ".join(_problem_label(item) for item in problems),
             next_action="安全状態が戻るまで不可逆操作を進めない",
             detail="`/mission` で阻害要因、`/activity` で24時間詳細を確認できます。",
         )
