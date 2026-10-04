@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime
 
 from . import discord_tclk_review as app
-from . import airdrop_approval
+from . import airdrop_approval, discord_notice
 from . import (
     core,
     observer,
@@ -140,69 +140,43 @@ def _evidence_for(stage: dict) -> dict:
 
 def _decision_notice(prepared: dict, evidence: dict, *, now_ms: int) -> str:
     stage = prepared["stage"]
-    preview = prepared["preview"]
     digest = prepared["approval_digest"]
     remaining = max(1, (stage["expires_ms"] - now_ms) // 60_000)
     spec = evidence["full_spec"]
-    material = evidence["material"]
-    lines = [
-        "🟠 tclk/1 PREPARE完了 — あなたの承認待ち",
-        f"job: a2a/{app._sanitize_note(stage['job_id'], 64)}",
-        f"残り承認時間: 約{remaining}分 | rail: PaperRail / no-value rehearsal",
-        f"task: {app._sanitize_note(spec['value'], 360)}",
-        f"stage id: {stage['stage_id']}",
-        f"offer id: {stage['offer_id']}",
-        f"frame sha256: {stage['frame_sha256']}",
-        f"full spec sha256: {stage['full_spec_sha256']}",
-    ]
-    if material is not None:
-        lines.append(f"material sha256: {stage['material_sha256']}")
-    lines.extend([
-        f"accept sha256: {preview['accept_sha256']}",
-        f"contract: {preview['contract_id']}",
-        f"deal room: {preview['deal_room']}",
-        f"approval digest: {digest}",
-    ])
-    if evidence.get("external_url_present"):
-        lines.append("注意: task内にURL文字列があります。BOTは開いていません。")
-    lines.extend([
-        "",
-        "内容を確認して本当に進める場合だけ、OracleへSSHして次の1行を実行:",
-        f"sudo /usr/local/sbin/technocore-tclk-approve {stage['stage_id']} {digest} APPROVE",
-        "",
-        "このDiscord通知だけではacceptされません。Discord/ChatGPTは署名・投稿できません。",
-    ])
-    return "\n".join(lines)
+    task = app._sanitize_note(spec["value"], 180)
+    url_note = " / task内URLあり（未アクセス）" if evidence.get("external_url_present") else ""
+    command = (
+        f"sudo /usr/local/sbin/technocore-tclk-approve "
+        f"{stage['stage_id']} {digest} APPROVE"
+    )
+    return discord_notice.render(
+        "ACTION",
+        "tclk accept承認が必要",
+        impact="承認しない限りacceptされません。PaperRail / no-value rehearsalです。",
+        state=f"a2a/{app._sanitize_note(stage['job_id'], 64)} / {task}{url_note}",
+        next_action=command,
+        deadline=f"約{remaining}分",
+        detail="Discord通知自体は署名・投稿を実行しません。",
+    )
 
 
 def _reveal_decision_notice(prepared: dict, *, now_ms: int) -> str:
     bindings = prepared["bindings"]
     digest = prepared["approval_digest"]
     remaining = max(1, (bindings["claim_by_ms"] - now_ms) // 60_000)
-    lines = [
-        "🟣 tclk/1 REVEAL PREPARE完了 — 別承認が必要",
-        f"job: a2a/{app._sanitize_note(bindings['job_id'], 64)}",
-        f"claim期限まで: 約{remaining}分 | rail: PaperRail / no-value rehearsal",
-        f"stage id: {bindings['stage_id']}",
-        f"offer id: {bindings['offer_id']}",
-        f"contract: {bindings['contract_id']}",
-        f"deal room: {bindings['deal_room']}",
-        f"accept sha256: {bindings['accept_sha256']}",
-        f"lock sha256: {bindings['lock_line_sha256']}",
-        f"lock ref: {bindings['lock_ref']}",
-        f"paper note sha256: {bindings['paper_note_sha256']}",
-        f"work evidence sha256: {bindings['work_evidence_sha256']}",
-        f"reveal sha256: {bindings['reveal_sha256']}",
-        f"claim by ms: {bindings['claim_by_ms']}",
-        f"refund after ms: {bindings['refund_after_ms']}",
-        f"reveal approval digest: {digest}",
-        "",
-        "REVEALはpreimageを公開する不可逆操作です。本当に進める場合だけOracleへSSHして次の1行を実行:",
-        f"sudo /usr/local/sbin/technocore-tclk-reveal-approve {bindings['stage_id']} {digest} APPROVE_REVEAL",
-        "",
-        "accept承認はREVEAL承認には使えません。このDiscord通知だけではREVEALされません。",
-    ]
-    return "\n".join(lines)
+    command = (
+        f"sudo /usr/local/sbin/technocore-tclk-reveal-approve "
+        f"{bindings['stage_id']} {digest} APPROVE_REVEAL"
+    )
+    return discord_notice.render(
+        "WARNING",
+        "tclk REVEALの別承認が必要",
+        impact="REVEALはpreimageを公開する不可逆操作です。accept承認は流用できません。",
+        state=f"a2a/{app._sanitize_note(bindings['job_id'], 64)} / PaperRail / no-value rehearsal",
+        next_action=command,
+        deadline=f"claim期限まで約{remaining}分",
+        detail="承認しない限りREVEALされません。",
+    )
 
 
 def _new_prepared_approval_notices() -> list[str]:
