@@ -57,7 +57,7 @@ def prepared():
     }
 
 
-def test_reveal_notice_contains_exact_public_bindings_and_root_command(monkeypatch, tmp_path):
+def test_reveal_notice_is_compact_and_keeps_exact_root_command(monkeypatch, tmp_path):
     preview_dir = tmp_path / "reveal-previews"
     preview_dir.mkdir()
     (preview_dir / f"{STAGE_ID}.json").write_text("{}\n", encoding="utf-8")
@@ -84,26 +84,23 @@ def test_reveal_notice_contains_exact_public_bindings_and_root_command(monkeypat
     notices = discord_tclk_approval._new_prepared_reveal_notices()
     assert len(notices) == 1
     text = notices[0]
+    lines = text.splitlines()
     digest = prepared()["approval_digest"]
-    assert "REVEAL PREPARE完了" in text
+    assert len(lines) <= 6
+    assert lines[0] == "⚠️ tclk REVEALの別承認が必要"
     assert "PaperRail / no-value rehearsal" in text
-    assert f"stage id: {STAGE_ID}" in text
-    assert f"contract: {CONTRACT_ID}" in text
-    assert f"deal room: {DEAL_ROOM}" in text
-    assert f"accept sha256: {ACCEPT_HASH}" in text
-    assert f"lock sha256: {LOCK_HASH}" in text
-    assert f"lock ref: {CONTRACT_ID}" in text
-    assert f"paper note sha256: {PAPER_HASH}" in text
-    assert f"work evidence sha256: {WORK_HASH}" in text
-    assert f"reveal sha256: {REVEAL_HASH}" in text
-    assert f"claim by ms: {CLAIM_BY}" in text
-    assert f"refund after ms: {REFUND_AFTER}" in text
-    assert f"reveal approval digest: {digest}" in text
+    assert "preimageを公開する不可逆操作" in text
     assert (
         f"sudo /usr/local/sbin/technocore-tclk-reveal-approve {STAGE_ID} {digest} APPROVE_REVEAL"
         in text
     )
-    assert "accept承認はREVEAL承認には使えません" in text
+    assert "accept承認は流用できません" in text
+    assert "lock sha256:" not in text
+    assert "paper note sha256:" not in text
+    assert "work evidence sha256:" not in text
+    assert "reveal sha256:" not in text
+    assert "claim by ms:" not in text
+    assert sum(line.startswith("次:") for line in lines) == 1
     assert saved[0]["notified"][0]["stage_id"] == STAGE_ID
 
 

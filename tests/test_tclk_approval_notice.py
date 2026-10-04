@@ -94,7 +94,7 @@ def test_public_digest_exactly_matches_root_approval_digest(monkeypatch):
     assert root_record["approval_digest"] == public["approval_digest"]
 
 
-def test_prepared_notice_contains_exact_operator_action_and_public_evidence(monkeypatch, tmp_path):
+def test_prepared_notice_is_compact_and_keeps_exact_operator_action(monkeypatch, tmp_path):
     preview_dir = tmp_path / "previews"
     preview_dir.mkdir()
     (preview_dir / f"{STAGE_ID}.json").write_text("{}\n", encoding="utf-8")
@@ -111,11 +111,16 @@ def test_prepared_notice_contains_exact_operator_action_and_public_evidence(monk
     assert len(notices) == 1
     text = notices[0]
     digest = prepared()["approval_digest"]
-    assert "PREPARE完了" in text
+    lines = text.splitlines()
+    assert len(lines) <= 6
+    assert lines[0] == "🟠 tclk accept承認が必要"
     assert "PaperRail / no-value rehearsal" in text
-    assert f"approval digest: {digest}" in text
     assert f"sudo /usr/local/sbin/technocore-tclk-approve {STAGE_ID} {digest} APPROVE" in text
     assert "Review the public repository specification" in text
+    assert "frame sha256:" not in text
+    assert "full spec sha256:" not in text
+    assert "contract:" not in text
+    assert sum(line.startswith("次:") for line in lines) == 1
     assert saved[0]["notified"][0]["stage_id"] == STAGE_ID
 
 
