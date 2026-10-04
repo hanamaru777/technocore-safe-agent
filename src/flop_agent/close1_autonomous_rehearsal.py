@@ -1,13 +1,15 @@
 """Non-binding rehearsal for the resident-side Close Call orchestration path.
 
-Consumes no stage, writes no signer approval, never accesses Vault material, and
-never posts. It independently revalidates a staged offer/account/deadline/policy
-and reports whether the existing exact executor would be eligible to start.
+Consumes the local rehearsal stage after one checked attempt, writes no signer
+approval, never accesses Vault material, and never posts. It independently
+revalidates a staged offer/account/deadline/policy and reports whether the
+existing exact executor would be eligible to start.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -182,6 +184,33 @@ def _fresh_revalidate(stage: dict, *, now: datetime | None = None) -> dict:
     }
 
 
+def _record_skip(trade_id: str) -> None:
+    skipped = stage_mod._load_skips()
+    skipped.add(trade_id)
+    if len(skipped) > stage_mod.MAX_SKIP_IDS:
+        raise RuntimeError("close1_auto_rehearsal_skip_capacity")
+    observer.atomic_json_write(
+        stage_mod.skip_path(),
+        {"schema_version": SCHEMA_VERSION, "trade_ids": sorted(skipped)},
+        compact=True,
+        mode=0o660,
+    )
+
+
+def _consume_stage(expected_digest: str) -> None:
+    path = stage_mod.stage_path()
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_digest:
+        raise RuntimeError("close1_auto_rehearsal_stage_changed")
+    path.unlink()
+    if os.name == "posix":
+        fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
 def run_once(*, now: datetime | None = None) -> dict:
     current = now or _now()
     stage, digest = _load_stage(now=current)
@@ -207,6 +236,8 @@ def run_once(*, now: datetime | None = None) -> dict:
         "evaluated_at": current.astimezone(UTC).isoformat(),
     }
     observer.atomic_json_write(result_path(), result, compact=True, mode=0o660)
+    _record_skip(stage["trade_id"])
+    _consume_stage(digest)
     return result
 
 
