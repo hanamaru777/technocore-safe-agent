@@ -135,11 +135,16 @@ def test_status_preserves_fast_path_flag(monkeypatch):
 def test_install_replaces_only_presentation_functions(monkeypatch):
     old_mission = discord_control.mission_message
     old_status = discord_control.status_message
+    old_installed = compact._INSTALLED
     monkeypatch.setattr(compact, "_INSTALLED", False)
 
-    compact.install()
-
-    assert discord_control.mission_message is compact.mission_message
-    assert discord_control.status_message is compact.status_message
-    assert discord_control.mission_message is not old_mission
-    assert discord_control.status_message is not old_status
+    try:
+        compact.install()
+        assert discord_control.mission_message is compact.mission_message
+        assert discord_control.status_message is compact.status_message
+        assert discord_control.mission_message is not old_mission
+        assert discord_control.status_message is not old_status
+    finally:
+        discord_control.mission_message = old_mission
+        discord_control.status_message = old_status
+        compact._INSTALLED = old_installed
