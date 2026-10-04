@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import discord_agent_activity, discord_control, observer, resident
+from . import discord_agent_activity, discord_control, discord_notice, observer, resident
 
 SCHEMA_VERSION = 1
 STATE_FILE = "discord-health-coalescing.json"
@@ -102,6 +102,10 @@ def _notice_value(notice: str, prefix: str) -> str | None:
     return None
 
 
+def _reference_detail(reference: str | None) -> str | None:
+    return f"最終確認 {reference}" if reference else None
+
+
 def _humanize_notice(notice: str) -> str:
     """Render health-only notices for a non-operator without changing semantics."""
     if _is_red_health(notice):
@@ -110,58 +114,74 @@ def _humanize_notice(notice: str) -> str:
         reference = last_ok or last_seen
 
         if "Autopilot OFF" in notice:
-            title = "🔴 自動対応が停止"
-            action = "今やること: `/status` で状態確認"
-            meaning = "意味: 自動対応機能がOFFになっています。"
-        elif "Autopilot 一時停止" in notice:
-            title = "🔴 自動対応が一時停止"
-            action = "今やること: `/status` で状態確認"
-            meaning = "意味: 自動対応機能が一時停止しています。"
-        elif "監視状態 degraded" in notice:
-            title = "🔴 監視が不安定"
-            action = "今やること: 基本は待機"
-            meaning = "意味: 監視データが5分以上、不安定な状態です。"
-        elif "最終監視 " in notice or "Resident監視遅延" in notice:
-            title = "🔴 監視更新が遅れています"
-            action = "今やること: `/status` で状態確認"
-            meaning = "意味: 監視データの更新が通常より遅れています。"
-        else:
-            title = "🔴 監視に異常"
-            action = "今やること: `/status` で状態確認"
-            meaning = "意味: 監視または自動対応で確認が必要な状態を検出しました。"
-
-        lines = [title, "", action, meaning]
-        if reference:
-            lines.append(f"参考: 最終確認 {reference}")
-        if "基本は待機" in action:
-            lines.append("必要なら: `/status` で詳細確認")
-        return "\n".join(lines)
+            return discord_notice.render(
+                "WARNING",
+                "自動対応が停止",
+                impact="自動対応は行われません。",
+                state="自動対応機能がOFFになっています。",
+                next_action="`/status` で状態を1回確認する",
+                detail=_reference_detail(reference),
+            )
+        if "Autopilot 一時停止" in notice:
+            return discord_notice.render(
+                "WARNING",
+                "自動対応が一時停止",
+                impact="自動対応は一時的に行われません。",
+                state="自動対応機能が一時停止しています。",
+                next_action="`/status` で状態を1回確認する",
+                detail=_reference_detail(reference),
+            )
+        if "監視状態 degraded" in notice:
+            return discord_notice.render(
+                "WARNING",
+                "監視が不安定",
+                impact="監視データが5分以上、不安定な状態です。",
+                state="同じ障害の再通知は抑制し、自動回復を監視しています。",
+                next_action="対応不要。自動回復を待つ",
+                detail=_reference_detail(reference),
+            )
+        if "最終監視 " in notice or "Resident監視遅延" in notice:
+            return discord_notice.render(
+                "WARNING",
+                "監視更新が遅れています",
+                impact="監視データの更新が通常より遅れています。",
+                state="最新状態の確認が必要です。",
+                next_action="`/status` で状態を1回確認する",
+                detail=_reference_detail(reference),
+            )
+        return discord_notice.render(
+            "WARNING",
+            "監視に異常",
+            impact="監視または自動対応で確認が必要な状態を検出しました。",
+            state="同じ障害の再通知は抑制しています。",
+            next_action="`/status` で状態を1回確認する",
+            detail=_reference_detail(reference),
+        )
 
     if _is_green_health(notice):
-        return (
-            "🟢 監視復旧\n\n"
-            "今やること: なし\n"
-            "意味: 監視と自動対応が通常状態に戻りました。"
+        return discord_notice.render(
+            "DONE",
+            "監視復旧",
+            impact="監視と自動対応が通常状態に戻りました。",
+            state="通常状態で稼働中です。",
+            next_action="対応不要",
         )
 
     if notice.startswith("🟡 FLOP Agent 通信欠落を複数検出"):
         count = _notice_value(notice, "未通知gap:")
         last_seen = _notice_value(notice, "最終監視:")
-        lines = [
-            "🟡 通信抜けを複数検出",
-            "",
-            "今やること: 基本は待機",
-            "意味: 短時間に複数の通信抜けを検出しました。単発の通信抜けは自動でまとめています。",
-        ]
         details = []
         if count:
             details.append(f"今回 {count.lstrip('+')}件")
         if last_seen:
             details.append(f"最終監視 {last_seen}")
-        if details:
-            lines.append("参考: " + " / ".join(details))
-        lines.append("必要なら: `/status` で詳細確認")
-        return "\n".join(lines)
+        return discord_notice.render(
+            "WARNING",
+            "通信抜けを複数検出",
+            impact="短時間に複数の通信抜けを検出しました。単発の通信抜けは自動でまとめています。",
+            state=" / ".join(details) if details else "複数の通信抜けを検出しました。",
+            next_action="対応不要。監視を継続する",
+        )
 
     return notice
 
@@ -172,10 +192,12 @@ def _healthy_now() -> bool:
 
 
 def _final_recovery_notice() -> str:
-    return (
-        "🟢 監視復旧\n\n"
-        "今やること: なし\n"
-        "意味: 監視と自動対応が5分間安定したため、通常状態に戻りました。"
+    return discord_notice.render(
+        "DONE",
+        "監視復旧",
+        impact="監視と自動対応が5分間安定したため、通常状態に戻りました。",
+        state="障害通知を終了しました。",
+        next_action="対応不要",
     )
 
 
