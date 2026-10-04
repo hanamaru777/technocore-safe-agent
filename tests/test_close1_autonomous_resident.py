@@ -36,6 +36,7 @@ def test_fresh_stage_is_rehearsed_in_same_cycle(tmp_path, monkeypatch):
             "taker_side": "buy",
         },
     )
+    monkeypatch.setattr(resident, "_detected_at_from_stage", lambda now=None: NOW)
     monkeypatch.setattr(
         rehearsal,
         "run_once",
@@ -46,16 +47,21 @@ def test_fresh_stage_is_rehearsed_in_same_cycle(tmp_path, monkeypatch):
     assert result["stage_status"] == "fresh"
     assert result["trade_id"] == "fresh-1"
     assert result["target_met"] is True
-    assert result["cycle_to_handoff_complete_ms"] == 0
+    assert result["capture_to_handoff_complete_ms"] == 0
 
 
-def test_preexisting_stage_is_drained_before_new_scan(tmp_path, monkeypatch):
+def test_preexisting_stage_uses_original_detection_time(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE", tmp_path)
     close1 = tmp_path / "close1"
     close1.mkdir()
     stage.stage_path().write_text("{}", encoding="utf-8")
     scanned = []
     monkeypatch.setattr(stage, "run_once", lambda: scanned.append(True))
+    monkeypatch.setattr(
+        resident,
+        "_detected_at_from_stage",
+        lambda now=None: NOW - timedelta(seconds=6),
+    )
     monkeypatch.setattr(
         rehearsal,
         "run_once",
@@ -64,6 +70,8 @@ def test_preexisting_stage_is_drained_before_new_scan(tmp_path, monkeypatch):
     result = resident.run_cycle(now=NOW)
     assert result["status"] == "REHEARSAL_COMPLETE"
     assert result["stage_status"] == "preexisting"
+    assert result["capture_to_handoff_complete_ms"] == 6000
+    assert result["target_met"] is False
     assert scanned == []
 
 
