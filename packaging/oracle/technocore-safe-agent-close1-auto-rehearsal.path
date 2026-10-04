@@ -1,9 +1,0 @@
-[Unit]
-Description=Technocore Close Call staged-candidate rehearsal trigger
-
-[Path]
-PathChanged=/var/lib/technocore-safe-agent/close1/close1-autonomous-stage.json
-Unit=technocore-safe-agent-close1-auto-rehearsal.service
-
-[Install]
-WantedBy=multi-user.target
