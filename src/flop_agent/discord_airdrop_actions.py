@@ -11,7 +11,7 @@ import json
 import re
 from datetime import UTC, datetime
 
-from . import airdrop_action_stager, airdrop_approval, airdrop_ledger
+from . import airdrop_action_stager, airdrop_approval, airdrop_ledger, discord_notice
 
 CUSTOM_PREFIX = "flop-airdrop"
 CUSTOM_ID_RE = re.compile(
@@ -234,15 +234,20 @@ def handle_interaction(
         raise DiscordAirdropActionError(str(error)) from error
 
     if decision == "approved":
-        message = (
-            f"✅ APPROVED locally: {request_id}\n"
-            "この承認はexact payload digestにのみ有効です。"
-            "まだ署名・送信・Claim・支払いは実行していません。"
+        message = discord_notice.render(
+            "DONE",
+            "Airdrop Actionをローカル承認",
+            impact="exact payload digestへの承認だけを記録しました。外部実行はまだありません。",
+            state=f"request {request_id[:8]}… / approved",
+            next_action="なし（実行対象なら次の実行ゲートで再検証されます）",
         )
     else:
-        message = (
-            f"⛔ REJECTED locally: {request_id}\n"
-            "外部実行はありません。このrequestは再承認できません。"
+        message = discord_notice.render(
+            "FAILED",
+            "Airdrop Actionを拒否",
+            impact="外部実行はありません。このrequestは終了しました。",
+            state=f"request {request_id[:8]}… / rejected",
+            next_action="なし",
         )
     return {
         "ok": True,
