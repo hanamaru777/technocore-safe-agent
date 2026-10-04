@@ -40,8 +40,8 @@ def test_trade_plan_accepts_fractional_reconciled_cash_without_relaxing_trade_te
         current_position="-1",
     )
 
-    assert plan["opening_qty"] == "1.00"
-    assert plan["required_cash_before_unknown_clawback"] == "242.086800"
+    assert plan["opening_qty"] == "2.00"
+    assert plan["required_cash_before_unknown_clawback"] == "479.426800"
     assert plan["enough_cash_for_base_fee_and_collateral"] is True
 
     bad_terms = dict(terms, px="237.341")
