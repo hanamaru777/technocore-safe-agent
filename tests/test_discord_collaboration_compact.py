@@ -1,4 +1,4 @@
-from flop_agent import discord_collaboration, discord_collaboration_compact as compact
+from flop_agent import core, discord_collaboration, discord_collaboration_compact as compact
 
 
 def _notice(stage: str, *, summary: str = "I can reproduce the bounded test failure.") -> dict:
@@ -74,3 +74,8 @@ def test_install_replaces_only_notice_renderer(monkeypatch):
     finally:
         discord_collaboration._notice_message = original
         compact._INSTALLED = old_installed
+
+
+def test_production_entrypoint_installs_compact_collaboration_overlay():
+    source = (core.ROOT / "src" / "flop_agent" / "discord_tclk_approval.py").read_text("utf-8")
+    assert "discord_collaboration_compact.install()" in source
