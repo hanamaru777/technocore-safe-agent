@@ -66,13 +66,10 @@ def test_duplicate_json_field_is_rejected(isolated_state):
         rehearsal._load_stage(now=NOW)
 
 
-def test_run_once_reports_latency_without_binding_action(isolated_state, monkeypatch):
-    value = stage()
-    monkeypatch.setattr(
-        rehearsal,
-        "_load_stage",
-        lambda now=None: (value, "a" * 64),
-    )
+def _mock_nonbinding_handoff(monkeypatch, value, digest):
+    skipped = []
+    consumed = []
+    monkeypatch.setattr(rehearsal, "_load_stage", lambda now=None: (value, digest))
     monkeypatch.setattr(
         rehearsal,
         "_fresh_revalidate",
@@ -87,6 +84,14 @@ def test_run_once_reports_latency_without_binding_action(isolated_state, monkeyp
             "account_ready": True,
         },
     )
+    monkeypatch.setattr(rehearsal, "_record_skip", skipped.append)
+    monkeypatch.setattr(rehearsal, "_consume_stage", consumed.append)
+    return skipped, consumed
+
+
+def test_run_once_reports_latency_without_binding_action(isolated_state, monkeypatch):
+    value = stage()
+    skipped, consumed = _mock_nonbinding_handoff(monkeypatch, value, "a" * 64)
     result = rehearsal.run_once(now=NOW)
     assert result["status"] == "WOULD_EXECUTE"
     assert result["capture_to_rehearsal_ms"] == 2000
@@ -95,15 +100,27 @@ def test_run_once_reports_latency_without_binding_action(isolated_state, monkeyp
     assert result["signer_access"] is False
     assert result["approval_written"] is False
     assert result["post_attempted"] is False
+    assert skipped == ["abc-123"]
+    assert consumed == ["a" * 64]
 
 
 def test_latency_over_target_is_visible_not_silently_passed(isolated_state, monkeypatch):
     value = stage(detected=NOW - timedelta(seconds=6), staged=NOW - timedelta(seconds=1))
-    monkeypatch.setattr(rehearsal, "_load_stage", lambda now=None: (value, "b" * 64))
-    monkeypatch.setattr(rehearsal, "_fresh_revalidate", lambda value, now=None: {})
+    skipped, consumed = _mock_nonbinding_handoff(monkeypatch, value, "b" * 64)
     result = rehearsal.run_once(now=NOW)
     assert result["target_met"] is False
     assert result["capture_to_rehearsal_ms"] == 6000
+    assert skipped == ["abc-123"]
+    assert consumed == ["b" * 64]
+
+
+def test_stage_digest_change_is_rejected_before_unlink(isolated_state):
+    path = stage_mod.stage_path()
+    value = stage()
+    path.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="stage_changed"):
+        rehearsal._consume_stage("0" * 64)
+    assert path.exists()
 
 
 def test_rehearsal_module_has_no_signer_or_external_write_surface():
