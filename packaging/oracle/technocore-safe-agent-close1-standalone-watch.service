@@ -1,5 +1,5 @@
 [Unit]
-Description=Technocore Close Call standalone strategy watcher
+Description=Retired Technocore Close Call standalone strategy watcher
 After=network-online.target technocore-safe-agent-metadata-block.service
 Wants=network-online.target
 Requires=technocore-safe-agent-metadata-block.service
@@ -13,8 +13,10 @@ WorkingDirectory=/opt/technocore-safe-agent
 EnvironmentFile=/etc/technocore-safe-agent/env
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
-ExecCondition=/bin/sh /opt/technocore-safe-agent/packaging/oracle/close1-standalone-pressure-gate.sh
-ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.close1_standalone_watch
+# Campaign ended 2026-10-04. Keep this historical unit fail-closed if an old
+# installation or operator attempts to start it after repository cleanup.
+ExecCondition=/bin/false
+ExecStart=/bin/true
 Nice=10
 IOSchedulingClass=idle
 CPUQuota=50%
