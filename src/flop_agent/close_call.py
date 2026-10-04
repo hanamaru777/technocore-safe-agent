@@ -41,6 +41,7 @@ TRADE_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
 AMOUNT_RE = re.compile(r"[0-9]{1,7}(?:\.[0-9]{1,2})?")
 AGGREGATE_AMOUNT_RE = re.compile(r"[0-9]{1,12}(?:\.[0-9]{1,2})?")
+BALANCE_AMOUNT_RE = re.compile(r"[0-9]{1,12}(?:\.[0-9]{1,6})?")
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,19 @@ def _amount(value: object, *, label: str) -> Decimal:
 def _aggregate_amount(value: object, *, label: str) -> Decimal:
     """Parse referee-wide aggregates without relaxing trade amount bounds."""
     if not isinstance(value, str) or not AGGREGATE_AMOUNT_RE.fullmatch(value):
+        raise ValueError(f"close1_{label}_invalid")
+    try:
+        amount = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(f"close1_{label}_invalid") from error
+    if amount < 0:
+        raise ValueError(f"close1_{label}_invalid")
+    return amount
+
+
+def _balance_amount(value: object, *, label: str) -> Decimal:
+    """Parse internal reconciled balances without relaxing trade term precision."""
+    if not isinstance(value, str) or not BALANCE_AMOUNT_RE.fullmatch(value):
         raise ValueError(f"close1_{label}_invalid")
     try:
         amount = Decimal(value)
@@ -315,7 +329,7 @@ def evaluate_verified_offer_as_taker(
 
     enough_base_cash = None
     if available_cash is not None:
-        cash = _amount(available_cash, label="available_cash")
+        cash = _balance_amount(available_cash, label="available_cash")
         enough_base_cash = cash >= required_before_unknown_clawback
 
     return {
@@ -379,7 +393,7 @@ def validate_trade_plan(
 
     enough_base_cash = None
     if available_cash is not None:
-        cash = _amount(available_cash, label="available_cash")
+        cash = _balance_amount(available_cash, label="available_cash")
         enough_base_cash = cash >= required_before_unknown_clawback
 
     return {
