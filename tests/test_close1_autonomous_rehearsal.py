@@ -50,20 +50,25 @@ def isolated_state(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_stage_older_than_fifteen_seconds_is_rejected(isolated_state):
+def test_stale_valid_stage_is_blocked_skipped_and_consumed(isolated_state):
     value = stage(staged=NOW - timedelta(seconds=16))
-    stage_mod.stage_path().write_text(json.dumps(value), encoding="utf-8")
-    with pytest.raises(RuntimeError, match="stage_stale"):
-        rehearsal._load_stage(now=NOW)
+    path = stage_mod.stage_path()
+    path.write_text(json.dumps(value), encoding="utf-8")
+    result = rehearsal.run_once(now=NOW)
+    assert result["status"] == "BLOCKED_PREFLIGHT"
+    assert result["reason"] == "close1_auto_rehearsal_stage_stale"
+    assert not path.exists()
+    assert "abc-123" in stage_mod._load_skips()
 
 
-def test_duplicate_json_field_is_rejected(isolated_state):
+def test_duplicate_json_field_is_rejected_fail_closed(isolated_state):
     path = stage_mod.stage_path()
     path.write_text(
         '{"schema_version":1,"schema_version":1}', encoding="utf-8"
     )
     with pytest.raises(RuntimeError, match="duplicate_field"):
         rehearsal._load_stage(now=NOW)
+    assert path.exists()
 
 
 def _mock_nonbinding_handoff(monkeypatch, value, digest):
@@ -112,6 +117,25 @@ def test_latency_over_target_is_visible_not_silently_passed(isolated_state, monk
     assert result["capture_to_rehearsal_ms"] == 6000
     assert skipped == ["abc-123"]
     assert consumed == ["b" * 64]
+
+
+def test_preflight_failure_uses_fixed_reason_and_consumes(monkeypatch, isolated_state):
+    value = stage()
+    skipped = []
+    consumed = []
+    monkeypatch.setattr(rehearsal, "_load_stage", lambda now=None: (value, "c" * 64))
+    monkeypatch.setattr(
+        rehearsal,
+        "_fresh_revalidate",
+        lambda value, now=None: (_ for _ in ()).throw(ValueError("untrusted detail")),
+    )
+    monkeypatch.setattr(rehearsal, "_record_skip", skipped.append)
+    monkeypatch.setattr(rehearsal, "_consume_stage", consumed.append)
+    result = rehearsal.run_once(now=NOW)
+    assert result["status"] == "BLOCKED_PREFLIGHT"
+    assert result["reason"] == "close1_auto_rehearsal_preflight_failed"
+    assert skipped == ["abc-123"]
+    assert consumed == ["c" * 64]
 
 
 def test_stage_digest_change_is_rejected_before_unlink(isolated_state):
