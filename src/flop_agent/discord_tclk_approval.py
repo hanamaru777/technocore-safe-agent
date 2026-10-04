@@ -274,8 +274,14 @@ def _combined_notices() -> list[str]:
 def main() -> None:
     # Keep the long-standing production entrypoint and install presentation-only
     # wrappers inside the retained review/knowledge/collaboration chain.
-    from . import discord_health_coalescing, discord_mission_compact, discord_outcome_scorecard
+    from . import (
+        discord_collaboration_compact,
+        discord_health_coalescing,
+        discord_mission_compact,
+        discord_outcome_scorecard,
+    )
 
+    discord_collaboration_compact.install()
     discord_health_coalescing.install()
     discord_outcome_scorecard.install()
     discord_mission_compact.install()
