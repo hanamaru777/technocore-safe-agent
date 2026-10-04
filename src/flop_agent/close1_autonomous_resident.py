@@ -18,8 +18,19 @@ from . import close_call, core, observer
 
 SCHEMA_VERSION = 1
 SCAN_INTERVAL_SECONDS = 2.0
+TRANSIENT_RETRY_SECONDS = 1.0
+HOLD_RETRY_SECONDS = 10.0
 MAX_CONSECUTIVE_ERRORS = 5
 TARGET_CAPTURE_TO_HANDOFF_MS = 5_000
+TRANSIENT_REASONS = {
+    "close1_scanner_sweep_mismatch",
+    "close1_room_empty",
+    "close1_room_payload_invalid",
+}
+HOLD_REASONS = {
+    "close1_auto_pending_reconcile_first",
+    "close1_own_state_unreconciled",
+}
 
 
 def _now() -> datetime:
@@ -117,26 +128,43 @@ def run_cycle(*, now: datetime | None = None) -> dict:
     )
 
 
+def _exception_status(reason: str, *, errors: int) -> tuple[dict, float, int]:
+    if reason in TRANSIENT_REASONS:
+        status = "TRANSIENT_RETRY"
+        delay = TRANSIENT_RETRY_SECONDS
+        next_errors = 0
+    elif reason in HOLD_REASONS:
+        status = "HOLD"
+        delay = HOLD_RETRY_SECONDS
+        next_errors = 0
+    else:
+        status = "BLOCKED"
+        delay = SCAN_INTERVAL_SECONDS
+        next_errors = errors + 1
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "non_binding": True,
+        "reason": reason,
+        "consecutive_errors": next_errors,
+        "evaluated_at": _now().isoformat(),
+    }
+    return result, delay, next_errors
+
+
 def run_forever(*, sleep=time.sleep) -> int:
     errors = 0
     while True:
         try:
             result = run_cycle()
         except Exception as error:
-            errors += 1
-            blocked = {
-                "schema_version": SCHEMA_VERSION,
-                "status": "BLOCKED",
-                "non_binding": True,
-                "reason": _safe_reason(error),
-                "consecutive_errors": errors,
-                "evaluated_at": _now().isoformat(),
-            }
+            reason = _safe_reason(error)
+            blocked, delay, errors = _exception_status(reason, errors=errors)
             _write_status(blocked)
             print(json.dumps(blocked, sort_keys=True), flush=True)
-            if errors >= MAX_CONSECUTIVE_ERRORS:
+            if blocked["status"] == "BLOCKED" and errors >= MAX_CONSECUTIVE_ERRORS:
                 return 1
-            sleep(SCAN_INTERVAL_SECONDS)
+            sleep(delay)
             continue
 
         errors = 0
