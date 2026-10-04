@@ -237,7 +237,7 @@ def handle_interaction(
         message = discord_notice.render(
             "DONE",
             "Airdrop Actionをローカル承認",
-            impact="exact payload digestへの承認だけを記録しました。外部実行はまだありません。",
+            impact="exact payload digestへの承認だけを記録しました。まだ署名・送信・Claim・支払いは実行していません。",
             state=f"request {request_id[:8]}… / approved",
             next_action="なし（実行対象なら次の実行ゲートで再検証されます）",
         )
