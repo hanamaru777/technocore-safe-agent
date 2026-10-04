@@ -75,6 +75,25 @@ def test_preexisting_stage_uses_original_detection_time(tmp_path, monkeypatch):
     assert scanned == []
 
 
+def test_transient_sweep_race_does_not_increment_restart_counter():
+    result, delay, errors = resident._exception_status(
+        "close1_scanner_sweep_mismatch", errors=4
+    )
+    assert result["status"] == "TRANSIENT_RETRY"
+    assert delay == resident.TRANSIENT_RETRY_SECONDS
+    assert errors == 0
+    assert result["consecutive_errors"] == 0
+
+
+def test_pending_account_uses_slow_hold_not_restart_counter():
+    result, delay, errors = resident._exception_status(
+        "close1_auto_pending_reconcile_first", errors=3
+    )
+    assert result["status"] == "HOLD"
+    assert delay == resident.HOLD_RETRY_SECONDS
+    assert errors == 0
+
+
 def test_resident_stops_after_bounded_consecutive_errors(monkeypatch):
     monkeypatch.setattr(
         resident,
