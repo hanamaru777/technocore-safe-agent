@@ -1,0 +1,33 @@
+[Unit]
+Description=Technocore Close Call standalone strategy watcher
+After=network-online.target technocore-safe-agent-metadata-block.service
+Wants=network-online.target
+Requires=technocore-safe-agent-metadata-block.service
+
+[Service]
+Type=oneshot
+User=technocore
+Group=technocore
+SupplementaryGroups=technocore-autopilot
+WorkingDirectory=/opt/technocore-safe-agent
+EnvironmentFile=/etc/technocore-safe-agent/env
+Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
+Environment=PYTHONPATH=/opt/technocore-safe-agent/src
+ExecCondition=/bin/sh /opt/technocore-safe-agent/packaging/oracle/close1-standalone-pressure-gate.sh
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.close1_standalone_watch
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=192M
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=169.254.169.254
+ReadWritePaths=/var/lib/technocore-safe-agent/observer /var/lib/technocore-safe-agent/close1
