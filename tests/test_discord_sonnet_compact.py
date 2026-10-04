@@ -1,4 +1,8 @@
-from flop_agent import discord_sonnet_compact
+from flop_agent import (
+    discord_sonnet_alerts,
+    discord_sonnet_compact,
+    discord_tclk_approval,
+)
 
 
 def test_official_sonnet_notice_becomes_action_first_and_keeps_caution():
@@ -56,3 +60,24 @@ def test_compact_batch_preserves_count_and_order():
     assert len(rendered) == 2
     assert rendered[0].startswith("🟠 Sonnet-2: update")
     assert rendered[1] == second
+
+
+def test_combined_notice_path_compacts_sonnet_only(monkeypatch):
+    sonnet_source = "\n".join(
+        [
+            "🟣 Sonnet-2: MARU official disposition update",
+            "何が起きた: accepted writer disposition",
+            "重要性: official result changed",
+            "注意: roster consent is not implied",
+        ]
+    )
+    monkeypatch.setattr(discord_tclk_approval, "_ORIGINAL_NOTICES", lambda: ["legacy-review"])
+    monkeypatch.setattr(discord_tclk_approval, "_new_prepared_approval_notices", lambda: ["tclk-accept"])
+    monkeypatch.setattr(discord_tclk_approval, "_new_prepared_reveal_notices", lambda: ["tclk-reveal"])
+    monkeypatch.setattr(discord_sonnet_alerts, "poll_notices", lambda: [sonnet_source])
+
+    notices = discord_tclk_approval._combined_notices()
+
+    assert notices[:3] == ["legacy-review", "tclk-accept", "tclk-reveal"]
+    assert notices[3].startswith("🟠 Sonnet-2: MARU official disposition update")
+    assert sum(line.startswith("次:") for line in notices[3].splitlines()) == 1
