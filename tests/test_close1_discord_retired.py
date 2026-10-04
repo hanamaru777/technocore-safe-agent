@@ -20,13 +20,18 @@ def test_close1_status_is_compact_and_terminal():
     assert "strategy scanner" not in message
 
 
-def test_close1_standalone_notifier_files_are_retired():
-    retired = (
-        "src/flop_agent/close1_standalone_watch.py",
-        "packaging/oracle/close1-standalone-pressure-gate.sh",
-        "packaging/oracle/technocore-safe-agent-close1-standalone-watch.service",
-        "packaging/oracle/technocore-safe-agent-close1-standalone-watch.timer",
-    )
+def test_close1_standalone_autostart_is_retired():
+    assert not (
+        ROOT / "packaging/oracle/close1-standalone-pressure-gate.sh"
+    ).exists()
+    assert not (
+        ROOT / "packaging/oracle/technocore-safe-agent-close1-standalone-watch.timer"
+    ).exists()
 
-    for relative in retired:
-        assert not (ROOT / relative).exists(), relative
+    service = (
+        ROOT
+        / "packaging/oracle/technocore-safe-agent-close1-standalone-watch.service"
+    ).read_text("utf-8")
+    assert "ExecCondition=/bin/false" in service
+    assert "ExecStart=/bin/true" in service
+    assert "-m flop_agent.close1_standalone_watch" not in service
