@@ -35,10 +35,11 @@ def test_stage_timer_targets_two_second_rehearsal_cadence():
     assert "Persistent=false" in timer
 
 
-def test_stage_file_is_the_only_path_trigger():
+def test_stage_file_change_is_the_only_path_trigger():
     path = text("technocore-safe-agent-close1-auto-rehearsal.path")
     assert (
-        "PathExists=/var/lib/technocore-safe-agent/close1/close1-autonomous-stage.json"
+        "PathChanged=/var/lib/technocore-safe-agent/close1/close1-autonomous-stage.json"
         in path
     )
+    assert "PathExists=" not in path
     assert "technocore-safe-agent-close1-auto-rehearsal.service" in path
