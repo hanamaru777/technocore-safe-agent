@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from flop_agent import close1_autonomous_resident as resident
 from flop_agent import close1_autonomous_rehearsal as rehearsal
@@ -25,7 +25,6 @@ def test_locked_cycle_exits_without_scanning(tmp_path, monkeypatch):
 def test_fresh_stage_is_rehearsed_in_same_cycle(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE", tmp_path)
     (tmp_path / "close1").mkdir()
-    monkeypatch.setattr(stage.stage_path(), "exists", lambda: False)
     monkeypatch.setattr(
         stage,
         "run_once",
