@@ -1,9 +1,9 @@
 """Low-pressure resident loop for non-binding Close Call execution rehearsal.
 
-The process intentionally has no signer/Vault/post surface.  It keeps Python
+The process intentionally has no signer/Vault/post surface. It keeps Python
 resident so short polling does not repeatedly spawn interpreters on the small
 Production host, stages one bounded public candidate, immediately revalidates
-it, and records whether the handoff would have met the five-second SLA.
+it, and records whether the full capture-to-handoff path met the five-second SLA.
 """
 from __future__ import annotations
 
@@ -39,6 +39,39 @@ def _safe_reason(error: Exception) -> str:
     return reason if reason.startswith("close1_") else "close1_auto_resident_cycle_failed"
 
 
+def _detected_at_from_stage(*, now: datetime | None = None) -> datetime:
+    value, _ = rehearsal._load_stage(now=now)
+    return rehearsal._time(value["detected_at"])
+
+
+def _rehearsal_result(
+    *,
+    detected_at: datetime,
+    stage_status: str,
+    trade_id: str | None,
+    now: datetime | None,
+) -> dict:
+    rehearsal_result = rehearsal.run_once(now=now)
+    completed = now or _now()
+    completed = completed.astimezone(UTC)
+    elapsed_ms = int((completed - detected_at).total_seconds() * 1000)
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "REHEARSAL_COMPLETE",
+        "non_binding": True,
+        "stage_status": stage_status,
+        "rehearsal": rehearsal_result,
+        "capture_to_handoff_complete_ms": elapsed_ms,
+        "target_capture_to_handoff_ms": TARGET_CAPTURE_TO_HANDOFF_MS,
+        "target_met": elapsed_ms <= TARGET_CAPTURE_TO_HANDOFF_MS,
+        "evaluated_at": completed.isoformat(),
+    }
+    if trade_id is not None:
+        result["trade_id"] = trade_id
+    _write_status(result)
+    return result
+
+
 def run_cycle(*, now: datetime | None = None) -> dict:
     started = now or _now()
     if started.tzinfo is None:
@@ -56,25 +89,13 @@ def run_cycle(*, now: datetime | None = None) -> dict:
 
     # Drain a previously staged valid candidate before scanning another one.
     if stage.stage_path().exists():
-        rehearsal_result = rehearsal.run_once(now=now)
-        completed = now or _now()
-        result = {
-            "schema_version": SCHEMA_VERSION,
-            "status": "REHEARSAL_COMPLETE",
-            "non_binding": True,
-            "stage_status": "preexisting",
-            "rehearsal": rehearsal_result,
-            "cycle_to_handoff_complete_ms": int(
-                (completed.astimezone(UTC) - started).total_seconds() * 1000
-            ),
-            "target_capture_to_handoff_ms": TARGET_CAPTURE_TO_HANDOFF_MS,
-            "evaluated_at": completed.astimezone(UTC).isoformat(),
-        }
-        result["target_met"] = (
-            result["cycle_to_handoff_complete_ms"] <= TARGET_CAPTURE_TO_HANDOFF_MS
+        detected_at = _detected_at_from_stage(now=now)
+        return _rehearsal_result(
+            detected_at=detected_at,
+            stage_status="preexisting",
+            trade_id=None,
+            now=now,
         )
-        _write_status(result)
-        return result
 
     staged = stage.run_once()
     if staged.get("status") != "staged":
@@ -87,23 +108,13 @@ def run_cycle(*, now: datetime | None = None) -> dict:
         _write_status(result)
         return result
 
-    rehearsal_result = rehearsal.run_once(now=now)
-    completed = now or _now()
-    elapsed_ms = int((completed.astimezone(UTC) - started).total_seconds() * 1000)
-    result = {
-        "schema_version": SCHEMA_VERSION,
-        "status": "REHEARSAL_COMPLETE",
-        "non_binding": True,
-        "stage_status": "fresh",
-        "trade_id": staged["trade_id"],
-        "rehearsal": rehearsal_result,
-        "cycle_to_handoff_complete_ms": elapsed_ms,
-        "target_capture_to_handoff_ms": TARGET_CAPTURE_TO_HANDOFF_MS,
-        "target_met": elapsed_ms <= TARGET_CAPTURE_TO_HANDOFF_MS,
-        "evaluated_at": completed.astimezone(UTC).isoformat(),
-    }
-    _write_status(result)
-    return result
+    detected_at = _detected_at_from_stage(now=now)
+    return _rehearsal_result(
+        detected_at=detected_at,
+        stage_status="fresh",
+        trade_id=staged["trade_id"],
+        now=now,
+    )
 
 
 def run_forever(*, sleep=time.sleep) -> int:
