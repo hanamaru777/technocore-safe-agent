@@ -19,6 +19,7 @@ def _readiness(*, go=True):
 
 def _profile(monkeypatch):
     monkeypatch.setattr(precontest_challenge.precontest_runtime_profile, "load", lambda challenge_id: {"schema_version": 1, "challenge_id": challenge_id, "runtime_profile": "close1_short_liquidity", "configured_at": NOW.isoformat(), "profile_sha256": "2" * 64})
+    monkeypatch.setattr(precontest_challenge, "_runtime_compatibility_status", lambda challenge_id, now: (True, None))
     monkeypatch.setattr(precontest_challenge.precontest_plumbing_apply, "apply_if_present", lambda challenge_id, now=None: {"status": "APPLIED"})
     monkeypatch.setattr(precontest_challenge.airdrop_challenge, "build_plan", lambda challenge_id, now=None: _legacy())
 

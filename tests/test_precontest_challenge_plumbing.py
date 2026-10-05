@@ -44,6 +44,11 @@ def _profiled(monkeypatch):
         },
     )
     monkeypatch.setattr(
+        precontest_challenge,
+        "_runtime_compatibility_status",
+        lambda challenge_id, now: (True, None),
+    )
+    monkeypatch.setattr(
         precontest_challenge.precontest_machine_provenance,
         "load_validated",
         lambda *args, **kwargs: {"status": "VALID"},
