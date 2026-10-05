@@ -1,9 +1,9 @@
 """Machine-derived, non-binding pre-contest readiness evidence.
 
-This collector intentionally proves only what runtime artifacts can prove.  It
+This collector intentionally proves only what runtime artifacts can prove. It
 never signs, posts, starts services, changes signer/Vault state, or authorizes a
-binding action.  Unsupported gates remain false so the strict pre-contest gate
-stays NO-GO until dedicated machine proofs exist.
+binding action. Unsupported gates remain false until dedicated machine proofs
+exist.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from . import (
     airdrop_challenge,
     close1_account_reconciliation as account,
     close1_autonomous_rehearsal,
+    precontest_deadline_proof,
     precontest_readiness,
 )
 
@@ -164,6 +165,36 @@ def _settled_ledger_proof() -> dict:
     }
 
 
+def _deadline_proof(
+    challenge_id: str,
+    *,
+    expected_deadline: str,
+    now: datetime,
+) -> dict | None:
+    path = precontest_deadline_proof.proof_path(challenge_id)
+    if not path.exists():
+        return None
+    value, file_digest = _read_json_file(path, label="deadline_proof")
+    try:
+        valid = precontest_deadline_proof.validate_proof(
+            value,
+            challenge_id=challenge_id,
+            expected_deadline=expected_deadline,
+            now=now,
+        )
+    except precontest_deadline_proof.DeadlineProofError as error:
+        raise MachineEvidenceError("precontest_machine_deadline_proof_invalid") from error
+    return {
+        "sha256": file_digest,
+        "proof_sha256": valid["proof_sha256"],
+        "generated_at": valid["generated_at"],
+        "campaign_deadline": valid["campaign_deadline"],
+        "runtime_lock_at": valid["runtime_lock_at"],
+        "runtime_deadline_guard": True,
+        "post_deadline_fail_closed": True,
+    }
+
+
 def provenance_path(challenge_id: str) -> Path:
     challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
     return precontest_readiness._root() / challenge_id / "precontest-readiness-sources.json"
@@ -191,10 +222,13 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
 
     rehearsal = _fresh_rehearsal(now=current)
     settled = _settled_ledger_proof()
+    deadline_proof = _deadline_proof(
+        challenge_id,
+        expected_deadline=deadline,
+        now=current,
+    )
+    deadline_proven = deadline_proof is not None
 
-    # Deliberately conservative.  Slice 1 proves only one non-binding single-mode
-    # latency rehearsal plus one settled reconciliation path.  Every unsupported
-    # operational claim remains false so strict readiness stays NO-GO.
     evidence = {
         "schema_version": precontest_readiness.SCHEMA_VERSION,
         "challenge_id": challenge_id,
@@ -207,8 +241,8 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         "execution_modes_required": ["single", "batch"],
         "execution_modes_rehearsed": ["single"],
         "reconciliation_cases_rehearsed": ["settled"],
-        "runtime_deadline_guard": False,
-        "post_deadline_fail_closed": False,
+        "runtime_deadline_guard": deadline_proven,
+        "post_deadline_fail_closed": deadline_proven,
         "first_leg_policy_predefined": False,
         "first_leg_risk_bounded": False,
         "zero_trade_deadlock_prevented": False,
@@ -217,6 +251,24 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         "live_plumbing_changes_required": True,
     }
     saved = precontest_readiness.save_evidence(challenge_id, evidence)
+
+    sources = {
+        "close1_autonomous_rehearsal": rehearsal,
+        "close1_reconciled_ledger": settled,
+    }
+    if deadline_proof is not None:
+        sources["deadline_fail_closed"] = deadline_proof
+
+    unsupported = [
+        "HUMAN_INDEPENDENCE_GATE",
+        "CONTROL_PATH_REDUNDANCY_GATE",
+        "SETTLEMENT_RECONCILIATION_GATE",
+        "ACTIVE_LEARNING_GATE",
+        "NO_LIVE_PLUMBING_GATE",
+    ]
+    if deadline_proof is None:
+        unsupported.insert(3, "DEADLINE_GATE")
+
     provenance = _write_provenance(
         challenge_id,
         {
@@ -226,18 +278,8 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
             "collector": "precontest_machine_evidence",
             "non_binding": True,
             "readiness_evidence_sha256": saved["evidence_sha256"],
-            "sources": {
-                "close1_autonomous_rehearsal": rehearsal,
-                "close1_reconciled_ledger": settled,
-            },
-            "unsupported_gates_forced_no_go": [
-                "HUMAN_INDEPENDENCE_GATE",
-                "CONTROL_PATH_REDUNDANCY_GATE",
-                "SETTLEMENT_RECONCILIATION_GATE",
-                "DEADLINE_GATE",
-                "ACTIVE_LEARNING_GATE",
-                "NO_LIVE_PLUMBING_GATE",
-            ],
+            "sources": sources,
+            "unsupported_gates_forced_no_go": unsupported,
         },
     )
     evaluation = precontest_readiness.evaluate(
