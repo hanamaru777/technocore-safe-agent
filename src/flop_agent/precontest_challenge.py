@@ -38,6 +38,24 @@ def _no_go(challenge_id: str, current: datetime, blocker: str, warning: str) -> 
     }
 
 
+def _require_plumbing_receipt(readiness: dict) -> dict:
+    """Missing machine receipt must never inherit a manually asserted plumbing PASS."""
+    forced = dict(readiness)
+    gates = dict(forced.get("gates") or {})
+    gates["NO_LIVE_PLUMBING_GATE"] = False
+    blockers = [str(item) for item in forced.get("blockers", [])]
+    blockers.append("NO_LIVE_PLUMBING_GATE")
+    forced["gates"] = gates
+    forced["blockers"] = _dedupe(blockers)
+    forced["status"] = "NO_GO"
+    forced["go"] = False
+    forced["warning"] = (
+        "A fresh machine-generated Production plumbing receipt is mandatory; "
+        "manual readiness booleans cannot satisfy NO_LIVE_PLUMBING_GATE."
+    )
+    return forced
+
+
 def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
@@ -45,8 +63,12 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
 
     legacy = airdrop_challenge.build_plan(challenge_id, now=current)
     plumbing_error: str | None = None
+    plumbing_applied: dict | None = None
     try:
-        precontest_plumbing_apply.apply_if_present(challenge_id, now=current)
+        plumbing_applied = precontest_plumbing_apply.apply_if_present(
+            challenge_id,
+            now=current,
+        )
     except precontest_plumbing_apply.PlumbingApplyError as error:
         plumbing_error = str(error) or "precontest_plumbing_receipt_invalid"
 
@@ -79,6 +101,8 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
             "PRECONTEST_READINESS_EVIDENCE_MISSING",
             "Readiness evidence is mandatory for the strict pre-contest planner.",
         )
+    elif plumbing_error is None and plumbing_applied is None:
+        readiness = _require_plumbing_receipt(readiness)
 
     result = dict(legacy)
     blockers = list(legacy.get("critical_path", []))
