@@ -1,9 +1,9 @@
 """Read-only capture of a real direct-SSH Production control-path receipt.
 
 This module never opens SSH, starts/restarts a service, signs, posts, or accesses
-signer/Vault material.  It can only attest the *current* SSH session after
+signer/Vault material. It can only attest the *current* SSH session after
 read-only checks prove that the operator path can invoke the one fixed approved
-trade executor service.  Raw SSH addresses and credentials are never persisted.
+trade executor service. Raw SSH addresses and credentials are never persisted.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from . import precontest_control_path_proof as control
 from . import precontest_readiness
 
 EXECUTOR_UNIT = "technocore-safe-agent-close1-approved-trade.service"
+EXPECTED_FRAGMENT = f"/etc/systemd/system/{EXECUTOR_UNIT}"
 PATH_ID = "direct-ssh-operator"
 FAILURE_DOMAIN = "direct-ssh-operator"
 MAX_EXISTING_RECEIPTS = 16
@@ -48,7 +49,7 @@ def _run(argv: list[str], *, cwd: Path | None = None) -> subprocess.CompletedPro
 
 def _require_real_ssh_session() -> None:
     # These variables are supplied by sshd for an authenticated interactive or
-    # command session.  Their values are deliberately never copied to evidence.
+    # command session. Their values are deliberately never copied to evidence.
     if not os.environ.get("SSH_CONNECTION") or not os.environ.get("SSH_CLIENT"):
         raise ControlPathCaptureError("precontest_control_capture_ssh_session_missing")
 
@@ -83,14 +84,14 @@ def _unit_facts(systemctl: str) -> tuple[str, str]:
 
     fragment = _run([systemctl, "show", EXECUTOR_UNIT, "-p", "FragmentPath", "--value"])
     fragment_path = fragment.stdout.strip()
-    if fragment.returncode != 0 or not fragment_path.startswith("/"):
+    if fragment.returncode != 0 or fragment_path != EXPECTED_FRAGMENT:
         raise ControlPathCaptureError("precontest_control_capture_executor_fragment_invalid")
     return loaded.stdout.strip(), fragment_path
 
 
 def _fixed_start_permission(sudo: str, systemctl: str) -> None:
-    # `sudo -l <command...>` is an authorization query only.  It does not run
-    # the command.  Keeping exact argv here prevents this proof from becoming a
+    # `sudo -l <command...>` is an authorization query only. It does not run
+    # the command. Keeping exact argv here prevents this proof from becoming a
     # generic privileged shell surface.
     result = _run([sudo, "-n", "-l", systemctl, "start", EXECUTOR_UNIT])
     if result.returncode != 0:
@@ -99,7 +100,7 @@ def _fixed_start_permission(sudo: str, systemctl: str) -> None:
 
 def _endpoint_fingerprint(*, fragment_path: str) -> str:
     # Hostname and unit fragment are useful to distinguish endpoints but are
-    # not persisted in clear text.  The proof only stores this stable digest.
+    # not persisted in clear text. The proof only stores this stable digest.
     material = f"{socket.gethostname()}\n{fragment_path}\n{EXECUTOR_UNIT}".encode("utf-8")
     return "sha256:" + hashlib.sha256(material).hexdigest()
 
@@ -155,7 +156,7 @@ def _existing_receipts(challenge_id: str, *, now: datetime) -> list[dict]:
             valid.append(control.validate_receipt(row, now=now))
         except control.ControlPathProofError as error:
             # A stale, otherwise-valid receipt must not permanently block a
-            # fresh capture.  Any other corruption/tamper remains fail-closed.
+            # fresh capture. Any other corruption/tamper remains fail-closed.
             if str(error) == "precontest_control_receipt_stale":
                 continue
             raise ControlPathCaptureError("precontest_control_capture_existing_receipt_invalid") from error
