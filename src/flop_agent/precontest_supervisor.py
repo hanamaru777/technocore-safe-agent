@@ -1,8 +1,9 @@
 """Low-pressure, non-binding supervisor for registered challenge readiness.
 
 The supervisor reads local challenge specs and the strict pre-contest planner,
-then writes one durable summary.  It never signs, posts, registers, claims,
-spends, starts services, or accesses signer/Vault material.
+then writes one durable summary. An explicitly configured local runtime profile
+may refresh non-binding machine proofs before planning. It never signs, posts,
+registers, claims, spends, starts services, or accesses signer/Vault material.
 """
 from __future__ import annotations
 
@@ -11,11 +12,23 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import airdrop_challenge, airdrop_ledger, observer, precontest_challenge
+from . import (
+    airdrop_challenge,
+    airdrop_ledger,
+    observer,
+    precontest_active_learning_proof,
+    precontest_batch_rehearsal_proof,
+    precontest_challenge,
+    precontest_deadline_proof,
+    precontest_machine_evidence,
+    precontest_reconciliation_proof,
+    precontest_runtime_profile,
+)
 
 SCHEMA_VERSION = 1
 ACTION_WINDOW = timedelta(hours=72)
 MAX_SPEC_BYTES = 256 * 1024
+CLOSE1_PROFILE = "close1_short_liquidity"
 
 
 class SupervisorError(RuntimeError):
@@ -77,6 +90,59 @@ def _phase(spec: dict, *, now: datetime) -> tuple[str, int | None, int]:
     return "OPEN", 0, seconds_to_deadline
 
 
+def _refresh_safe_proofs(challenge_id: str, *, now: datetime) -> list[str]:
+    """Refresh only explicitly opted-in, non-binding proof artifacts.
+
+    A missing profile is a deliberate no-op. The single-mode rehearsal must be
+    newer than the profile configuration before the aggregate collector may run,
+    preventing reuse of an old rehearsal for a newly configured challenge.
+    """
+    try:
+        profile = precontest_runtime_profile.load(challenge_id)
+    except Exception:
+        return ["precontest_auto_runtime_profile_invalid"]
+    if profile is None:
+        return []
+    if profile.get("runtime_profile") != CLOSE1_PROFILE:
+        return ["precontest_auto_runtime_profile_unsupported"]
+
+    blockers: list[str] = []
+    configured_at = _parse_time(profile.get("configured_at"), required=True)
+    assert configured_at is not None
+    rehearsal_fresh_for_profile = False
+    try:
+        rehearsal = precontest_machine_evidence._fresh_rehearsal(now=now)
+        evaluated_at = _parse_time(rehearsal.get("evaluated_at"), required=True)
+        assert evaluated_at is not None
+        if evaluated_at < configured_at:
+            blockers.append("precontest_auto_single_rehearsal_predates_profile")
+        else:
+            rehearsal_fresh_for_profile = True
+    except Exception:
+        blockers.append("precontest_auto_single_rehearsal_blocked")
+
+    proof_builders = (
+        ("deadline", precontest_deadline_proof.save_proof),
+        ("active_learning", precontest_active_learning_proof.save_proof),
+        ("reconciliation", precontest_reconciliation_proof.save_proof),
+        ("batch", precontest_batch_rehearsal_proof.save_proof),
+    )
+    for label, builder in proof_builders:
+        try:
+            builder(challenge_id, now=now)
+        except Exception:
+            blockers.append(f"precontest_auto_{label}_proof_blocked")
+
+    if rehearsal_fresh_for_profile:
+        try:
+            precontest_machine_evidence.collect(challenge_id, now=now)
+        except Exception:
+            blockers.append("precontest_auto_machine_evidence_blocked")
+
+    # Stable order with no duplicate noise in Mission Control.
+    return list(dict.fromkeys(blockers))
+
+
 def _challenge_row(spec: dict, *, now: datetime) -> dict:
     challenge_id = spec["challenge_id"]
     phase, seconds_to_open, seconds_to_deadline = _phase(spec, now=now)
@@ -91,15 +157,18 @@ def _challenge_row(spec: dict, *, now: datetime) -> dict:
             "blockers": [],
         }
 
+    refresh_blockers = _refresh_safe_proofs(challenge_id, now=now)
     try:
         plan = precontest_challenge.build_plan(challenge_id, now=now)
-        ready = plan.get("ready_for_execution_path") is True
-        blockers = [str(item) for item in plan.get("critical_path", [])]
+        ready = plan.get("ready_for_execution_path") is True and not refresh_blockers
+        blockers = refresh_blockers + [str(item) for item in plan.get("critical_path", [])]
+        blockers = list(dict.fromkeys(blockers))
         readiness = plan.get("precontest_readiness")
         readiness_status = readiness.get("status") if isinstance(readiness, dict) else None
     except Exception as error:
         ready = False
-        blockers = [str(error) or "precontest_supervisor_plan_failed"]
+        blockers = refresh_blockers + [str(error) or "precontest_supervisor_plan_failed"]
+        blockers = list(dict.fromkeys(blockers))
         readiness_status = "ERROR"
 
     if ready:
