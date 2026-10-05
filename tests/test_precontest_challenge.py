@@ -21,15 +21,6 @@ COMMIT = "1" * 40
 @pytest.fixture
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE", tmp_path)
-    # These legacy strict-planner tests focus on readiness semantics other than
-    # the new plumbing receipt.  Model an already-validated receipt overlay so
-    # the original assertions remain scoped; dedicated plumbing tests cover
-    # missing/invalid receipts separately.
-    monkeypatch.setattr(
-        precontest_challenge.precontest_plumbing_apply,
-        "apply_if_present",
-        lambda challenge_id, now=None: {"status": "APPLIED"},
-    )
     return tmp_path
 
 
@@ -117,15 +108,19 @@ def test_missing_readiness_is_no_go_but_legacy_planner_stays_compatible(isolated
     assert strict["ready_for_execution_path"] is False
     assert strict["precontest_gate_enforced"] is True
     assert strict["precontest_readiness"]["status"] == "NO_GO"
+    assert strict["machine_provenance_required"] is False
+    assert strict["machine_provenance_valid"] is True
     assert "PRECONTEST_READINESS_EVIDENCE_MISSING" in strict["critical_path"]
 
 
-def test_go_evidence_allows_legacy_ready_plan(isolated_state):
+def test_go_evidence_allows_legacy_ready_plan_without_runtime_profile_or_receipt(isolated_state):
     create_legacy_ready_challenge()
     precontest_readiness.save_evidence("future-challenge", evidence())
     strict = precontest_challenge.build_plan("future-challenge", now=NOW)
     assert strict["precontest_readiness"]["status"] == "GO"
     assert strict["ready_for_execution_path"] is True
+    assert strict["machine_provenance_required"] is False
+    assert strict["machine_provenance_valid"] is True
     assert "precontest_readiness_no_go" not in strict["critical_path"]
 
 
