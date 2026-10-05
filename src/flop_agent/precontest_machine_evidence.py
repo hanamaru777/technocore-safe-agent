@@ -22,6 +22,7 @@ from . import (
     precontest_batch_rehearsal_proof,
     precontest_control_path_proof,
     precontest_deadline_proof,
+    precontest_human_independence_proof,
     precontest_readiness,
     precontest_reconciliation_proof,
 )
@@ -249,6 +250,29 @@ def _control_path_proof(challenge_id: str, *, now: datetime) -> dict | None:
     }
 
 
+def _human_independence_proof(challenge_id: str, *, now: datetime) -> dict | None:
+    path = precontest_human_independence_proof.proof_path(challenge_id)
+    if not path.exists():
+        return None
+    value, file_digest = _read_json_file(path, label="human_independence_proof")
+    try:
+        valid = precontest_human_independence_proof.validate_proof(
+            value, challenge_id=challenge_id, now=now
+        )
+    except precontest_human_independence_proof.HumanIndependenceProofError as error:
+        raise MachineEvidenceError("precontest_machine_human_independence_proof_invalid") from error
+    return {
+        "sha256": file_digest,
+        "proof_sha256": valid["proof_sha256"],
+        "generated_at": valid["generated_at"],
+        "status": valid["status"],
+        "path_id": valid["path_id"],
+        "requires_chat_relay": valid["requires_chat_relay"],
+        "requires_user_terminal": valid["requires_user_terminal"],
+        "reason": valid["reason"],
+    }
+
+
 def provenance_path(challenge_id: str) -> Path:
     challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
     return precontest_readiness._root() / challenge_id / "precontest-readiness-sources.json"
@@ -281,11 +305,13 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
     reconciliation_proof = _reconciliation_proof(challenge_id, now=current)
     batch_proof = _batch_rehearsal_proof(challenge_id, now=current)
     control_proof = _control_path_proof(challenge_id, now=current)
+    human_proof = _human_independence_proof(challenge_id, now=current)
 
     deadline_proven = deadline_proof is not None
     active_proven = active_proof is not None
     batch_proven = batch_proof is not None
     control_proven = control_proof is not None and control_proof["status"] == "PASS"
+    human_proven = human_proof is not None and human_proof["status"] == "PASS"
     reconciliation_cases = reconciliation_proof["cases"] if reconciliation_proof is not None else ["settled"]
     execution_modes = ["single", "batch"] if batch_proven else ["single"]
     control_paths = control_proof["control_paths"] if control_proven else []
@@ -299,8 +325,8 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         "measured_at": rehearsal["evaluated_at"],
         "campaign_deadline": deadline,
         "capture_to_executor_ms": capture_to_executor_ms,
-        "requires_chat_relay": True,
-        "requires_user_terminal": True,
+        "requires_chat_relay": not human_proven,
+        "requires_user_terminal": not human_proven,
         "control_paths": control_paths,
         "execution_modes_required": ["single", "batch"],
         "execution_modes_rehearsed": execution_modes,
@@ -330,8 +356,12 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         sources["batch_rehearsal"] = batch_proof
     if control_proof is not None:
         sources["control_path_redundancy"] = control_proof
+    if human_proof is not None:
+        sources["human_independence"] = human_proof
 
-    unsupported = ["HUMAN_INDEPENDENCE_GATE", "NO_LIVE_PLUMBING_GATE"]
+    unsupported = ["NO_LIVE_PLUMBING_GATE"]
+    if not human_proven:
+        unsupported.append("HUMAN_INDEPENDENCE_GATE")
     if not control_proven:
         unsupported.append("CONTROL_PATH_REDUNDANCY_GATE")
     if not batch_proven:
