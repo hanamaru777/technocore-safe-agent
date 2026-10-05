@@ -2,8 +2,8 @@
 
 The legacy planner remains backward compatible. Future campaign operations should
 use this wrapper: missing/invalid/stale readiness evidence is NO-GO. Explicitly
-profiled runtimes additionally require machine-generated Production plumbing and
-matching machine collector provenance.
+profiled runtimes additionally require a compatible runtime adapter,
+machine-generated Production plumbing, and matching machine collector provenance.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from . import (
     precontest_machine_provenance,
     precontest_plumbing_apply,
     precontest_readiness,
+    precontest_runtime_compatibility,
     precontest_runtime_profile,
 )
 
@@ -72,6 +73,22 @@ def _runtime_profile_status(challenge_id: str) -> tuple[bool, dict | None, str |
     return True, profile, None
 
 
+def _runtime_compatibility_status(
+    challenge_id: str,
+    *,
+    now: datetime,
+) -> tuple[bool, str | None]:
+    try:
+        proof = precontest_runtime_compatibility.load_validated(challenge_id, now=now)
+    except precontest_runtime_compatibility.RuntimeCompatibilityError as error:
+        return False, str(error) or "precontest_runtime_adapter_compatibility_invalid"
+    if proof is None:
+        return False, "precontest_runtime_adapter_compatibility_missing"
+    if proof.get("status") != "PASS":
+        return False, "precontest_runtime_adapter_incompatible"
+    return True, None
+
+
 def _machine_provenance_status(
     challenge_id: str,
     readiness: dict,
@@ -102,9 +119,17 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     legacy = airdrop_challenge.build_plan(challenge_id, now=current)
     profile_required, _profile, profile_error = _runtime_profile_status(challenge_id)
 
+    compatibility_valid = not profile_required
+    compatibility_error: str | None = None
+    if profile_required and profile_error is None:
+        compatibility_valid, compatibility_error = _runtime_compatibility_status(
+            challenge_id,
+            now=current,
+        )
+
     plumbing_error: str | None = None
     plumbing_applied: dict | None = None
-    if profile_required and profile_error is None:
+    if profile_required and profile_error is None and compatibility_valid:
         try:
             plumbing_applied = precontest_plumbing_apply.apply_if_present(
                 challenge_id,
@@ -119,6 +144,13 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
             current,
             profile_error,
             "Invalid runtime profile fails closed and never authorizes a binding action.",
+        )
+    elif compatibility_error is not None:
+        readiness = _no_go(
+            challenge_id,
+            current,
+            compatibility_error,
+            "Missing or incompatible runtime adapter evidence fails closed before any execution-path readiness can pass.",
         )
     elif plumbing_error is not None:
         readiness = _no_go(
@@ -149,7 +181,13 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
             "PRECONTEST_READINESS_EVIDENCE_MISSING",
             "Readiness evidence is mandatory for the strict pre-contest planner.",
         )
-    elif profile_required and profile_error is None and plumbing_error is None and plumbing_applied is None:
+    elif (
+        profile_required
+        and profile_error is None
+        and compatibility_valid
+        and plumbing_error is None
+        and plumbing_applied is None
+    ):
         readiness = _require_plumbing_receipt(readiness)
 
     provenance_valid = not profile_required
@@ -157,6 +195,8 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     if profile_required:
         if profile_error is not None:
             provenance_error = profile_error
+        elif not compatibility_valid:
+            provenance_error = compatibility_error or "precontest_runtime_adapter_incompatible"
         elif readiness.get("evidence_sha256") is None:
             provenance_error = "precontest_machine_provenance_evidence_mismatch"
         else:
@@ -171,6 +211,10 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     if readiness["go"] is not True:
         blockers.append("precontest_readiness_no_go")
         blockers.extend(str(item) for item in readiness.get("blockers", []))
+    if profile_required and not compatibility_valid:
+        blockers.append("precontest_runtime_adapter_incompatible")
+        if compatibility_error:
+            blockers.append(compatibility_error)
     if profile_required and not provenance_valid:
         blockers.append("precontest_machine_provenance_invalid")
         if provenance_error:
@@ -184,6 +228,7 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     result["ready_for_execution_path"] = bool(
         legacy.get("ready_for_execution_path") is True
         and readiness["go"] is True
+        and compatibility_valid
         and provenance_valid
     )
     result["precontest_gate_enforced"] = True
