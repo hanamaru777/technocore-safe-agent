@@ -21,6 +21,7 @@ from . import (
     precontest_active_learning_proof,
     precontest_deadline_proof,
     precontest_readiness,
+    precontest_reconciliation_proof,
 )
 
 SCHEMA_VERSION = 1
@@ -221,6 +222,27 @@ def _active_learning_proof(challenge_id: str, *, now: datetime) -> dict | None:
     }
 
 
+def _reconciliation_proof(challenge_id: str, *, now: datetime) -> dict | None:
+    path = precontest_reconciliation_proof.proof_path(challenge_id)
+    if not path.exists():
+        return None
+    value, file_digest = _read_json_file(path, label="reconciliation_proof")
+    try:
+        valid = precontest_reconciliation_proof.validate_proof(
+            value,
+            challenge_id=challenge_id,
+            now=now,
+        )
+    except precontest_reconciliation_proof.ReconciliationProofError as error:
+        raise MachineEvidenceError("precontest_machine_reconciliation_proof_invalid") from error
+    return {
+        "sha256": file_digest,
+        "proof_sha256": valid["proof_sha256"],
+        "generated_at": valid["generated_at"],
+        "cases": valid["reconciliation_cases_rehearsed"],
+    }
+
+
 def provenance_path(challenge_id: str) -> Path:
     challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
     return precontest_readiness._root() / challenge_id / "precontest-readiness-sources.json"
@@ -254,8 +276,12 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         now=current,
     )
     active_proof = _active_learning_proof(challenge_id, now=current)
+    reconciliation_proof = _reconciliation_proof(challenge_id, now=current)
     deadline_proven = deadline_proof is not None
     active_proven = active_proof is not None
+    reconciliation_cases = (
+        reconciliation_proof["cases"] if reconciliation_proof is not None else ["settled"]
+    )
 
     evidence = {
         "schema_version": precontest_readiness.SCHEMA_VERSION,
@@ -268,7 +294,7 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         "control_paths": [],
         "execution_modes_required": ["single", "batch"],
         "execution_modes_rehearsed": ["single"],
-        "reconciliation_cases_rehearsed": ["settled"],
+        "reconciliation_cases_rehearsed": reconciliation_cases,
         "runtime_deadline_guard": deadline_proven,
         "post_deadline_fail_closed": deadline_proven,
         "first_leg_policy_predefined": active_proven,
@@ -288,17 +314,20 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         sources["deadline_fail_closed"] = deadline_proof
     if active_proof is not None:
         sources["active_learning"] = active_proof
+    if reconciliation_proof is not None:
+        sources["reconciliation_matrix"] = reconciliation_proof
 
     unsupported = [
         "HUMAN_INDEPENDENCE_GATE",
         "CONTROL_PATH_REDUNDANCY_GATE",
-        "SETTLEMENT_RECONCILIATION_GATE",
         "NO_LIVE_PLUMBING_GATE",
     ]
     if deadline_proof is None:
         unsupported.append("DEADLINE_GATE")
     if active_proof is None:
         unsupported.append("ACTIVE_LEARNING_GATE")
+    if reconciliation_proof is None:
+        unsupported.append("SETTLEMENT_RECONCILIATION_GATE")
 
     provenance = _write_provenance(
         challenge_id,
