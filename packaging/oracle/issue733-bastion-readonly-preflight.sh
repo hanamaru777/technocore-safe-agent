@@ -2,7 +2,7 @@
 # Issue #733: read-only OCI Bastion feasibility preflight via real OCI Cloud Shell.
 #
 # The target instance OCID is accepted only through the local environment and is
-# never printed, persisted, committed, or included in an error message.
+# never printed, persisted, committed, or included in an error message or argv.
 set -u
 umask 077
 
@@ -62,8 +62,9 @@ echo 'CLOUDSHELL_ENV=PASS'
 echo 'OCI_PYTHON_SDK_PRESENT=YES'
 echo 'TARGET_INSTANCE_INPUT=ACCEPTED_PRIVATE'
 
-"$PYTHON" - "$OCI_CLI_CONFIG_FILE" "$OCI_CLI_PROFILE" "$TECHNOCORE_TARGET_INSTANCE_OCID" <<'PY'
+"$PYTHON" - "$OCI_CLI_CONFIG_FILE" "$OCI_CLI_PROFILE" <<'PY'
 import configparser
+import os
 import pathlib
 import re
 import sys
@@ -77,7 +78,7 @@ from oci.retry import NoneRetryStrategy
 
 CONFIG_PATH = pathlib.Path(sys.argv[1])
 PROFILE = sys.argv[2]
-TARGET_INSTANCE_ID = sys.argv[3]
+TARGET_INSTANCE_ID = os.environ.get('TECHNOCORE_TARGET_INSTANCE_OCID', '')
 TOKEN_PATH = pathlib.Path('/etc/oci/delegation_token')
 OCID_RE = re.compile(r'^ocid1\.instance\.[A-Za-z0-9._-]+$')
 
