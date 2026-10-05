@@ -23,6 +23,7 @@ from . import (
     precontest_deadline_proof,
     precontest_human_independence_proof,
     precontest_machine_evidence,
+    precontest_plumbing_receipt,
     precontest_reconciliation_proof,
     precontest_runtime_profile,
 )
@@ -88,16 +89,18 @@ def _phase(spec: dict, *, now: datetime) -> tuple[str, int | None, int]:
     seconds_to_deadline = max(0, int((deadline - now).total_seconds()))
     if opening is not None and now < opening:
         return "UPCOMING", max(0, int((opening - now).total_seconds())), seconds_to_deadline
-    # No exact opening is treated conservatively as already open.
     return "OPEN", 0, seconds_to_deadline
 
 
 def _refresh_safe_proofs(challenge_id: str, *, now: datetime) -> list[str]:
-    """Refresh only explicitly opted-in, non-binding proof artifacts.
+    """Refresh explicitly opted-in, non-binding machine evidence only.
 
-    A missing profile is a deliberate no-op. The single-mode rehearsal must be
-    newer than the profile configuration before the aggregate collector may run,
-    preventing reuse of an old rehearsal for a newly configured challenge.
+    The aggregate collector may run only when the single rehearsal is newer than
+    the runtime profile. A Production plumbing receipt is generated only after
+    that collector succeeds, so stale or incomplete machine evidence can never
+    be upgraded into a plumbing PASS. Receipt generation itself is read-only
+    with respect to external systems and fails closed when deployed units are
+    missing, inactive, mismatched, or stale.
     """
     try:
         profile = precontest_runtime_profile.load(challenge_id)
@@ -137,13 +140,20 @@ def _refresh_safe_proofs(challenge_id: str, *, now: datetime) -> list[str]:
         except Exception:
             blockers.append(f"precontest_auto_{label}_proof_blocked")
 
+    collector_succeeded = False
     if rehearsal_fresh_for_profile:
         try:
             precontest_machine_evidence.collect(challenge_id, now=now)
+            collector_succeeded = True
         except Exception:
             blockers.append("precontest_auto_machine_evidence_blocked")
 
-    # Stable order with no duplicate noise in Mission Control.
+    if collector_succeeded:
+        try:
+            precontest_plumbing_receipt.save_receipt(challenge_id, now=now)
+        except Exception:
+            blockers.append("precontest_auto_plumbing_receipt_blocked")
+
     return list(dict.fromkeys(blockers))
 
 

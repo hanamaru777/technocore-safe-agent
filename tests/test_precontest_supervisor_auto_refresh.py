@@ -27,22 +27,32 @@ def _fresh_rehearsal(evaluated_at=NOW):
     }
 
 
-def test_missing_profile_does_not_call_any_proof_or_collector(monkeypatch):
+def _proof_modules():
+    return (
+        ("deadline", supervisor.precontest_deadline_proof),
+        ("active", supervisor.precontest_active_learning_proof),
+        ("reconciliation", supervisor.precontest_reconciliation_proof),
+        ("batch", supervisor.precontest_batch_rehearsal_proof),
+        ("control_path", supervisor.precontest_control_path_proof),
+        ("human_independence", supervisor.precontest_human_independence_proof),
+    )
+
+
+def test_missing_profile_does_not_call_any_proof_collector_or_plumbing(monkeypatch):
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: None)
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("proof automation must not run without explicit profile")
 
-    monkeypatch.setattr(supervisor.precontest_deadline_proof, "save_proof", forbidden)
-    monkeypatch.setattr(supervisor.precontest_active_learning_proof, "save_proof", forbidden)
-    monkeypatch.setattr(supervisor.precontest_reconciliation_proof, "save_proof", forbidden)
-    monkeypatch.setattr(supervisor.precontest_batch_rehearsal_proof, "save_proof", forbidden)
+    for _, module in _proof_modules():
+        monkeypatch.setattr(module, "save_proof", forbidden)
     monkeypatch.setattr(supervisor.precontest_machine_evidence, "collect", forbidden)
+    monkeypatch.setattr(supervisor.precontest_plumbing_receipt, "save_receipt", forbidden)
 
     assert supervisor._refresh_safe_proofs(CHALLENGE, now=NOW) == []
 
 
-def test_explicit_profile_refreshes_all_safe_proofs_then_collector(monkeypatch):
+def test_explicit_profile_refreshes_all_safe_proofs_then_collector_then_plumbing(monkeypatch):
     calls = []
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: _profile())
     monkeypatch.setattr(
@@ -57,24 +67,36 @@ def test_explicit_profile_refreshes_all_safe_proofs_then_collector(monkeypatch):
             return {"status": "PASS"}
         return run
 
-    monkeypatch.setattr(supervisor.precontest_deadline_proof, "save_proof", proof("deadline"))
-    monkeypatch.setattr(supervisor.precontest_active_learning_proof, "save_proof", proof("active"))
-    monkeypatch.setattr(supervisor.precontest_reconciliation_proof, "save_proof", proof("reconciliation"))
-    monkeypatch.setattr(supervisor.precontest_batch_rehearsal_proof, "save_proof", proof("batch"))
+    for label, module in _proof_modules():
+        monkeypatch.setattr(module, "save_proof", proof(label))
 
     def collect(challenge_id, now=None):
         calls.append("collector")
         return {"status": "COLLECTED_NO_GO"}
 
+    def plumbing(challenge_id, now=None):
+        calls.append("plumbing")
+        return {"status": "PASS", "non_binding": True}
+
     monkeypatch.setattr(supervisor.precontest_machine_evidence, "collect", collect)
+    monkeypatch.setattr(supervisor.precontest_plumbing_receipt, "save_receipt", plumbing)
 
     blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
 
     assert blockers == []
-    assert calls == ["deadline", "active", "reconciliation", "batch", "collector"]
+    assert calls == [
+        "deadline",
+        "active",
+        "reconciliation",
+        "batch",
+        "control_path",
+        "human_independence",
+        "collector",
+        "plumbing",
+    ]
 
 
-def test_rehearsal_predating_profile_never_runs_collector(monkeypatch):
+def test_rehearsal_predating_profile_never_runs_collector_or_plumbing(monkeypatch):
     calls = []
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: _profile(configured_at=NOW))
     monkeypatch.setattr(
@@ -87,20 +109,19 @@ def test_rehearsal_predating_profile_never_runs_collector(monkeypatch):
         calls.append("proof")
         return {"status": "PASS"}
 
-    monkeypatch.setattr(supervisor.precontest_deadline_proof, "save_proof", proof)
-    monkeypatch.setattr(supervisor.precontest_active_learning_proof, "save_proof", proof)
-    monkeypatch.setattr(supervisor.precontest_reconciliation_proof, "save_proof", proof)
-    monkeypatch.setattr(supervisor.precontest_batch_rehearsal_proof, "save_proof", proof)
+    for _, module in _proof_modules():
+        monkeypatch.setattr(module, "save_proof", proof)
 
-    def forbidden_collect(*_args, **_kwargs):
-        raise AssertionError("old single rehearsal must not be collected for new profile")
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("old single rehearsal must not reach collector or plumbing receipt")
 
-    monkeypatch.setattr(supervisor.precontest_machine_evidence, "collect", forbidden_collect)
+    monkeypatch.setattr(supervisor.precontest_machine_evidence, "collect", forbidden)
+    monkeypatch.setattr(supervisor.precontest_plumbing_receipt, "save_receipt", forbidden)
 
     blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
 
     assert blockers == ["precontest_auto_single_rehearsal_predates_profile"]
-    assert len(calls) == 4
+    assert len(calls) == 6
 
 
 def test_individual_proof_and_collector_failures_become_fixed_blockers(monkeypatch):
@@ -115,13 +136,17 @@ def test_individual_proof_and_collector_failures_become_fixed_blockers(monkeypat
         "save_proof",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("upstream detail")),
     )
-    monkeypatch.setattr(supervisor.precontest_active_learning_proof, "save_proof", lambda *a, **k: {})
-    monkeypatch.setattr(supervisor.precontest_reconciliation_proof, "save_proof", lambda *a, **k: {})
-    monkeypatch.setattr(supervisor.precontest_batch_rehearsal_proof, "save_proof", lambda *a, **k: {})
+    for _, module in _proof_modules()[1:]:
+        monkeypatch.setattr(module, "save_proof", lambda *a, **k: {})
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "collect",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("private collector detail")),
+    )
+    monkeypatch.setattr(
+        supervisor.precontest_plumbing_receipt,
+        "save_receipt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plumbing must be skipped")),
     )
 
     blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
