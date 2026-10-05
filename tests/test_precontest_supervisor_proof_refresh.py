@@ -31,12 +31,21 @@ def _install_builders(monkeypatch, calls, *, failing=None):
             calls.append((_label, challenge_id, now))
             if _label == failing:
                 raise RuntimeError("proof failed")
-            # NO_GO is a valid proof result for missing real-world receipts.
             return {"status": "NO_GO" if _label in {"control_path", "human_independence"} else "PASS"}
         monkeypatch.setattr(module, "save_proof", save)
 
 
-def test_profiled_fresh_rehearsal_refreshes_all_proofs_and_collector(monkeypatch):
+def _stub_plumbing(monkeypatch, calls=None, *, fail=False):
+    def save(challenge_id, now=None):
+        if calls is not None:
+            calls.append(("plumbing", challenge_id, now))
+        if fail:
+            raise RuntimeError("plumbing unavailable")
+        return {"status": "PASS", "non_binding": True}
+    monkeypatch.setattr(supervisor.precontest_plumbing_receipt, "save_receipt", save)
+
+
+def test_profiled_fresh_rehearsal_refreshes_all_proofs_collector_then_plumbing(monkeypatch):
     calls = []
     configured = NOW - timedelta(minutes=5)
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: _profile(configured))
@@ -46,12 +55,12 @@ def test_profiled_fresh_rehearsal_refreshes_all_proofs_and_collector(monkeypatch
         lambda now: {"evaluated_at": (NOW - timedelta(seconds=1)).isoformat()},
     )
     _install_builders(monkeypatch, calls)
-    collected = []
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "collect",
-        lambda challenge_id, now=None: collected.append((challenge_id, now)) or {"status": "COLLECTED_NO_GO"},
+        lambda challenge_id, now=None: calls.append(("collector", challenge_id, now)) or {"status": "COLLECTED_NO_GO"},
     )
+    _stub_plumbing(monkeypatch, calls)
 
     blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
 
@@ -63,8 +72,9 @@ def test_profiled_fresh_rehearsal_refreshes_all_proofs_and_collector(monkeypatch
         "batch",
         "control_path",
         "human_independence",
+        "collector",
+        "plumbing",
     ]
-    assert collected == [(CHALLENGE, NOW)]
 
 
 def test_missing_receipt_no_go_proofs_are_not_refresh_failures(monkeypatch):
@@ -85,6 +95,7 @@ def test_missing_receipt_no_go_proofs_are_not_refresh_failures(monkeypatch):
         "collect",
         lambda challenge_id, now=None: {"status": "COLLECTED_NO_GO"},
     )
+    _stub_plumbing(monkeypatch)
 
     blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
 
@@ -111,13 +122,71 @@ def test_builder_failure_is_named_blocker_and_never_silent(monkeypatch):
         "collect",
         lambda challenge_id, now=None: {"status": "COLLECTED_NO_GO"},
     )
+    _stub_plumbing(monkeypatch)
 
     blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
 
     assert "precontest_auto_human_independence_proof_blocked" in blockers
 
 
-def test_profile_predating_rehearsal_prevents_collector_but_still_refreshes_safe_proofs(monkeypatch):
+def test_collector_failure_skips_plumbing_and_is_named_blocker(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        supervisor.precontest_runtime_profile,
+        "load",
+        lambda challenge_id: _profile(NOW - timedelta(minutes=10)),
+    )
+    monkeypatch.setattr(
+        supervisor.precontest_machine_evidence,
+        "_fresh_rehearsal",
+        lambda now: {"evaluated_at": NOW.isoformat()},
+    )
+    _install_builders(monkeypatch, calls)
+
+    def fail_collect(challenge_id, now=None):
+        calls.append(("collector", challenge_id, now))
+        raise RuntimeError("collector failed")
+
+    monkeypatch.setattr(supervisor.precontest_machine_evidence, "collect", fail_collect)
+
+    def forbidden_plumbing(*_args, **_kwargs):
+        raise AssertionError("plumbing receipt must not run after collector failure")
+
+    monkeypatch.setattr(supervisor.precontest_plumbing_receipt, "save_receipt", forbidden_plumbing)
+
+    blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
+
+    assert "precontest_auto_machine_evidence_blocked" in blockers
+
+
+def test_plumbing_failure_after_collector_is_named_blocker(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        supervisor.precontest_runtime_profile,
+        "load",
+        lambda challenge_id: _profile(NOW - timedelta(minutes=10)),
+    )
+    monkeypatch.setattr(
+        supervisor.precontest_machine_evidence,
+        "_fresh_rehearsal",
+        lambda now: {"evaluated_at": NOW.isoformat()},
+    )
+    _install_builders(monkeypatch, calls)
+    monkeypatch.setattr(
+        supervisor.precontest_machine_evidence,
+        "collect",
+        lambda challenge_id, now=None: calls.append(("collector", challenge_id, now)) or {"status": "COLLECTED_NO_GO"},
+    )
+    _stub_plumbing(monkeypatch, calls, fail=True)
+
+    blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
+
+    assert calls[-2][0] == "collector"
+    assert calls[-1][0] == "plumbing"
+    assert "precontest_auto_plumbing_receipt_blocked" in blockers
+
+
+def test_profile_predating_rehearsal_prevents_collector_and_plumbing(monkeypatch):
     calls = []
     monkeypatch.setattr(
         supervisor.precontest_runtime_profile,
@@ -135,11 +204,40 @@ def test_profile_predating_rehearsal_prevents_collector_but_still_refreshes_safe
         raise AssertionError("collector must not use a rehearsal older than profile configuration")
 
     monkeypatch.setattr(supervisor.precontest_machine_evidence, "collect", should_not_collect)
+    monkeypatch.setattr(
+        supervisor.precontest_plumbing_receipt,
+        "save_receipt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plumbing must not run without collector")),
+    )
 
     blockers = supervisor._refresh_safe_proofs(CHALLENGE, now=NOW)
 
     assert "precontest_auto_single_rehearsal_predates_profile" in blockers
     assert [row[0] for row in calls][-2:] == ["control_path", "human_independence"]
+
+
+def test_valid_plumbing_receipt_does_not_override_other_plan_blockers(monkeypatch):
+    monkeypatch.setattr(supervisor, "_refresh_safe_proofs", lambda challenge_id, now: [])
+    monkeypatch.setattr(
+        supervisor.precontest_challenge,
+        "build_plan",
+        lambda challenge_id, now=None: {
+            "ready_for_execution_path": False,
+            "critical_path": ["HUMAN_INDEPENDENCE_GATE"],
+            "precontest_readiness": {"status": "NO_GO"},
+        },
+    )
+    spec = {
+        "challenge_id": CHALLENGE,
+        "deadline": (NOW + timedelta(hours=2)).isoformat(),
+        "opening": (NOW + timedelta(hours=1)).isoformat(),
+    }
+
+    row = supervisor._challenge_row(spec, now=NOW)
+
+    assert row["ready"] is False
+    assert row["status"] == "ACTION_REQUIRED"
+    assert "HUMAN_INDEPENDENCE_GATE" in row["blockers"]
 
 
 def test_missing_profile_remains_explicit_noop(monkeypatch):
