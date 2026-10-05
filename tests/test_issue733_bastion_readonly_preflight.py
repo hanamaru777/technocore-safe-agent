@@ -44,15 +44,18 @@ def test_issue733_requires_real_cloud_shell_delegation_environment():
     assert 'OCI_CLI_PROFILE:-' in text
 
 
-def test_issue733_target_ocid_is_input_only_and_never_echoed():
+def test_issue733_target_ocid_is_input_only_never_echoed_or_put_in_argv():
     text = _text()
     assert 'TECHNOCORE_TARGET_INSTANCE_OCID' in text
+    assert "TARGET_INSTANCE_ID = os.environ.get('TECHNOCORE_TARGET_INSTANCE_OCID', '')" in text
     assert 'TARGET_INSTANCE_INPUT=ACCEPTED_PRIVATE' in text
     assert 'OCID_OUTPUT=NO' in text
     assert 'IP_OUTPUT=NO' in text
     assert 'DELEGATION_TOKEN_OUTPUT=NO' in text
     assert 'RAW_OCI_ERROR_OUTPUT=NO' in text
     assert 'echo "$TECHNOCORE_TARGET_INSTANCE_OCID"' not in text
+    assert '"$OCI_CLI_PROFILE" "$TECHNOCORE_TARGET_INSTANCE_OCID"' not in text
+    assert "TARGET_INSTANCE_ID = sys.argv" not in text
     assert "print(TARGET_INSTANCE_ID" not in text
     assert "+ TARGET_INSTANCE_ID" not in text
 
