@@ -1,6 +1,5 @@
 import json
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -31,7 +30,9 @@ def _install_good_probe(monkeypatch, calls):
 
     def fake_run(argv, *, cwd=None):
         calls.append((list(argv), cwd))
-        if argv[:3] == ["git", "rev-parse", "HEAD"]:
+        if argv and argv[0] == "git" and argv[-2:] == ["rev-parse", "HEAD"]:
+            assert "safe.directory=" in argv[2]
+            assert "-C" in argv
             return _completed(argv, out=HEAD + "\n")
         if argv == [SYSTEMCTL, "show", capture.EXECUTOR_UNIT, "-p", "LoadState", "--value"]:
             return _completed(argv, out="loaded\n")
@@ -94,6 +95,22 @@ def test_permission_failure_writes_nothing(tmp_path, monkeypatch):
     assert not control.receipts_path(CHALLENGE).exists()
 
 
+def test_wrong_installed_fragment_fails_closed(monkeypatch):
+    calls = []
+    _install_good_probe(monkeypatch, calls)
+    good_run = capture._run
+
+    def wrong_fragment(argv, *, cwd=None):
+        if argv == [SYSTEMCTL, "show", capture.EXECUTOR_UNIT, "-p", "FragmentPath", "--value"]:
+            calls.append((list(argv), cwd))
+            return _completed(argv, out="/usr/lib/systemd/system/unexpected.service\n")
+        return good_run(argv, cwd=cwd)
+
+    monkeypatch.setattr(capture, "_run", wrong_fragment)
+    with pytest.raises(capture.ControlPathCaptureError, match="executor_fragment_invalid"):
+        capture.build_direct_ssh_receipt(now=NOW)
+
+
 def test_successful_capture_is_nonsecret_and_one_path_remains_no_go(tmp_path, monkeypatch):
     monkeypatch.setattr(precontest_readiness, "_root", lambda: tmp_path)
     calls = []
@@ -128,6 +145,19 @@ def test_successful_capture_is_nonsecret_and_one_path_remains_no_go(tmp_path, mo
     ]
     assert direct_systemctl_mutations == []
     assert [SUDO, "-n", "-l", SYSTEMCTL, "start", capture.EXECUTOR_UNIT] in [argv for argv, _ in calls]
+
+
+def test_probe_then_state_owner_install_preserves_generated_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(precontest_readiness, "_root", lambda: tmp_path)
+    calls = []
+    _install_good_probe(monkeypatch, calls)
+
+    generated = capture.build_direct_ssh_receipt(now=NOW)
+    installed = capture.install_receipt(CHALLENGE, json.loads(json.dumps(generated)), now=NOW)
+
+    assert installed == generated
+    rows = json.loads(control.receipts_path(CHALLENGE).read_text("utf-8"))
+    assert rows == [generated]
 
 
 def test_existing_fresh_independent_receipt_is_preserved(tmp_path, monkeypatch):
@@ -165,6 +195,21 @@ def test_stale_receipt_is_pruned_but_tampered_receipt_fails_closed(tmp_path, mon
     path.write_text(json.dumps([tampered]), encoding="utf-8")
     with pytest.raises(capture.ControlPathCaptureError, match="existing_receipt_invalid"):
         capture.save_direct_ssh_receipt(CHALLENGE, now=NOW)
+
+
+def test_install_rejects_non_ssh_or_not_ready_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(precontest_readiness, "_root", lambda: tmp_path)
+    connector = _connector_receipt()
+    with pytest.raises(capture.ControlPathCaptureError, match="receipt_path_invalid"):
+        capture.install_receipt(CHALLENGE, connector, now=NOW)
+
+    calls = []
+    _install_good_probe(monkeypatch, calls)
+    direct = capture.build_direct_ssh_receipt(now=NOW)
+    direct["ready"] = False
+    direct["receipt_sha256"] = control._receipt_digest(direct)
+    with pytest.raises(capture.ControlPathCaptureError, match="receipt_not_ready"):
+        capture.install_receipt(CHALLENGE, direct, now=NOW)
 
 
 def test_endpoint_fingerprint_changes_without_leaking_inputs(monkeypatch):
