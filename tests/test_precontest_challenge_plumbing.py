@@ -43,7 +43,7 @@ def test_strict_planner_applies_plumbing_before_readiness(monkeypatch):
     monkeypatch.setattr(
         precontest_challenge.precontest_plumbing_apply,
         "apply_if_present",
-        lambda challenge_id, now=None: calls.append((challenge_id, now)),
+        lambda challenge_id, now=None: calls.append((challenge_id, now)) or {"status": "APPLIED"},
     )
     monkeypatch.setattr(
         precontest_challenge.precontest_readiness,
@@ -56,6 +56,31 @@ def test_strict_planner_applies_plumbing_before_readiness(monkeypatch):
     assert calls == [("proof", NOW)]
     assert result["ready_for_execution_path"] is True
     assert result["precontest_readiness"]["status"] == "GO"
+
+
+def test_missing_plumbing_receipt_forces_no_go_even_if_saved_boolean_claims_pass(monkeypatch):
+    monkeypatch.setattr(
+        precontest_challenge.airdrop_challenge,
+        "build_plan",
+        lambda challenge_id, now=None: _legacy(),
+    )
+    monkeypatch.setattr(
+        precontest_challenge.precontest_plumbing_apply,
+        "apply_if_present",
+        lambda challenge_id, now=None: None,
+    )
+    monkeypatch.setattr(
+        precontest_challenge.precontest_readiness,
+        "evaluate_saved",
+        lambda challenge_id, now=None, expected_deadline=None: _go(),
+    )
+
+    result = precontest_challenge.build_plan("proof", now=NOW)
+
+    assert result["ready_for_execution_path"] is False
+    assert result["precontest_readiness"]["status"] == "NO_GO"
+    assert result["precontest_readiness"]["gates"]["NO_LIVE_PLUMBING_GATE"] is False
+    assert "NO_LIVE_PLUMBING_GATE" in result["critical_path"]
 
 
 def test_invalid_plumbing_receipt_forces_no_go_before_saved_readiness(monkeypatch):
