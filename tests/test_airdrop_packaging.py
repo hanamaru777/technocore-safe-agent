@@ -35,7 +35,7 @@ def test_airdrop_notifier_unit_reuses_only_public_discord_env() -> None:
     assert "Type=oneshot" in unit
     assert "User=technocore" in unit
     assert "EnvironmentFile=/etc/technocore-safe-agent/airdrop-notifier.env" in unit
-    assert "airdrop-notifier-once" in unit
+    assert "-m flop_agent.airdrop_notifier_compact" in unit
     assert "ReadWritePaths=/var/lib/technocore-safe-agent" in unit
     assert "NoNewPrivileges=true" in unit
     assert "CapabilityBoundingSet=" in unit
