@@ -60,9 +60,11 @@ def test_exact_frozen_close1_adapter_is_compatible(tmp_path, monkeypatch):
     assert valid == proof
     assert proof["runtime_profile"] == compatibility.PROFILE
     assert proof["campaign_deadline"] == close_call.LOCK.isoformat()
-    assert proof["spec_pinned_commit"] in compatibility.ALLOWED_RULES_COMMITS
-    assert proof["rules_url_commit"] in compatibility.ALLOWED_RULES_COMMITS
+    assert proof["spec_pinned_commit"] == compatibility.FROZEN_REFEREE_COMMIT
+    assert proof["rules_url_commit"] == compatibility.FROZEN_REFEREE_COMMIT
     assert proof["adapter_bindings"]["runtime_lock"] == close_call.LOCK.isoformat()
+    assert proof["adapter_bindings"]["frozen_rules_repo"] == "flop-labs/technocore-close-call-challenge"
+    assert proof["adapter_bindings"]["frozen_rules_commit"] == compatibility.FROZEN_REFEREE_COMMIT
     assert len(proof["proof_sha256"]) == 64
 
 
@@ -75,6 +77,17 @@ def test_different_rules_commit_is_explicit_no_go(tmp_path, monkeypatch):
     assert proof["status"] == "NO_GO"
     assert proof["reason"] == "pinned_commit_mismatch"
     assert valid["status"] == "NO_GO"
+
+
+def test_launch_authority_commit_cannot_substitute_for_frozen_rules_commit(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch, spec=_spec(commit=close_call.OFFICIAL_REPO_COMMIT))
+
+    proof = compatibility.build_proof(CHALLENGE, now=NOW)
+
+    assert proof["status"] == "NO_GO"
+    assert proof["reason"] == "pinned_commit_mismatch"
+    assert proof["adapter_bindings"]["launch_repo_commit"] == close_call.OFFICIAL_REPO_COMMIT
+    assert proof["adapter_bindings"]["frozen_rules_commit"] == compatibility.FROZEN_REFEREE_COMMIT
 
 
 def test_different_deadline_is_explicit_no_go(tmp_path, monkeypatch):
