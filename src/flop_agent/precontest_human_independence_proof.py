@@ -2,7 +2,7 @@
 
 A PASS is intentionally impossible until the reviewed fixed-function dispatcher
 and its systemd unit exist and a fresh Production pre-sign rehearsal receipt is
-present.  This module never signs, writes approvals, posts, starts services, or
+present. This module never signs, writes approvals, posts, starts services, or
 accesses signer/Vault material.
 """
 from __future__ import annotations
@@ -23,6 +23,12 @@ PROBE_METHOD = "fixed_handler_pre_sign_rehearsal"
 DISPATCHER_FILE = "src/flop_agent/close1_autonomous_dispatcher.py"
 DISPATCHER_SERVICE = "packaging/oracle/technocore-safe-agent-close1-autonomous-dispatcher.service"
 EXECUTOR_FILE = "src/flop_agent/close1_approved_trade.py"
+EXECUTOR_SERVICE = "packaging/oracle/technocore-safe-agent-close1-approved-trade.service"
+
+DISPATCHER_UNIT = "technocore-safe-agent-close1-autonomous-dispatcher.service"
+DISPATCHER_EXEC_START = "/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.close1_autonomous_dispatcher"
+EXECUTOR_UNIT = "technocore-safe-agent-close1-approved-trade.service"
+EXECUTOR_EXEC_START = "/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.close1_approved_trade"
 
 
 class HumanIndependenceProofError(RuntimeError):
@@ -76,15 +82,27 @@ def _bounded_file(path: Path, *, label: str) -> bytes:
     return raw
 
 
+def _exec_start(raw: bytes) -> str | None:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    values = [line.split("=", 1)[1].strip() for line in text.splitlines() if line.startswith("ExecStart=")]
+    return values[0] if len(values) == 1 else None
+
+
 def _required_source_hashes(root: Path | None = None) -> dict[str, str] | None:
     base = (root or _root()).resolve()
-    paths = [DISPATCHER_FILE, DISPATCHER_SERVICE, EXECUTOR_FILE]
+    paths = [DISPATCHER_FILE, DISPATCHER_SERVICE, EXECUTOR_FILE, EXECUTOR_SERVICE]
     if any(not (base / relative).is_file() for relative in paths):
         return None
-    return {
-        relative: _sha_bytes(_bounded_file(base / relative, label="source"))
-        for relative in paths
-    }
+    dispatcher_service = _bounded_file(base / DISPATCHER_SERVICE, label="source")
+    executor_service = _bounded_file(base / EXECUTOR_SERVICE, label="source")
+    if _exec_start(dispatcher_service) != DISPATCHER_EXEC_START:
+        return None
+    if _exec_start(executor_service) != EXECUTOR_EXEC_START:
+        return None
+    return {relative: _sha_bytes(_bounded_file(base / relative, label="source")) for relative in paths}
 
 
 def _receipt_digest(value: dict) -> str:
@@ -93,21 +111,17 @@ def _receipt_digest(value: dict) -> str:
     return _sha(unsigned)
 
 
-def validate_receipt(
-    value: object,
-    *,
-    challenge_id: str,
-    now: datetime,
-    repo_root: Path | None = None,
-) -> dict:
+def validate_receipt(value: object, *, challenge_id: str, now: datetime, repo_root: Path | None = None) -> dict:
     if not isinstance(value, dict):
         raise HumanIndependenceProofError("precontest_human_receipt_invalid")
     required = {
         "schema_version", "challenge_id", "status", "non_binding", "generated_at",
         "path_id", "probe_method", "binding_capable", "automatic_handoff",
-        "requires_chat_relay", "requires_user_terminal", "policy_preconfigured",
-        "signer_boundary_preserved", "fixed_function_only",
-        "generic_privileged_rpc_exposed", "source_sha256", "receipt_sha256",
+        "requires_chat_relay", "requires_user_terminal", "policy_configured_at",
+        "candidate_captured_at", "signer_boundary_preserved", "fixed_function_only",
+        "generic_privileged_rpc_exposed", "installed_dispatcher_unit",
+        "installed_dispatcher_exec_start", "installed_executor_unit",
+        "installed_executor_exec_start", "source_sha256", "receipt_sha256",
     }
     if set(value) != required or value.get("schema_version") != SCHEMA_VERSION:
         raise HumanIndependenceProofError("precontest_human_receipt_schema_invalid")
@@ -126,24 +140,36 @@ def validate_receipt(
     path_id = value.get("path_id")
     if not isinstance(path_id, str) or not path_id or len(path_id) > 128:
         raise HumanIndependenceProofError("precontest_human_path_id_invalid")
+
     generated = _parse_time(value.get("generated_at"), label="generated_at")
+    configured = _parse_time(value.get("policy_configured_at"), label="policy_configured_at")
+    captured = _parse_time(value.get("candidate_captured_at"), label="candidate_captured_at")
     current = now.astimezone(UTC)
     age = current - generated
     if age > precontest_readiness.MAX_EVIDENCE_AGE or age < -precontest_readiness.MAX_CLOCK_SKEW:
         raise HumanIndependenceProofError("precontest_human_receipt_stale")
+    if configured > captured or captured > generated:
+        raise HumanIndependenceProofError("precontest_human_policy_timing_invalid")
 
     required_flags = {
         "binding_capable": True,
         "automatic_handoff": True,
         "requires_chat_relay": False,
         "requires_user_terminal": False,
-        "policy_preconfigured": True,
         "signer_boundary_preserved": True,
         "fixed_function_only": True,
         "generic_privileged_rpc_exposed": False,
     }
     if any(value.get(key) is not expected for key, expected in required_flags.items()):
         raise HumanIndependenceProofError("precontest_human_receipt_claim_invalid")
+    if value.get("installed_dispatcher_unit") != DISPATCHER_UNIT:
+        raise HumanIndependenceProofError("precontest_human_installed_unit_mismatch")
+    if value.get("installed_dispatcher_exec_start") != DISPATCHER_EXEC_START:
+        raise HumanIndependenceProofError("precontest_human_installed_unit_mismatch")
+    if value.get("installed_executor_unit") != EXECUTOR_UNIT:
+        raise HumanIndependenceProofError("precontest_human_installed_unit_mismatch")
+    if value.get("installed_executor_exec_start") != EXECUTOR_EXEC_START:
+        raise HumanIndependenceProofError("precontest_human_installed_unit_mismatch")
 
     expected_hashes = _required_source_hashes(repo_root)
     if expected_hashes is None:
@@ -167,37 +193,25 @@ def _read_receipt(challenge_id: str) -> tuple[dict | None, str | None]:
     return value, _sha_bytes(raw)
 
 
-def build_proof(
-    challenge_id: str,
-    *,
-    now: datetime | None = None,
-    repo_root: Path | None = None,
-) -> dict:
+def build_proof(challenge_id: str, *, now: datetime | None = None, repo_root: Path | None = None) -> dict:
     challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         raise ValueError("precontest_human_now_timezone_required")
     current = current.astimezone(UTC)
-
     receipt, file_digest = _read_receipt(challenge_id)
     status = "NO_GO"
     reason = "precontest_human_receipt_missing"
     path_id = None
     if receipt is not None:
         try:
-            valid = validate_receipt(
-                receipt,
-                challenge_id=challenge_id,
-                now=current,
-                repo_root=repo_root,
-            )
+            valid = validate_receipt(receipt, challenge_id=challenge_id, now=current, repo_root=repo_root)
         except HumanIndependenceProofError as error:
             reason = str(error)
         else:
             status = "PASS"
             reason = None
             path_id = valid["path_id"]
-
     value = {
         "schema_version": SCHEMA_VERSION,
         "challenge_id": challenge_id,
@@ -215,13 +229,7 @@ def build_proof(
     return value
 
 
-def validate_proof(
-    value: object,
-    *,
-    challenge_id: str,
-    now: datetime,
-    repo_root: Path | None = None,
-) -> dict:
+def validate_proof(value: object, *, challenge_id: str, now: datetime, repo_root: Path | None = None) -> dict:
     if not isinstance(value, dict):
         raise HumanIndependenceProofError("precontest_human_proof_invalid")
     required = {
@@ -245,22 +253,15 @@ def validate_proof(
     age = current - generated
     if age > precontest_readiness.MAX_EVIDENCE_AGE or age < -precontest_readiness.MAX_CLOCK_SKEW:
         raise HumanIndependenceProofError("precontest_human_proof_stale")
-
     current_receipt, current_digest = _read_receipt(challenge_id)
     if value.get("receipt_present") is not (current_receipt is not None):
         raise HumanIndependenceProofError("precontest_human_receipt_source_changed")
     if value.get("receipt_file_sha256") != current_digest:
         raise HumanIndependenceProofError("precontest_human_receipt_source_changed")
-
     if value.get("status") == "PASS":
         if current_receipt is None:
             raise HumanIndependenceProofError("precontest_human_receipt_missing")
-        valid = validate_receipt(
-            current_receipt,
-            challenge_id=challenge_id,
-            now=current,
-            repo_root=repo_root,
-        )
+        valid = validate_receipt(current_receipt, challenge_id=challenge_id, now=current, repo_root=repo_root)
         if value.get("path_id") != valid["path_id"]:
             raise HumanIndependenceProofError("precontest_human_path_id_mismatch")
         if value.get("requires_chat_relay") is not False or value.get("requires_user_terminal") is not False:
