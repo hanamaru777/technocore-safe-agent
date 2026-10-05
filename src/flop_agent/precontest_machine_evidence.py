@@ -20,6 +20,7 @@ from . import (
     close1_autonomous_rehearsal,
     precontest_active_learning_proof,
     precontest_batch_rehearsal_proof,
+    precontest_control_path_proof,
     precontest_deadline_proof,
     precontest_readiness,
     precontest_reconciliation_proof,
@@ -74,25 +75,12 @@ def _read_json_file(path: Path, *, label: str) -> tuple[dict, str]:
 
 
 def _fresh_rehearsal(*, now: datetime) -> dict:
-    result, digest = _read_json_file(
-        close1_autonomous_rehearsal.result_path(),
-        label="rehearsal",
-    )
+    result, digest = _read_json_file(close1_autonomous_rehearsal.result_path(), label="rehearsal")
     required = {
-        "schema_version",
-        "status",
-        "non_binding",
-        "trade_id",
-        "stage_sha256",
-        "capture_to_rehearsal_ms",
-        "capture_to_stage_ms",
-        "target_capture_to_executor_ms",
-        "target_met",
-        "fresh_policy",
-        "signer_access",
-        "approval_written",
-        "post_attempted",
-        "evaluated_at",
+        "schema_version", "status", "non_binding", "trade_id", "stage_sha256",
+        "capture_to_rehearsal_ms", "capture_to_stage_ms", "target_capture_to_executor_ms",
+        "target_met", "fresh_policy", "signer_access", "approval_written",
+        "post_attempted", "evaluated_at",
     }
     if set(result) != required:
         raise MachineEvidenceError("precontest_machine_rehearsal_schema_invalid")
@@ -106,7 +94,6 @@ def _fresh_rehearsal(*, now: datetime) -> dict:
         raise MachineEvidenceError("precontest_machine_rehearsal_signer_access")
     if result["approval_written"] is not False or result["post_attempted"] is not False:
         raise MachineEvidenceError("precontest_machine_rehearsal_binding_side_effect")
-
     latency = result["capture_to_rehearsal_ms"]
     if type(latency) is not int or not 0 <= latency <= precontest_readiness.MAX_CAPTURE_TO_EXECUTOR_MS:
         raise MachineEvidenceError("precontest_machine_rehearsal_latency_invalid")
@@ -114,25 +101,21 @@ def _fresh_rehearsal(*, now: datetime) -> dict:
         raise MachineEvidenceError("precontest_machine_rehearsal_target_invalid")
     if type(result["capture_to_stage_ms"]) is not int or result["capture_to_stage_ms"] < 0:
         raise MachineEvidenceError("precontest_machine_rehearsal_stage_latency_invalid")
-
     stage_digest = result["stage_sha256"]
     if not isinstance(stage_digest, str) or not HEX64_RE.fullmatch(stage_digest):
         raise MachineEvidenceError("precontest_machine_rehearsal_stage_digest_invalid")
     if not isinstance(result["trade_id"], str) or not result["trade_id"]:
         raise MachineEvidenceError("precontest_machine_rehearsal_trade_id_invalid")
-
     policy = result["fresh_policy"]
     if not isinstance(policy, dict):
         raise MachineEvidenceError("precontest_machine_rehearsal_policy_invalid")
     for key in ("offer_fresh", "price_fresh", "account_ready"):
         if policy.get(key) is not True:
             raise MachineEvidenceError(f"precontest_machine_rehearsal_{key}_failed")
-
     evaluated = _parse_time(result["evaluated_at"], label="rehearsal_time")
     age = now - evaluated
     if age > precontest_readiness.MAX_EVIDENCE_AGE or age < -precontest_readiness.MAX_CLOCK_SKEW:
         raise MachineEvidenceError("precontest_machine_rehearsal_stale")
-
     return {
         "sha256": digest,
         "evaluated_at": evaluated.isoformat(),
@@ -175,10 +158,7 @@ def _deadline_proof(challenge_id: str, *, expected_deadline: str, now: datetime)
     value, file_digest = _read_json_file(path, label="deadline_proof")
     try:
         valid = precontest_deadline_proof.validate_proof(
-            value,
-            challenge_id=challenge_id,
-            expected_deadline=expected_deadline,
-            now=now,
+            value, challenge_id=challenge_id, expected_deadline=expected_deadline, now=now
         )
     except precontest_deadline_proof.DeadlineProofError as error:
         raise MachineEvidenceError("precontest_machine_deadline_proof_invalid") from error
@@ -199,11 +179,7 @@ def _active_learning_proof(challenge_id: str, *, now: datetime) -> dict | None:
         return None
     value, file_digest = _read_json_file(path, label="active_learning_proof")
     try:
-        valid = precontest_active_learning_proof.validate_proof(
-            value,
-            challenge_id=challenge_id,
-            now=now,
-        )
+        valid = precontest_active_learning_proof.validate_proof(value, challenge_id=challenge_id, now=now)
     except precontest_active_learning_proof.ActiveLearningProofError as error:
         raise MachineEvidenceError("precontest_machine_active_learning_proof_invalid") from error
     return {
@@ -224,11 +200,7 @@ def _reconciliation_proof(challenge_id: str, *, now: datetime) -> dict | None:
         return None
     value, file_digest = _read_json_file(path, label="reconciliation_proof")
     try:
-        valid = precontest_reconciliation_proof.validate_proof(
-            value,
-            challenge_id=challenge_id,
-            now=now,
-        )
+        valid = precontest_reconciliation_proof.validate_proof(value, challenge_id=challenge_id, now=now)
     except precontest_reconciliation_proof.ReconciliationProofError as error:
         raise MachineEvidenceError("precontest_machine_reconciliation_proof_invalid") from error
     return {
@@ -245,11 +217,7 @@ def _batch_rehearsal_proof(challenge_id: str, *, now: datetime) -> dict | None:
         return None
     value, file_digest = _read_json_file(path, label="batch_rehearsal_proof")
     try:
-        valid = precontest_batch_rehearsal_proof.validate_proof(
-            value,
-            challenge_id=challenge_id,
-            now=now,
-        )
+        valid = precontest_batch_rehearsal_proof.validate_proof(value, challenge_id=challenge_id, now=now)
     except precontest_batch_rehearsal_proof.BatchRehearsalProofError as error:
         raise MachineEvidenceError("precontest_machine_batch_rehearsal_proof_invalid") from error
     return {
@@ -258,6 +226,26 @@ def _batch_rehearsal_proof(challenge_id: str, *, now: datetime) -> dict | None:
         "generated_at": valid["generated_at"],
         "batch_rehearsal_ms": valid["batch_rehearsal_ms"],
         "execution_mode": "batch",
+    }
+
+
+def _control_path_proof(challenge_id: str, *, now: datetime) -> dict | None:
+    path = precontest_control_path_proof.proof_path(challenge_id)
+    if not path.exists():
+        return None
+    value, file_digest = _read_json_file(path, label="control_path_proof")
+    try:
+        valid = precontest_control_path_proof.validate_proof(value, challenge_id=challenge_id, now=now)
+    except precontest_control_path_proof.ControlPathProofError as error:
+        raise MachineEvidenceError("precontest_machine_control_path_proof_invalid") from error
+    return {
+        "sha256": file_digest,
+        "proof_sha256": valid["proof_sha256"],
+        "generated_at": valid["generated_at"],
+        "status": valid["status"],
+        "control_paths": valid["control_paths"],
+        "ready_independent_count": valid["ready_independent_count"],
+        "quota_independent_ready": valid["quota_independent_ready"],
     }
 
 
@@ -292,14 +280,15 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
     active_proof = _active_learning_proof(challenge_id, now=current)
     reconciliation_proof = _reconciliation_proof(challenge_id, now=current)
     batch_proof = _batch_rehearsal_proof(challenge_id, now=current)
+    control_proof = _control_path_proof(challenge_id, now=current)
 
     deadline_proven = deadline_proof is not None
     active_proven = active_proof is not None
     batch_proven = batch_proof is not None
-    reconciliation_cases = (
-        reconciliation_proof["cases"] if reconciliation_proof is not None else ["settled"]
-    )
+    control_proven = control_proof is not None and control_proof["status"] == "PASS"
+    reconciliation_cases = reconciliation_proof["cases"] if reconciliation_proof is not None else ["settled"]
     execution_modes = ["single", "batch"] if batch_proven else ["single"]
+    control_paths = control_proof["control_paths"] if control_proven else []
     capture_to_executor_ms = rehearsal["capture_to_rehearsal_ms"]
     if batch_proof is not None:
         capture_to_executor_ms = max(capture_to_executor_ms, batch_proof["batch_rehearsal_ms"])
@@ -312,7 +301,7 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         "capture_to_executor_ms": capture_to_executor_ms,
         "requires_chat_relay": True,
         "requires_user_terminal": True,
-        "control_paths": [],
+        "control_paths": control_paths,
         "execution_modes_required": ["single", "batch"],
         "execution_modes_rehearsed": execution_modes,
         "reconciliation_cases_rehearsed": reconciliation_cases,
@@ -339,12 +328,12 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         sources["reconciliation_matrix"] = reconciliation_proof
     if batch_proof is not None:
         sources["batch_rehearsal"] = batch_proof
+    if control_proof is not None:
+        sources["control_path_redundancy"] = control_proof
 
-    unsupported = [
-        "HUMAN_INDEPENDENCE_GATE",
-        "CONTROL_PATH_REDUNDANCY_GATE",
-        "NO_LIVE_PLUMBING_GATE",
-    ]
+    unsupported = ["HUMAN_INDEPENDENCE_GATE", "NO_LIVE_PLUMBING_GATE"]
+    if not control_proven:
+        unsupported.append("CONTROL_PATH_REDUNDANCY_GATE")
     if not batch_proven:
         unsupported.append("EXECUTION_LATENCY_GATE")
     if deadline_proof is None:
