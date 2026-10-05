@@ -21,6 +21,15 @@ COMMIT = "1" * 40
 @pytest.fixture
 def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE", tmp_path)
+    # These legacy strict-planner tests focus on readiness semantics other than
+    # the new plumbing receipt.  Model an already-validated receipt overlay so
+    # the original assertions remain scoped; dedicated plumbing tests cover
+    # missing/invalid receipts separately.
+    monkeypatch.setattr(
+        precontest_challenge.precontest_plumbing_apply,
+        "apply_if_present",
+        lambda challenge_id, now=None: {"status": "APPLIED"},
+    )
     return tmp_path
 
 
