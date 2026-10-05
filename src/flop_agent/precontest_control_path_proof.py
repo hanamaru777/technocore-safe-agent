@@ -142,11 +142,10 @@ def _independent_ready_paths(rows: list[dict]) -> list[dict]:
 
 
 def _project_path(row: dict) -> dict:
+    # Preserve the existing readiness evidence schema. Endpoint/failure-domain
+    # details are used above to establish independence but are not promoted.
     return {
-        "path_id": row["path_id"],
-        "path_type": row["path_type"],
-        "endpoint_fingerprint": row["endpoint_fingerprint"],
-        "failure_domain": row["failure_domain"],
+        "id": row["path_id"],
         "authenticated": row["authenticated"],
         "ready": row["ready"],
         "quota_independent": row["quota_independent"],
