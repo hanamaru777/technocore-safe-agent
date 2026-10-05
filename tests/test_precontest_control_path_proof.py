@@ -79,14 +79,11 @@ def test_two_independent_ready_paths_with_quota_independent_pass(tmp_path, monke
     assert proof["status"] == "PASS"
     assert proof["ready_independent_count"] == 2
     assert proof["quota_independent_ready"] is True
-    assert {row["path_id"] for row in proof["control_paths"]} == {"direct-ssh", "connector"}
+    assert {row["id"] for row in proof["control_paths"]} == {"direct-ssh", "connector"}
 
 
 def test_aliases_same_endpoint_and_failure_domain_do_not_double_count(tmp_path, monkeypatch):
-    rows = [
-        _receipt("ssh-a"),
-        _receipt("ssh-b"),
-    ]
+    rows = [_receipt("ssh-a"), _receipt("ssh-b")]
     _write_receipts(tmp_path, monkeypatch, rows)
     proof = control.build_proof(CHALLENGE, now=NOW)
     assert proof["status"] == "NO_GO"
