@@ -20,6 +20,14 @@ def _profile(configured_at=NOW - timedelta(minutes=1)):
     }
 
 
+def _compatible(monkeypatch):
+    monkeypatch.setattr(
+        supervisor.precontest_runtime_compatibility,
+        "save_proof",
+        lambda challenge_id, now=None: {"status": "PASS", "reason": "compatible"},
+    )
+
+
 def _fresh_rehearsal(evaluated_at=NOW):
     return {
         "evaluated_at": evaluated_at.isoformat(),
@@ -44,6 +52,7 @@ def test_missing_profile_does_not_call_any_proof_collector_or_plumbing(monkeypat
     def forbidden(*_args, **_kwargs):
         raise AssertionError("proof automation must not run without explicit profile")
 
+    monkeypatch.setattr(supervisor.precontest_runtime_compatibility, "save_proof", forbidden)
     for _, module in _proof_modules():
         monkeypatch.setattr(module, "save_proof", forbidden)
     monkeypatch.setattr(supervisor.precontest_machine_evidence, "collect", forbidden)
@@ -55,6 +64,7 @@ def test_missing_profile_does_not_call_any_proof_collector_or_plumbing(monkeypat
 def test_explicit_profile_refreshes_all_safe_proofs_then_collector_then_plumbing(monkeypatch):
     calls = []
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: _profile())
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
@@ -99,6 +109,7 @@ def test_explicit_profile_refreshes_all_safe_proofs_then_collector_then_plumbing
 def test_rehearsal_predating_profile_never_runs_collector_or_plumbing(monkeypatch):
     calls = []
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: _profile(configured_at=NOW))
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
@@ -126,6 +137,7 @@ def test_rehearsal_predating_profile_never_runs_collector_or_plumbing(monkeypatc
 
 def test_individual_proof_and_collector_failures_become_fixed_blockers(monkeypatch):
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: _profile())
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
