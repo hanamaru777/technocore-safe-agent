@@ -25,6 +25,7 @@ from . import (
     precontest_machine_evidence,
     precontest_plumbing_receipt,
     precontest_reconciliation_proof,
+    precontest_runtime_compatibility,
     precontest_runtime_profile,
 )
 
@@ -95,12 +96,11 @@ def _phase(spec: dict, *, now: datetime) -> tuple[str, int | None, int]:
 def _refresh_safe_proofs(challenge_id: str, *, now: datetime) -> list[str]:
     """Refresh explicitly opted-in, non-binding machine evidence only.
 
-    The aggregate collector may run only when the single rehearsal is newer than
-    the runtime profile. A Production plumbing receipt is generated only after
-    that collector succeeds, so stale or incomplete machine evidence can never
-    be upgraded into a plumbing PASS. Receipt generation itself is read-only
-    with respect to external systems and fails closed when deployed units are
-    missing, inactive, mismatched, or stale.
+    Adapter compatibility is proved first. An incompatible stale runtime must
+    never produce downstream proof artifacts that could be mistaken for future
+    challenge readiness. The aggregate collector may then run only when the
+    single rehearsal is newer than the runtime profile. A Production plumbing
+    receipt is generated only after that collector succeeds.
     """
     try:
         profile = precontest_runtime_profile.load(challenge_id)
@@ -110,6 +110,13 @@ def _refresh_safe_proofs(challenge_id: str, *, now: datetime) -> list[str]:
         return []
     if profile.get("runtime_profile") != CLOSE1_PROFILE:
         return ["precontest_auto_runtime_profile_unsupported"]
+
+    try:
+        compatibility = precontest_runtime_compatibility.save_proof(challenge_id, now=now)
+    except Exception:
+        return ["precontest_auto_runtime_compatibility_blocked"]
+    if compatibility.get("status") != "PASS":
+        return ["precontest_runtime_adapter_incompatible"]
 
     blockers: list[str] = []
     configured_at = _parse_time(profile.get("configured_at"), required=True)
