@@ -10,6 +10,7 @@ from flop_agent import precontest_readiness
 
 NOW = datetime(2026, 10, 5, 9, 30, tzinfo=UTC)
 CHALLENGE = "ssh-capture-test"
+OTHER_CHALLENGE = "ssh-capture-other"
 RAW_SSH = "203.0.113.9 50123 140.238.55.171 22"
 RAW_CLIENT = "203.0.113.9 50123 22"
 SYSTEMCTL = "/usr/bin/systemctl"
@@ -70,7 +71,7 @@ def test_missing_real_ssh_session_fails_before_any_probe(monkeypatch):
     monkeypatch.setattr(capture, "_run", lambda *args, **kwargs: called.append(args))
 
     with pytest.raises(capture.ControlPathCaptureError, match="ssh_session_missing"):
-        capture.build_direct_ssh_receipt(now=NOW)
+        capture.build_direct_ssh_receipt(CHALLENGE, now=NOW)
 
     assert called == []
 
@@ -108,7 +109,7 @@ def test_wrong_installed_fragment_fails_closed(monkeypatch):
 
     monkeypatch.setattr(capture, "_run", wrong_fragment)
     with pytest.raises(capture.ControlPathCaptureError, match="executor_fragment_invalid"):
-        capture.build_direct_ssh_receipt(now=NOW)
+        capture.build_direct_ssh_receipt(CHALLENGE, now=NOW)
 
 
 def test_successful_capture_is_nonsecret_and_one_path_remains_no_go(tmp_path, monkeypatch):
@@ -126,6 +127,7 @@ def test_successful_capture_is_nonsecret_and_one_path_remains_no_go(tmp_path, mo
     assert receipt["quota_independent"] is True
     assert receipt["endpoint_fingerprint"].startswith("sha256:")
     assert receipt["failure_domain"] == capture.FAILURE_DOMAIN
+    assert receipt["probe_method"].endswith(f"+challenge:{capture._challenge_tag(CHALLENGE)}")
 
     artifact = control.receipts_path(CHALLENGE).read_text("utf-8")
     assert RAW_SSH not in artifact
@@ -133,6 +135,7 @@ def test_successful_capture_is_nonsecret_and_one_path_remains_no_go(tmp_path, mo
     assert "203.0.113.9" not in artifact
     assert "140.238.55.171" not in artifact
     assert "technocore-resident" not in artifact
+    assert CHALLENGE not in artifact
 
     proof = control.build_proof(CHALLENGE, now=NOW)
     assert proof["status"] == "NO_GO"
@@ -152,12 +155,24 @@ def test_probe_then_state_owner_install_preserves_generated_receipt(tmp_path, mo
     calls = []
     _install_good_probe(monkeypatch, calls)
 
-    generated = capture.build_direct_ssh_receipt(now=NOW)
+    generated = capture.build_direct_ssh_receipt(CHALLENGE, now=NOW)
     installed = capture.install_receipt(CHALLENGE, json.loads(json.dumps(generated)), now=NOW)
 
     assert installed == generated
     rows = json.loads(control.receipts_path(CHALLENGE).read_text("utf-8"))
     assert rows == [generated]
+
+
+def test_cross_challenge_replay_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(precontest_readiness, "_root", lambda: tmp_path)
+    calls = []
+    _install_good_probe(monkeypatch, calls)
+    generated = capture.build_direct_ssh_receipt(CHALLENGE, now=NOW)
+
+    with pytest.raises(capture.ControlPathCaptureError, match="receipt_challenge_mismatch"):
+        capture.install_receipt(OTHER_CHALLENGE, generated, now=NOW)
+
+    assert not control.receipts_path(OTHER_CHALLENGE).exists()
 
 
 def test_existing_fresh_independent_receipt_is_preserved(tmp_path, monkeypatch):
@@ -205,7 +220,7 @@ def test_install_rejects_non_ssh_or_not_ready_receipt(tmp_path, monkeypatch):
 
     calls = []
     _install_good_probe(monkeypatch, calls)
-    direct = capture.build_direct_ssh_receipt(now=NOW)
+    direct = capture.build_direct_ssh_receipt(CHALLENGE, now=NOW)
     direct["ready"] = False
     direct["receipt_sha256"] = control._receipt_digest(direct)
     with pytest.raises(capture.ControlPathCaptureError, match="receipt_not_ready"):
