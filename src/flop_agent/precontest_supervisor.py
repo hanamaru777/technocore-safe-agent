@@ -19,7 +19,9 @@ from . import (
     precontest_active_learning_proof,
     precontest_batch_rehearsal_proof,
     precontest_challenge,
+    precontest_control_path_proof,
     precontest_deadline_proof,
+    precontest_human_independence_proof,
     precontest_machine_evidence,
     precontest_reconciliation_proof,
     precontest_runtime_profile,
@@ -126,6 +128,8 @@ def _refresh_safe_proofs(challenge_id: str, *, now: datetime) -> list[str]:
         ("active_learning", precontest_active_learning_proof.save_proof),
         ("reconciliation", precontest_reconciliation_proof.save_proof),
         ("batch", precontest_batch_rehearsal_proof.save_proof),
+        ("control_path", precontest_control_path_proof.save_proof),
+        ("human_independence", precontest_human_independence_proof.save_proof),
     )
     for label, builder in proof_builders:
         try:
