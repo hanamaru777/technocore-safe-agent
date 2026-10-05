@@ -9,7 +9,11 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from . import airdrop_challenge, precontest_readiness
+from . import (
+    airdrop_challenge,
+    precontest_control_path_proof,
+    precontest_readiness,
+)
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -20,6 +24,49 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def _evaluate_readiness(
+    challenge_id: str,
+    *,
+    now: datetime,
+    expected_deadline: str,
+) -> dict | None:
+    evidence = precontest_readiness.load_evidence(challenge_id)
+    if evidence is None:
+        return None
+
+    proof_path = precontest_control_path_proof.proof_path(challenge_id)
+    if proof_path.exists():
+        if proof_path.is_symlink() or not proof_path.is_file():
+            raise precontest_readiness.ReadinessError("precontest_control_proof_invalid")
+        try:
+            raw = json.loads(proof_path.read_text("utf-8"))
+            proof = precontest_control_path_proof.validate_proof(
+                raw,
+                challenge_id=challenge_id,
+                now=now,
+            )
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            precontest_control_path_proof.ControlPathProofError,
+        ) as error:
+            raise precontest_readiness.ReadinessError(
+                "precontest_control_proof_invalid"
+            ) from error
+
+        unsigned = dict(evidence)
+        unsigned.pop("evidence_sha256", None)
+        unsigned["control_paths"] = precontest_control_path_proof.readiness_paths(proof)
+        evidence = precontest_readiness.seal_evidence(unsigned)
+
+    return precontest_readiness.evaluate(
+        evidence,
+        now=now,
+        expected_deadline=expected_deadline,
+    )
+
+
 def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
@@ -27,7 +74,7 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
 
     legacy = airdrop_challenge.build_plan(challenge_id, now=current)
     try:
-        readiness = precontest_readiness.evaluate_saved(
+        readiness = _evaluate_readiness(
             challenge_id,
             now=current,
             expected_deadline=legacy["deadline"],
