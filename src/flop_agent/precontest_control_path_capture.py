@@ -117,7 +117,13 @@ def _endpoint_fingerprint(*, fragment_path: str) -> str:
     return "sha256:" + hashlib.sha256(material).hexdigest()
 
 
-def build_direct_ssh_receipt(*, now: datetime | None = None) -> dict:
+def _challenge_tag(challenge_id: str) -> str:
+    challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
+    return hashlib.sha256(challenge_id.encode("utf-8")).hexdigest()
+
+
+def build_direct_ssh_receipt(challenge_id: str, *, now: datetime | None = None) -> dict:
+    challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         raise ValueError("precontest_control_capture_now_timezone_required")
@@ -141,7 +147,10 @@ def build_direct_ssh_receipt(*, now: datetime | None = None) -> dict:
         "binding_capable": True,
         "quota_independent": True,
         "verified_at": current.isoformat(),
-        "probe_method": f"sshd+sudo-list-fixed-executor+repo-head:{head}",
+        "probe_method": (
+            f"sshd+sudo-list-fixed-executor+repo-head:{head}"
+            f"+challenge:{_challenge_tag(challenge_id)}"
+        ),
     }
     unsigned["receipt_sha256"] = control._receipt_digest(unsigned)
     return control.validate_receipt(unsigned, now=current)
@@ -190,6 +199,8 @@ def install_receipt(challenge_id: str, receipt: object, *, now: datetime | None 
         raise ControlPathCaptureError("precontest_control_capture_receipt_invalid") from error
     if valid["path_id"] != PATH_ID or valid["path_type"] != "direct_ssh":
         raise ControlPathCaptureError("precontest_control_capture_receipt_path_invalid")
+    if not valid["probe_method"].endswith(f"+challenge:{_challenge_tag(challenge_id)}"):
+        raise ControlPathCaptureError("precontest_control_capture_receipt_challenge_mismatch")
     if not (
         valid["authenticated"]
         and valid["ready"]
@@ -210,7 +221,11 @@ def save_direct_ssh_receipt(challenge_id: str, *, now: datetime | None = None) -
     if current.tzinfo is None:
         raise ValueError("precontest_control_capture_now_timezone_required")
     current = current.astimezone(UTC)
-    return install_receipt(challenge_id, build_direct_ssh_receipt(now=current), now=current)
+    return install_receipt(
+        challenge_id,
+        build_direct_ssh_receipt(challenge_id, now=current),
+        now=current,
+    )
 
 
 def _safe_summary(receipt: dict) -> dict:
@@ -233,7 +248,7 @@ def main() -> int:
     try:
         if mode == "probe-ssh":
             # Full receipt is intentionally stdout-only; no state write occurs.
-            result = build_direct_ssh_receipt()
+            result = build_direct_ssh_receipt(challenge_id)
             print(json.dumps(result, sort_keys=True, separators=(",", ":")))
             return 0
 
