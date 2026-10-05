@@ -27,13 +27,31 @@ def _go():
         "status": "GO",
         "go": True,
         "evaluated_at": NOW.isoformat(),
+        "evidence_sha256": "a" * 64,
         "gates": {"NO_LIVE_PLUMBING_GATE": True},
         "blockers": [],
         "warning": "proof",
     }
 
 
-def test_strict_planner_applies_plumbing_before_readiness(monkeypatch):
+def _profiled(monkeypatch):
+    monkeypatch.setattr(
+        precontest_challenge.precontest_runtime_profile,
+        "load",
+        lambda challenge_id: {
+            "challenge_id": challenge_id,
+            "runtime_profile": "close1_short_liquidity",
+        },
+    )
+    monkeypatch.setattr(
+        precontest_challenge.precontest_machine_provenance,
+        "load_validated",
+        lambda *args, **kwargs: {"status": "VALID"},
+    )
+
+
+def test_profiled_strict_planner_applies_plumbing_before_readiness(monkeypatch):
+    _profiled(monkeypatch)
     calls = []
     monkeypatch.setattr(
         precontest_challenge.airdrop_challenge,
@@ -56,9 +74,12 @@ def test_strict_planner_applies_plumbing_before_readiness(monkeypatch):
     assert calls == [("proof", NOW)]
     assert result["ready_for_execution_path"] is True
     assert result["precontest_readiness"]["status"] == "GO"
+    assert result["machine_provenance_required"] is True
+    assert result["machine_provenance_valid"] is True
 
 
-def test_missing_plumbing_receipt_forces_no_go_even_if_saved_boolean_claims_pass(monkeypatch):
+def test_profiled_missing_plumbing_receipt_forces_no_go_even_if_saved_boolean_claims_pass(monkeypatch):
+    _profiled(monkeypatch)
     monkeypatch.setattr(
         precontest_challenge.airdrop_challenge,
         "build_plan",
@@ -83,7 +104,8 @@ def test_missing_plumbing_receipt_forces_no_go_even_if_saved_boolean_claims_pass
     assert "NO_LIVE_PLUMBING_GATE" in result["critical_path"]
 
 
-def test_invalid_plumbing_receipt_forces_no_go_before_saved_readiness(monkeypatch):
+def test_profiled_invalid_plumbing_receipt_forces_no_go_before_saved_readiness(monkeypatch):
+    _profiled(monkeypatch)
     monkeypatch.setattr(
         precontest_challenge.airdrop_challenge,
         "build_plan",
