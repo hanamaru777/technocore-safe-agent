@@ -6,9 +6,12 @@ execution. Detailed telemetry remains available through existing explicit comman
 """
 from __future__ import annotations
 
+import json
+
 from . import discord_control as base
 from . import discord_notice
 from . import discord_outcome_scorecard as outcome
+from . import precontest_supervisor
 
 _INSTALLED = False
 
@@ -76,6 +79,32 @@ def _latest_line(
     return "直接のやりとりはまだありません"
 
 
+def _precontest_blocker() -> str | None:
+    """Return one human blocker from the local supervisor, never raw telemetry."""
+    path = precontest_supervisor.state_path()
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        return "次回キャンペーン準備状態を確認できません"
+    try:
+        value = json.loads(path.read_text("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "次回キャンペーン準備状態を確認できません"
+    if not isinstance(value, dict) or value.get("schema_version") != precontest_supervisor.SCHEMA_VERSION:
+        return "次回キャンペーン準備状態を確認できません"
+    status = value.get("status")
+    labels = {
+        "BLOCKED_LIVE": "開始済みキャンペーンの実行準備が未完了",
+        "ACTION_REQUIRED": "72時間以内に開始するキャンペーンの準備が未完了",
+        "PREP_REQUIRED": "次回キャンペーンの事前準備が未完了",
+    }
+    return labels.get(status)
+
+
+def _mission_blocker(activity: dict) -> str:
+    return _precontest_blocker() or base._mission_blocker(activity)
+
+
 def mission_message(
     activity: dict | None = None,
     *,
@@ -95,7 +124,7 @@ def mission_message(
             f"状態: {_now_state(activity, latest)}",
             f"目標: {base._mission_goal(activity, collaboration_rows, latest)}",
             f"次: {_next_action(activity)}",
-            f"阻害: {base._mission_blocker(activity)}",
+            f"阻害: {_mission_blocker(activity)}",
             f"直近: {_latest_line(activity, latest, collaboration_rows)}",
         ]
     )
