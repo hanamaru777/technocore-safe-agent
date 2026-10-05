@@ -2,8 +2,8 @@
 
 This module validates machine probe receipts produced by distinct control paths.
 It does not create credentials, open SSH sessions, start services, sign, post, or
-mutate Production.  A path counts only when its receipt proves a fresh,
-authenticated, ready binding-capable control path.  Aliases sharing one failure
+mutate Production. A path counts only when its receipt proves a fresh,
+authenticated, ready binding-capable control path. Aliases sharing one failure
 domain are never double-counted.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ MAX_RECEIPT_BYTES = 64 * 1024
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
 ALLOWED_PATH_TYPES = {"direct_ssh", "connector", "ci_deploy", "fixed_rpc"}
 NON_BINDING_TYPES = {"discord", "watcher", "read_only_rpc"}
+EMPTY_RECEIPTS_SHA256 = hashlib.sha256(b"[]").hexdigest()
 
 
 class ControlPathProofError(RuntimeError):
@@ -97,10 +98,10 @@ def validate_receipt(row: object, *, now: datetime) -> dict:
     return dict(row)
 
 
-def _load_receipts(challenge_id: str, *, now: datetime) -> list[dict]:
+def _read_receipt_source(challenge_id: str) -> tuple[list[object], str]:
     path = receipts_path(challenge_id)
     if not path.exists():
-        return []
+        return [], EMPTY_RECEIPTS_SHA256
     if path.is_symlink() or not path.is_file():
         raise ControlPathProofError("precontest_control_receipts_invalid")
     raw = path.read_bytes()
@@ -112,11 +113,16 @@ def _load_receipts(challenge_id: str, *, now: datetime) -> list[dict]:
         raise ControlPathProofError("precontest_control_receipts_invalid") from error
     if not isinstance(value, list):
         raise ControlPathProofError("precontest_control_receipts_invalid")
-    rows = [validate_receipt(row, now=now) for row in value]
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def _load_receipts(challenge_id: str, *, now: datetime) -> tuple[list[dict], str]:
+    raw_rows, source_digest = _read_receipt_source(challenge_id)
+    rows = [validate_receipt(row, now=now) for row in raw_rows]
     ids = [row["path_id"] for row in rows]
     if len(ids) != len(set(ids)):
         raise ControlPathProofError("precontest_control_duplicate_path_id")
-    return rows
+    return rows, source_digest
 
 
 def _independent_ready_paths(rows: list[dict]) -> list[dict]:
@@ -124,7 +130,6 @@ def _independent_ready_paths(rows: list[dict]) -> list[dict]:
         row for row in rows
         if row["authenticated"] and row["ready"] and row["binding_capable"]
     ]
-    # Two aliases that fail together are one control path, not redundancy.
     seen_domains: set[tuple[str, str]] = set()
     independent: list[dict] = []
     for row in sorted(eligible, key=lambda item: item["path_id"]):
@@ -136,37 +141,40 @@ def _independent_ready_paths(rows: list[dict]) -> list[dict]:
     return independent
 
 
+def _project_path(row: dict) -> dict:
+    return {
+        "path_id": row["path_id"],
+        "path_type": row["path_type"],
+        "endpoint_fingerprint": row["endpoint_fingerprint"],
+        "failure_domain": row["failure_domain"],
+        "authenticated": row["authenticated"],
+        "ready": row["ready"],
+        "quota_independent": row["quota_independent"],
+        "verified_at": row["verified_at"],
+    }
+
+
 def build_proof(challenge_id: str, *, now: datetime | None = None) -> dict:
     challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         raise ValueError("precontest_control_now_timezone_required")
     current = current.astimezone(UTC)
-    receipts = _load_receipts(challenge_id, now=current)
+    receipts, receipts_digest = _load_receipts(challenge_id, now=current)
     ready = _independent_ready_paths(receipts)
-    gate_pass = len(ready) >= 2 and any(row["quota_independent"] for row in ready)
+    projected = [_project_path(row) for row in ready]
+    gate_pass = len(projected) >= 2 and any(row["quota_independent"] for row in projected)
     value = {
         "schema_version": SCHEMA_VERSION,
         "challenge_id": challenge_id,
         "status": "PASS" if gate_pass else "NO_GO",
         "non_binding": True,
         "generated_at": current.isoformat(),
+        "receipts_sha256": receipts_digest,
         "receipt_count": len(receipts),
-        "ready_independent_count": len(ready),
-        "quota_independent_ready": any(row["quota_independent"] for row in ready),
-        "control_paths": [
-            {
-                "path_id": row["path_id"],
-                "path_type": row["path_type"],
-                "endpoint_fingerprint": row["endpoint_fingerprint"],
-                "failure_domain": row["failure_domain"],
-                "authenticated": row["authenticated"],
-                "ready": row["ready"],
-                "quota_independent": row["quota_independent"],
-                "verified_at": row["verified_at"],
-            }
-            for row in ready
-        ],
+        "ready_independent_count": len(projected),
+        "quota_independent_ready": any(row["quota_independent"] for row in projected),
+        "control_paths": projected,
     }
     value["proof_sha256"] = _sha(value)
     return value
@@ -177,8 +185,8 @@ def validate_proof(value: object, *, challenge_id: str, now: datetime) -> dict:
         raise ControlPathProofError("precontest_control_proof_invalid")
     required = {
         "schema_version", "challenge_id", "status", "non_binding", "generated_at",
-        "receipt_count", "ready_independent_count", "quota_independent_ready",
-        "control_paths", "proof_sha256",
+        "receipts_sha256", "receipt_count", "ready_independent_count",
+        "quota_independent_ready", "control_paths", "proof_sha256",
     }
     if set(value) != required or value.get("schema_version") != SCHEMA_VERSION:
         raise ControlPathProofError("precontest_control_proof_schema_invalid")
@@ -189,28 +197,28 @@ def validate_proof(value: object, *, challenge_id: str, now: datetime) -> dict:
     unsigned.pop("proof_sha256")
     if _sha(unsigned) != digest:
         raise ControlPathProofError("precontest_control_proof_integrity_invalid")
-    if value.get("challenge_id") != airdrop_challenge.validate_challenge_id(challenge_id):
+    challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
+    if value.get("challenge_id") != challenge_id:
         raise ControlPathProofError("precontest_control_challenge_mismatch")
     generated = _parse_time(value.get("generated_at"), label="generated_at")
     age = now.astimezone(UTC) - generated
     if age > precontest_readiness.MAX_EVIDENCE_AGE or age < -precontest_readiness.MAX_CLOCK_SKEW:
         raise ControlPathProofError("precontest_control_proof_stale")
-    paths = value.get("control_paths")
-    if not isinstance(paths, list):
-        raise ControlPathProofError("precontest_control_paths_invalid")
-    ids = [row.get("path_id") for row in paths if isinstance(row, dict)]
-    domains = [
-        (row.get("endpoint_fingerprint"), row.get("failure_domain"))
-        for row in paths if isinstance(row, dict)
-    ]
-    if len(paths) != len(ids) or len(ids) != len(set(ids)) or len(domains) != len(set(domains)):
-        raise ControlPathProofError("precontest_control_paths_not_independent")
-    if value.get("ready_independent_count") != len(paths):
+
+    receipts, receipts_digest = _load_receipts(challenge_id, now=now)
+    ready = [_project_path(row) for row in _independent_ready_paths(receipts)]
+    if value.get("receipts_sha256") != receipts_digest:
+        raise ControlPathProofError("precontest_control_receipt_source_changed")
+    if value.get("receipt_count") != len(receipts):
+        raise ControlPathProofError("precontest_control_receipt_count_invalid")
+    if value.get("control_paths") != ready:
+        raise ControlPathProofError("precontest_control_paths_source_mismatch")
+    if value.get("ready_independent_count") != len(ready):
         raise ControlPathProofError("precontest_control_count_invalid")
-    quota_independent = any(row.get("quota_independent") is True for row in paths)
+    quota_independent = any(row["quota_independent"] for row in ready)
     if value.get("quota_independent_ready") is not quota_independent:
         raise ControlPathProofError("precontest_control_quota_flag_invalid")
-    should_pass = len(paths) >= 2 and quota_independent
+    should_pass = len(ready) >= 2 and quota_independent
     if value.get("status") != ("PASS" if should_pass else "NO_GO"):
         raise ControlPathProofError("precontest_control_status_invalid")
     if value.get("non_binding") is not True:
