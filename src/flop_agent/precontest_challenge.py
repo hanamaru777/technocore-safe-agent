@@ -9,7 +9,11 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from . import airdrop_challenge, precontest_readiness
+from . import (
+    airdrop_challenge,
+    precontest_plumbing_apply,
+    precontest_readiness,
+)
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -20,43 +24,61 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def _no_go(challenge_id: str, current: datetime, blocker: str, warning: str) -> dict:
+    return {
+        "schema_version": precontest_readiness.SCHEMA_VERSION,
+        "challenge_id": challenge_id,
+        "non_binding": True,
+        "status": "NO_GO",
+        "go": False,
+        "evaluated_at": current.astimezone(UTC).isoformat(),
+        "gates": {},
+        "blockers": [blocker],
+        "warning": warning,
+    }
+
+
 def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         raise ValueError("precontest_now_timezone_required")
 
     legacy = airdrop_challenge.build_plan(challenge_id, now=current)
+    plumbing_error: str | None = None
     try:
-        readiness = precontest_readiness.evaluate_saved(
+        precontest_plumbing_apply.apply_if_present(challenge_id, now=current)
+    except precontest_plumbing_apply.PlumbingApplyError as error:
+        plumbing_error = str(error) or "precontest_plumbing_receipt_invalid"
+
+    if plumbing_error is not None:
+        readiness = _no_go(
             challenge_id,
-            now=current,
-            expected_deadline=legacy["deadline"],
+            current,
+            plumbing_error,
+            "Invalid Production plumbing receipt fails closed and never authorizes a binding action.",
         )
-    except precontest_readiness.ReadinessError as error:
-        readiness = {
-            "schema_version": precontest_readiness.SCHEMA_VERSION,
-            "challenge_id": challenge_id,
-            "non_binding": True,
-            "status": "NO_GO",
-            "go": False,
-            "evaluated_at": current.astimezone(UTC).isoformat(),
-            "gates": {},
-            "blockers": [str(error)],
-            "warning": "Invalid readiness evidence fails closed and never authorizes a binding action.",
-        }
+    else:
+        try:
+            readiness = precontest_readiness.evaluate_saved(
+                challenge_id,
+                now=current,
+                expected_deadline=legacy["deadline"],
+            )
+        except precontest_readiness.ReadinessError as error:
+            readiness = _no_go(
+                challenge_id,
+                current,
+                str(error),
+                "Invalid readiness evidence fails closed and never authorizes a binding action.",
+            )
 
     if readiness is None:
-        readiness = {
-            "schema_version": precontest_readiness.SCHEMA_VERSION,
-            "challenge_id": challenge_id,
-            "non_binding": True,
-            "status": "NO_GO",
-            "go": False,
-            "evaluated_at": current.astimezone(UTC).isoformat(),
-            "gates": {},
-            "blockers": ["PRECONTEST_READINESS_EVIDENCE_MISSING"],
-            "warning": "Readiness evidence is mandatory for the strict pre-contest planner.",
-        }
+        readiness = _no_go(
+            challenge_id,
+            current,
+            "PRECONTEST_READINESS_EVIDENCE_MISSING",
+            "Readiness evidence is mandatory for the strict pre-contest planner.",
+        )
 
     result = dict(legacy)
     blockers = list(legacy.get("critical_path", []))
