@@ -1,7 +1,9 @@
 """Strict pre-contest wrapper over the legacy non-binding Challenge Runner.
 
 The legacy planner remains backward compatible. Future campaign operations should
-use this wrapper: missing/invalid/stale readiness evidence is NO-GO.
+use this wrapper: missing/invalid/stale readiness evidence is NO-GO. Explicitly
+profiled runtimes additionally require machine-generated Production plumbing and
+matching machine collector provenance.
 """
 from __future__ import annotations
 
@@ -11,8 +13,10 @@ from datetime import UTC, datetime
 
 from . import (
     airdrop_challenge,
+    precontest_machine_provenance,
     precontest_plumbing_apply,
     precontest_readiness,
+    precontest_runtime_profile,
 )
 
 
@@ -50,29 +54,73 @@ def _require_plumbing_receipt(readiness: dict) -> dict:
     forced["status"] = "NO_GO"
     forced["go"] = False
     forced["warning"] = (
-        "A fresh machine-generated Production plumbing receipt is mandatory; "
-        "manual readiness booleans cannot satisfy NO_LIVE_PLUMBING_GATE."
+        "A fresh machine-generated Production plumbing receipt is mandatory for "
+        "profile-enabled challenges; manual readiness booleans cannot satisfy "
+        "NO_LIVE_PLUMBING_GATE."
     )
     return forced
+
+
+def _runtime_profile_status(challenge_id: str) -> tuple[bool, dict | None, str | None]:
+    """Return (required, profile, error). Missing profile preserves legacy behavior."""
+    try:
+        profile = precontest_runtime_profile.load(challenge_id)
+    except Exception:
+        return True, None, "precontest_runtime_profile_invalid"
+    if profile is None:
+        return False, None, None
+    return True, profile, None
+
+
+def _machine_provenance_status(
+    challenge_id: str,
+    readiness: dict,
+    *,
+    now: datetime,
+) -> tuple[bool, str | None]:
+    evidence_digest = readiness.get("evidence_sha256")
+    if not isinstance(evidence_digest, str):
+        return False, "precontest_machine_provenance_evidence_mismatch"
+    try:
+        precontest_machine_provenance.load_validated(
+            challenge_id,
+            readiness_evidence_sha256=evidence_digest,
+            now=now,
+            require_no_unsupported=readiness.get("go") is True,
+        )
+    except precontest_machine_provenance.MachineProvenanceError as error:
+        return False, str(error) or "precontest_machine_provenance_invalid"
+    return True, None
 
 
 def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         raise ValueError("precontest_now_timezone_required")
+    current = current.astimezone(UTC)
 
     legacy = airdrop_challenge.build_plan(challenge_id, now=current)
+    profile_required, _profile, profile_error = _runtime_profile_status(challenge_id)
+
     plumbing_error: str | None = None
     plumbing_applied: dict | None = None
-    try:
-        plumbing_applied = precontest_plumbing_apply.apply_if_present(
-            challenge_id,
-            now=current,
-        )
-    except precontest_plumbing_apply.PlumbingApplyError as error:
-        plumbing_error = str(error) or "precontest_plumbing_receipt_invalid"
+    if profile_required and profile_error is None:
+        try:
+            plumbing_applied = precontest_plumbing_apply.apply_if_present(
+                challenge_id,
+                now=current,
+            )
+        except precontest_plumbing_apply.PlumbingApplyError as error:
+            plumbing_error = str(error) or "precontest_plumbing_receipt_invalid"
 
-    if plumbing_error is not None:
+    if profile_error is not None:
+        readiness = _no_go(
+            challenge_id,
+            current,
+            profile_error,
+            "Invalid runtime profile fails closed and never authorizes a binding action.",
+        )
+    elif plumbing_error is not None:
         readiness = _no_go(
             challenge_id,
             current,
@@ -101,20 +149,42 @@ def build_plan(challenge_id: str, *, now: datetime | None = None) -> dict:
             "PRECONTEST_READINESS_EVIDENCE_MISSING",
             "Readiness evidence is mandatory for the strict pre-contest planner.",
         )
-    elif plumbing_error is None and plumbing_applied is None:
+    elif profile_required and profile_error is None and plumbing_error is None and plumbing_applied is None:
         readiness = _require_plumbing_receipt(readiness)
+
+    provenance_valid = not profile_required
+    provenance_error: str | None = None
+    if profile_required:
+        if profile_error is not None:
+            provenance_error = profile_error
+        elif readiness.get("evidence_sha256") is None:
+            provenance_error = "precontest_machine_provenance_evidence_mismatch"
+        else:
+            provenance_valid, provenance_error = _machine_provenance_status(
+                challenge_id,
+                readiness,
+                now=current,
+            )
 
     result = dict(legacy)
     blockers = list(legacy.get("critical_path", []))
     if readiness["go"] is not True:
         blockers.append("precontest_readiness_no_go")
         blockers.extend(str(item) for item in readiness.get("blockers", []))
+    if profile_required and not provenance_valid:
+        blockers.append("precontest_machine_provenance_invalid")
+        if provenance_error:
+            blockers.append(provenance_error)
+
     result["precontest_readiness"] = readiness
+    result["machine_provenance_required"] = profile_required
+    result["machine_provenance_valid"] = provenance_valid
     result["critical_path"] = _dedupe(blockers)
     result["estimated_remaining_steps"] = len(result["critical_path"])
     result["ready_for_execution_path"] = bool(
         legacy.get("ready_for_execution_path") is True
         and readiness["go"] is True
+        and provenance_valid
     )
     result["precontest_gate_enforced"] = True
     warnings = list(result.get("warnings", []))
