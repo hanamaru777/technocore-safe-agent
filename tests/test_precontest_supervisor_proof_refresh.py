@@ -17,6 +17,14 @@ def _profile(configured_at):
     }
 
 
+def _compatible(monkeypatch):
+    monkeypatch.setattr(
+        supervisor.precontest_runtime_compatibility,
+        "save_proof",
+        lambda challenge_id, now=None: {"status": "PASS", "reason": "compatible"},
+    )
+
+
 def _install_builders(monkeypatch, calls, *, failing=None):
     builders = [
         ("deadline", supervisor.precontest_deadline_proof),
@@ -49,6 +57,7 @@ def test_profiled_fresh_rehearsal_refreshes_all_proofs_collector_then_plumbing(m
     calls = []
     configured = NOW - timedelta(minutes=5)
     monkeypatch.setattr(supervisor.precontest_runtime_profile, "load", lambda challenge_id: _profile(configured))
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
@@ -84,6 +93,7 @@ def test_missing_receipt_no_go_proofs_are_not_refresh_failures(monkeypatch):
         "load",
         lambda challenge_id: _profile(NOW - timedelta(minutes=10)),
     )
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
@@ -111,6 +121,7 @@ def test_builder_failure_is_named_blocker_and_never_silent(monkeypatch):
         "load",
         lambda challenge_id: _profile(NOW - timedelta(minutes=10)),
     )
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
@@ -136,6 +147,7 @@ def test_collector_failure_skips_plumbing_and_is_named_blocker(monkeypatch):
         "load",
         lambda challenge_id: _profile(NOW - timedelta(minutes=10)),
     )
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
@@ -166,6 +178,7 @@ def test_plumbing_failure_after_collector_is_named_blocker(monkeypatch):
         "load",
         lambda challenge_id: _profile(NOW - timedelta(minutes=10)),
     )
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
@@ -193,6 +206,7 @@ def test_profile_predating_rehearsal_prevents_collector_and_plumbing(monkeypatch
         "load",
         lambda challenge_id: _profile(NOW - timedelta(minutes=1)),
     )
+    _compatible(monkeypatch)
     monkeypatch.setattr(
         supervisor.precontest_machine_evidence,
         "_fresh_rehearsal",
