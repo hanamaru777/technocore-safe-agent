@@ -47,7 +47,7 @@ def test_immediate_alert_is_action_first_and_keeps_safe_next_step():
     text = compact.render_alert(_payload())
     lines = _assert_compact(text)
     assert lines[0].startswith("🟠 FLOP Airdrop:")
-    assert "closed → open" in text
+    assert '"closed" → "open"' in text
     assert "yellowpaper / Tier 1 / normative" in text
     assert "次: Review the official evidence" in text
     assert "公式: https://flop.finance/intro/yellowpaper/" in text
