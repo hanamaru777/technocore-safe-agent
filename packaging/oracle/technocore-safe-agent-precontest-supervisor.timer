@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Technocore pre-contest readiness supervisor every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30s
+AccuracySec=30s
+Persistent=true
+Unit=technocore-safe-agent-precontest-supervisor.service
+
+[Install]
+WantedBy=timers.target
