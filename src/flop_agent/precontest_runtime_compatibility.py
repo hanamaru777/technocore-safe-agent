@@ -2,7 +2,7 @@
 
 A configured runtime profile is not reusable merely because its name matches.
 This module binds the profile to the immutable official challenge authority,
-deadline, protocol constants and current adapter/executor source.  It is local
+deadline, protocol constants and current adapter/executor source. It is local
 and non-binding: no service mutation, signing, approval write, POST or Vault
 access is possible here.
 """
@@ -29,7 +29,6 @@ from . import precontest_runtime_profile
 SCHEMA_VERSION = 1
 PROFILE = "close1_short_liquidity"
 FROZEN_REFEREE_COMMIT = "0ae6b063107b77e3a6cb794186fdd341a947e5e1"
-ALLOWED_RULES_COMMITS = frozenset({close_call.OFFICIAL_REPO_COMMIT, FROZEN_REFEREE_COMMIT})
 RULES_OWNER = "flop-labs"
 RULES_REPO = "technocore-close-call-challenge"
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
@@ -98,6 +97,8 @@ def _bindings() -> dict:
         "runtime_lock": close_call.LOCK.isoformat(),
         "lock_sweep": close_call.LOCK_SWEEP,
         "launch_repo_commit": close_call.OFFICIAL_REPO_COMMIT,
+        "frozen_rules_repo": f"{RULES_OWNER}/{RULES_REPO}",
+        "frozen_rules_commit": FROZEN_REFEREE_COMMIT,
         "stage_build_sha256": _source_sha(stage.build_stage),
         "rehearsal_run_sha256": _source_sha(rehearsal.run_once),
         "resident_cycle_sha256": _source_sha(resident.run_cycle),
@@ -123,9 +124,9 @@ def _evaluate_current(challenge_id: str) -> dict:
     reason = "compatible"
     if source.get("authority_type") != "flop_labs_github":
         reason = "authority_type_mismatch"
-    elif pinned not in ALLOWED_RULES_COMMITS:
+    elif pinned != FROZEN_REFEREE_COMMIT:
         reason = "pinned_commit_mismatch"
-    elif rules_url_commit not in ALLOWED_RULES_COMMITS:
+    elif rules_url_commit != FROZEN_REFEREE_COMMIT:
         reason = "rules_repo_or_commit_mismatch"
     elif deadline != close_call.LOCK:
         reason = "deadline_mismatch"
