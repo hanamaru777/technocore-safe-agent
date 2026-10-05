@@ -1,0 +1,125 @@
+name: production-control-path-readonly-proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      challenge_id:
+        description: "Registered pre-contest challenge id"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-control-path-readonly-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate fixed invocation and prepare dedicated SSH credential
+        shell: bash
+        env:
+          CHALLENGE_ID: ${{ inputs.challenge_id }}
+          RUN_REPOSITORY: ${{ github.repository }}
+          RUN_REF: ${{ github.ref }}
+          PROD_HOST: ${{ secrets.TECHNOCORE_CI_HOST }}
+          PROD_SSH_KEY: ${{ secrets.TECHNOCORE_CI_SSH_KEY }}
+          PROD_KNOWN_HOSTS: ${{ secrets.TECHNOCORE_CI_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_REPOSITORY" == "hanamaru777/technocore-safe-agent" ]] || exit 20
+          [[ "$RUN_REF" == "refs/heads/main" ]] || exit 21
+          [[ "$CHALLENGE_ID" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || exit 22
+          [[ -n "$PROD_HOST" && -n "$PROD_SSH_KEY" && -n "$PROD_KNOWN_HOSTS" ]] || exit 23
+
+          umask 077
+          printf '%s\n' "$PROD_SSH_KEY" > "$RUNNER_TEMP/technocore-ci-key"
+          printf '%s\n' "$PROD_KNOWN_HOSTS" > "$RUNNER_TEMP/technocore-ci-known-hosts"
+          chmod 600 "$RUNNER_TEMP/technocore-ci-key" "$RUNNER_TEMP/technocore-ci-known-hosts"
+          printf 'CHALLENGE_ID=%s\n' "$CHALLENGE_ID" >> "$GITHUB_ENV"
+
+      - name: Run fixed read-only Production proof
+        shell: bash
+        env:
+          PROD_HOST: ${{ secrets.TECHNOCORE_CI_HOST }}
+        run: |
+          set -euo pipefail
+          NONCE="$(openssl rand -hex 16)"
+          ERR="$RUNNER_TEMP/technocore-ci-ssh.err"
+
+          set +e
+          PROOF_JSON="$(
+            ssh -T \
+              -i "$RUNNER_TEMP/technocore-ci-key" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$RUNNER_TEMP/technocore-ci-known-hosts" \
+              -o ConnectTimeout=10 \
+              -o LogLevel=ERROR \
+              "technocore-ci@$PROD_HOST" \
+              "proof $CHALLENGE_ID $NONCE" \
+              2>"$ERR"
+          )"
+          RC=$?
+          set -e
+
+          if [[ "$RC" -ne 0 ]]; then
+            echo "CI_READONLY_CONTROL_PATH_PROOF=FAILED"
+            exit 24
+          fi
+
+          PROOF_JSON="$PROOF_JSON" python3 - <<'PY'
+          import json
+          import os
+
+          try:
+              value = json.loads(os.environ["PROOF_JSON"])
+          except Exception as error:
+              raise SystemExit("invalid fixed proof response") from error
+
+          required = {
+              "status",
+              "path_id",
+              "path_type",
+              "authenticated",
+              "ready",
+              "binding_capable",
+              "quota_independent",
+              "verified_at",
+              "receipt_sha256",
+          }
+          if set(value) != required:
+              raise SystemExit("unexpected fixed proof schema")
+          if value["status"] != "READONLY_PROOF":
+              raise SystemExit("fixed proof did not pass")
+          if value["path_id"] != "github-actions-fixed-ssh-readonly":
+              raise SystemExit("unexpected path id")
+          if value["path_type"] != "ci_deploy":
+              raise SystemExit("unexpected path type")
+          if value["authenticated"] is not True or value["ready"] is not True:
+              raise SystemExit("fixed path authentication/readiness missing")
+          if value["binding_capable"] is not False:
+              raise SystemExit("Phase A must remain non-binding")
+          if value["quota_independent"] is not True:
+              raise SystemExit("unexpected quota classification")
+          digest = value["receipt_sha256"]
+          if not isinstance(digest, str) or len(digest) != 64:
+              raise SystemExit("invalid receipt digest")
+
+          print("CI_READONLY_CONTROL_PATH_PROOF=PASS")
+          print("CONTROL_PATH_REDUNDANCY_GATE_CHANGED=NO")
+          PY
+
+      - name: Destroy runner-side SSH material
+        if: always()
+        shell: bash
+        run: |
+          rm -f \
+            "$RUNNER_TEMP/technocore-ci-key" \
+            "$RUNNER_TEMP/technocore-ci-known-hosts" \
+            "$RUNNER_TEMP/technocore-ci-ssh.err"
