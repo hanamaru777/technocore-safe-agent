@@ -19,6 +19,7 @@ from . import (
     close1_account_reconciliation as account,
     close1_autonomous_rehearsal,
     precontest_active_learning_proof,
+    precontest_batch_rehearsal_proof,
     precontest_deadline_proof,
     precontest_readiness,
     precontest_reconciliation_proof,
@@ -167,12 +168,7 @@ def _settled_ledger_proof() -> dict:
     }
 
 
-def _deadline_proof(
-    challenge_id: str,
-    *,
-    expected_deadline: str,
-    now: datetime,
-) -> dict | None:
+def _deadline_proof(challenge_id: str, *, expected_deadline: str, now: datetime) -> dict | None:
     path = precontest_deadline_proof.proof_path(challenge_id)
     if not path.exists():
         return None
@@ -243,6 +239,28 @@ def _reconciliation_proof(challenge_id: str, *, now: datetime) -> dict | None:
     }
 
 
+def _batch_rehearsal_proof(challenge_id: str, *, now: datetime) -> dict | None:
+    path = precontest_batch_rehearsal_proof.proof_path(challenge_id)
+    if not path.exists():
+        return None
+    value, file_digest = _read_json_file(path, label="batch_rehearsal_proof")
+    try:
+        valid = precontest_batch_rehearsal_proof.validate_proof(
+            value,
+            challenge_id=challenge_id,
+            now=now,
+        )
+    except precontest_batch_rehearsal_proof.BatchRehearsalProofError as error:
+        raise MachineEvidenceError("precontest_machine_batch_rehearsal_proof_invalid") from error
+    return {
+        "sha256": file_digest,
+        "proof_sha256": valid["proof_sha256"],
+        "generated_at": valid["generated_at"],
+        "batch_rehearsal_ms": valid["batch_rehearsal_ms"],
+        "execution_mode": "batch",
+    }
+
+
 def provenance_path(challenge_id: str) -> Path:
     challenge_id = airdrop_challenge.validate_challenge_id(challenge_id)
     return precontest_readiness._root() / challenge_id / "precontest-readiness-sources.json"
@@ -270,30 +288,33 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
 
     rehearsal = _fresh_rehearsal(now=current)
     settled = _settled_ledger_proof()
-    deadline_proof = _deadline_proof(
-        challenge_id,
-        expected_deadline=deadline,
-        now=current,
-    )
+    deadline_proof = _deadline_proof(challenge_id, expected_deadline=deadline, now=current)
     active_proof = _active_learning_proof(challenge_id, now=current)
     reconciliation_proof = _reconciliation_proof(challenge_id, now=current)
+    batch_proof = _batch_rehearsal_proof(challenge_id, now=current)
+
     deadline_proven = deadline_proof is not None
     active_proven = active_proof is not None
+    batch_proven = batch_proof is not None
     reconciliation_cases = (
         reconciliation_proof["cases"] if reconciliation_proof is not None else ["settled"]
     )
+    execution_modes = ["single", "batch"] if batch_proven else ["single"]
+    capture_to_executor_ms = rehearsal["capture_to_rehearsal_ms"]
+    if batch_proof is not None:
+        capture_to_executor_ms = max(capture_to_executor_ms, batch_proof["batch_rehearsal_ms"])
 
     evidence = {
         "schema_version": precontest_readiness.SCHEMA_VERSION,
         "challenge_id": challenge_id,
         "measured_at": rehearsal["evaluated_at"],
         "campaign_deadline": deadline,
-        "capture_to_executor_ms": rehearsal["capture_to_rehearsal_ms"],
+        "capture_to_executor_ms": capture_to_executor_ms,
         "requires_chat_relay": True,
         "requires_user_terminal": True,
         "control_paths": [],
         "execution_modes_required": ["single", "batch"],
-        "execution_modes_rehearsed": ["single"],
+        "execution_modes_rehearsed": execution_modes,
         "reconciliation_cases_rehearsed": reconciliation_cases,
         "runtime_deadline_guard": deadline_proven,
         "post_deadline_fail_closed": deadline_proven,
@@ -316,12 +337,16 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
         sources["active_learning"] = active_proof
     if reconciliation_proof is not None:
         sources["reconciliation_matrix"] = reconciliation_proof
+    if batch_proof is not None:
+        sources["batch_rehearsal"] = batch_proof
 
     unsupported = [
         "HUMAN_INDEPENDENCE_GATE",
         "CONTROL_PATH_REDUNDANCY_GATE",
         "NO_LIVE_PLUMBING_GATE",
     ]
+    if not batch_proven:
+        unsupported.append("EXECUTION_LATENCY_GATE")
     if deadline_proof is None:
         unsupported.append("DEADLINE_GATE")
     if active_proof is None:
@@ -342,11 +367,7 @@ def collect(challenge_id: str, *, now: datetime | None = None) -> dict:
             "unsupported_gates_forced_no_go": unsupported,
         },
     )
-    evaluation = precontest_readiness.evaluate(
-        saved,
-        now=current,
-        expected_deadline=deadline,
-    )
+    evaluation = precontest_readiness.evaluate(saved, now=current, expected_deadline=deadline)
     if evaluation["go"] is True:
         raise MachineEvidenceError("precontest_machine_unexpected_go")
     return {
