@@ -7,12 +7,11 @@ WORKFLOW = ROOT / ".github/workflows/security-gate.yml"
 BOOTSTRAP = ROOT / "packaging/windows/bootstrap-technocore-ci-readonly-path.ps1"
 
 
-def test_windows_bootstrap_is_forced_to_lf_checkout():
+def test_windows_bootstrap_is_forced_to_lf_checkout_narrowly():
     attributes = ATTRIBUTES.read_text("utf-8")
-    assert (
+    assert attributes.splitlines() == [
         "packaging/windows/bootstrap-technocore-ci-readonly-path.ps1 text eol=lf"
-        in attributes.splitlines()
-    )
+    ]
 
 
 def test_windows_ci_proves_lf_only_bootstrap_source_before_keygen_regression():
