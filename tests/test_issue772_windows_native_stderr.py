@@ -53,4 +53,7 @@ def test_windows_ps51_ci_proves_success_stderr_and_nonzero_fail_closed():
     assert "[Console]::Error.WriteLine('expected-failure-stderr')" in workflow
     assert "exit 23" in workflow
     assert "STOP_NONZERO_EXIT" in workflow
+    assert "$global:LASTEXITCODE = 0" in workflow
     assert "WINDOWS_PS51_NATIVE_STDERR_HANDLING=PASS" in workflow
+    assert "windows-native-stderr-diagnostic" not in workflow
+    assert "upload-artifact" not in workflow
