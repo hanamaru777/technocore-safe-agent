@@ -494,3 +494,12 @@ def scan_official_sources(
 globals()["_extract_facts"] = _extract_facts
 globals()["_network_fetch"] = _network_fetch
 globals()["scan_official_sources"] = scan_official_sources
+
+# Preserve exact first-party FLOP -> flop-labs GitHub launch-document links as
+# discovery evidence only.  The bridge never follows those targets and does not
+# widen any source fetch or redirect allowlist.
+from . import airdrop_radar_launch_links as _launch_links
+
+_launch_links.install(_core)
+globals()["_official_interest_links"] = _core._official_interest_links
+del _launch_links
