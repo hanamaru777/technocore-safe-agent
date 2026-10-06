@@ -38,7 +38,8 @@ def test_installer_is_root_only_and_accepts_public_key_file_only():
 def test_authorized_keys_is_exact_forced_command_with_all_forwarding_disabled():
     text = _text()
 
-    assert 'INSTALLED_WRAPPER="/usr/local/libexec/technocore-safe-agent-ci-control-proof"' in text
+    assert 'WRAPPER_DIR="/usr/local/libexec"' in text
+    assert 'INSTALLED_WRAPPER="$WRAPPER_DIR/technocore-safe-agent-ci-control-proof"' in text
     assert 'command=\\"$INSTALLED_WRAPPER\\"' in text
     for option in (
         "no-agent-forwarding",
