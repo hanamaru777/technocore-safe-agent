@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 from types import ModuleType
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 _FLOP_PAGE_HOSTS = frozenset({"flop.finance", "www.flop.finance"})
 _GITHUB_HOST = "github.com"
@@ -43,9 +43,18 @@ class _FlopLabsGithubLinks(HTMLParser):
             or not parsed.path.startswith(_GITHUB_OWNER_PREFIX)
         ):
             return
-        # Require at least one non-empty repository segment after /flop-labs/.
-        remainder = parsed.path[len(_GITHUB_OWNER_PREFIX) :]
-        if not remainder or remainder.startswith("/"):
+
+        # Require a real repository segment and reject traversal/backslash forms
+        # before preserving the href as evidence. The Radar still never follows it.
+        decoded_path = unquote(parsed.path)
+        segments = decoded_path.split("/")
+        if (
+            len(segments) < 3
+            or segments[1] != "flop-labs"
+            or not segments[2]
+            or "\\" in decoded_path
+            or any(segment in {".", ".."} for segment in segments)
+        ):
             return
         self.links.add(parsed._replace(query="", fragment="").geturl())
 
@@ -66,12 +75,19 @@ def install(radar_core: ModuleType) -> None:
             source_port = source_url.port
         except ValueError:
             return sorted(links)
+        allowed_hosts = frozenset(
+            str(host).lower()
+            for host in getattr(source, "allowed_hosts", ())
+            if isinstance(host, str)
+        )
         if (
             source_url.scheme != "https"
             or source_url.hostname not in _FLOP_PAGE_HOSTS
             or source_url.username is not None
             or source_url.password is not None
             or source_port not in {None, 443}
+            or not allowed_hosts
+            or not allowed_hosts.issubset(_FLOP_PAGE_HOSTS)
         ):
             return sorted(links)
 
