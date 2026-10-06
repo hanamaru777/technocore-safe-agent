@@ -16,7 +16,7 @@ def test_airdrop_monitor_unit_is_read_only_network_plus_local_state() -> None:
     unit = _read("airdrop-monitor.service")
     assert "Type=oneshot" in unit
     assert "User=technocore" in unit
-    assert "airdrop-monitor-once" in unit
+    assert "-m flop_agent.airdrop_monitor_challenge_routing" in unit
     assert "FLOP_STATE_DIR=/var/lib/technocore-safe-agent" in unit
     assert "ReadWritePaths=/var/lib/technocore-safe-agent" in unit
     assert "EnvironmentFile=" not in unit
