@@ -3,7 +3,7 @@
 This module proves authenticated reachability and fixed executor authorization only.
 It intentionally emits a control-path receipt with ``binding_capable=False`` and
 never installs that receipt, starts a service, signs, posts, or accesses signer/Vault
-material.  Phase A therefore cannot satisfy CONTROL_PATH_REDUNDANCY_GATE.
+material. Phase A therefore cannot satisfy CONTROL_PATH_REDUNDANCY_GATE.
 """
 from __future__ import annotations
 
@@ -48,6 +48,17 @@ def _nonce_tag(nonce: str) -> str:
     return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
 
 
+def _probe_context_tag(*, head: str, challenge_id: str, nonce: str) -> str:
+    material = "\n".join(
+        (
+            head,
+            direct._challenge_tag(challenge_id),
+            _nonce_tag(nonce),
+        )
+    ).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+
 def build_readonly_probe(
     challenge_id: str,
     nonce: str,
@@ -76,16 +87,13 @@ def build_readonly_probe(
         "failure_domain": FAILURE_DOMAIN,
         "authenticated": True,
         "ready": True,
-        # Phase A is intentionally non-binding.  A fixed proof command is not
+        # Phase A is intentionally non-binding. A fixed proof command is not
         # equivalent to a command path capable of starting the executor.
         "binding_capable": False,
         "quota_independent": True,
         "verified_at": current.isoformat(),
-        "probe_method": (
-            f"github-actions-forced-ssh-readonly+repo-head:{head}"
-            f"+challenge:{direct._challenge_tag(challenge_id)}"
-            f"+nonce:{_nonce_tag(nonce)}"
-        ),
+        "probe_method": "github-actions-forced-ssh-readonly+ctx:"
+        + _probe_context_tag(head=head, challenge_id=challenge_id, nonce=nonce),
     }
     unsigned["receipt_sha256"] = control._receipt_digest(unsigned)
     return control.validate_receipt(unsigned, now=current)
