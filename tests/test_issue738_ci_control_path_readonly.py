@@ -73,13 +73,16 @@ def test_nonce_is_strict():
             ci_probe._nonce(bad)
 
 
-def test_forced_command_wrapper_has_no_generic_shell_or_binding_action():
+def test_forced_command_wrapper_has_only_fixed_proof_and_bootstrap_grammars():
     root = Path(__file__).resolve().parents[1]
     text = (root / "packaging/oracle/technocore-safe-agent-ci-control-proof").read_text("utf-8")
 
     assert "SSH_ORIGINAL_COMMAND" in text
-    assert '[[ "$VERB" == "proof" ]]' in text
+    assert 'case "$VERB" in' in text
+    assert "  proof)" in text
+    assert "  bootstrap)" in text
     assert "precontest_ci_control_path_probe" in text
+    assert "precontest_ci_bootstrap_probe" in text
     assert "eval " not in text
     assert "bash -c" not in text
     assert "sh -c" not in text
