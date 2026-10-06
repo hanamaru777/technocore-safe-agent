@@ -84,13 +84,21 @@ def test_bootstrap_only_mutates_allowed_presentation_services_and_never_binding_
     for token in protected_mutations:
         assert token not in text
 
+    protected_units = (
+        "technocore-safe-agent-resident.service",
+        "technocore-safe-agent-lobby-capture.service",
+        "technocore-safe-agent-signer.service",
+    )
+    for unit in protected_units:
+        assert unit in text
+        for verb in ("start", "stop", "restart", "enable", "disable"):
+            assert f"systemctl {verb} {unit}" not in text
+            assert f'systemctl {verb} "{unit}"' not in text
+
     assert 'SUPERVISOR="technocore-safe-agent-precontest-supervisor.service"' in text
     assert 'DISCORD="technocore-safe-agent-discord.service"' in text
     assert 'sudo -n systemctl start "$SUPERVISOR"' in text
     assert 'sudo -n systemctl restart "$DISCORD"' in text
-    assert "technocore-safe-agent-resident.service" in text
-    assert "technocore-safe-agent-lobby-capture.service" in text
-    assert "technocore-safe-agent-signer.service" in text
     assert 'systemctl show "$unit" -p MainPID --value' in text
     assert 'systemctl show "$unit" -p NRestarts --value' in text
 
