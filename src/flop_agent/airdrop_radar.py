@@ -22,6 +22,7 @@ for _name in dir(_core):
         globals()[_name] = getattr(_core, _name)
 
 _BASE_EXTRACT_FACTS = _core._extract_facts
+_BASE_EXTRACT_YELLOWPAPER = _core._extract_yellowpaper
 _BASE_SCAN_OFFICIAL_SOURCES = _core.scan_official_sources
 _BASE_NETWORK_FETCH = _core._network_fetch
 _NEW_SOURCE_NAMES = frozenset({"testnet", "airdrop"})
@@ -345,7 +346,101 @@ def _extract_airdrop(text: str, source: SourceSpec) -> list[dict]:
     return facts
 
 
+def _replace_fact(facts: list[dict], row: dict) -> None:
+    """Replace one same-source fact so a new normative value cannot self-conflict."""
+    key = row["key"]
+    facts[:] = [fact for fact in facts if fact.get("key") != key]
+    facts.append(row)
+
+
+def _extract_yellowpaper_current(text: str, source: SourceSpec) -> list[dict]:
+    """Extend the legacy Tier-1 parser with currently ratified airdrop language."""
+    facts = list(_BASE_EXTRACT_YELLOWPAPER(text, source))
+
+    for param in ("genesis_miner_airdrop", "genesis_validator_airdrop"):
+        row = _param_fact(text, source, param)
+        if row:
+            _replace_fact(facts, row)
+
+    scoring = re.search(
+        r"Agent scoring MUST derive from settled compute-channel spend",
+        text,
+        re.IGNORECASE,
+    )
+    if scoring:
+        _replace_fact(
+            facts,
+            _fact(
+                key="agent_scoring_basis",
+                value="settled_compute_channel_spend",
+                source=source,
+                status="normative",
+                evidence=_context(text, *scoring.span()),
+            ),
+        )
+
+    balance = re.search(
+        r"held Era-T balance and stake size MUST NOT be scoring terms",
+        text,
+        re.IGNORECASE,
+    )
+    if balance:
+        _replace_fact(
+            facts,
+            _fact(
+                key="balance_is_scoring_term",
+                value=False,
+                source=source,
+                status="normative",
+                evidence=_context(text, *balance.span()),
+            ),
+        )
+
+    # R8.7/R8.8 and D-0522 now specify this mechanism normatively.  Require the
+    # MUST-language plus the exact one-for-three relationship; marketing-style
+    # "3:1" prose by itself is deliberately insufficient for Tier-1 ratification.
+    no_initial_unlock = re.search(
+        r"An Agent grant MUST NOT unlock any principal at its start block",
+        text,
+        re.IGNORECASE,
+    )
+    one_for_three = re.search(
+        r"one FLOP of principal for each three FLOP of its locked part",
+        text,
+        re.IGNORECASE,
+    )
+    if no_initial_unlock and one_for_three:
+        evidence_start = min(no_initial_unlock.start(), one_for_three.start())
+        evidence_end = max(no_initial_unlock.end(), one_for_three.end())
+        evidence = _context(text, evidence_start, evidence_end, radius=80)
+        _replace_fact(
+            facts,
+            _fact(
+                key="spend_to_unlock_status",
+                value="ratified",
+                source=source,
+                status="normative",
+                evidence=evidence,
+            ),
+        )
+        _replace_fact(
+            facts,
+            _fact(
+                key="spend_to_unlock_ratio",
+                value="3:1",
+                source=source,
+                status="normative",
+                evidence=evidence,
+            ),
+        )
+
+    return facts
+
+
 def _extract_facts(spec: SourceSpec, body: str) -> tuple[str, list[dict], list[dict], dict]:
+    if spec.name == "yellowpaper":
+        text = _plain_text(body)
+        return text, _extract_yellowpaper_current(text, spec), _extract_deadlines(text, spec), _page_meta(text)
     if spec.name not in _NEW_SOURCE_NAMES:
         return _BASE_EXTRACT_FACTS(spec, body)
 
