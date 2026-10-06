@@ -11,7 +11,7 @@ block() {
 }
 
 # This file is intended to be used as the forced command for one dedicated
-# GitHub-Actions-only SSH public key.  Never eval SSH_ORIGINAL_COMMAND.
+# GitHub-Actions-only SSH public key. Interpret only the exact fixed grammar below.
 ORIGINAL="${SSH_ORIGINAL_COMMAND:-}"
 read -r VERB CHALLENGE NONCE EXTRA <<< "$ORIGINAL"
 
