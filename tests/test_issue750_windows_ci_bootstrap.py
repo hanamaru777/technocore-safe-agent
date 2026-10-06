@@ -61,22 +61,46 @@ def test_bootstrap_remote_deploy_is_clean_exact_sha_and_ff_only():
     assert "safe.directory --global" not in text
 
 
-def test_bootstrap_does_not_mutate_runtime_services_or_binding_state():
+def test_bootstrap_only_mutates_allowed_presentation_services_and_never_binding_state():
     text = _text()
 
-    forbidden = (
-        "systemctl start",
-        "systemctl stop",
-        "systemctl restart",
-        "systemctl enable",
+    forbidden_binding = (
         "close1-approved-trade.service",
         "close1-approved-batch",
         "signer/close1-approved",
         "mark_pending",
         "POST ",
     )
-    for token in forbidden:
+    for token in forbidden_binding:
         assert token not in text
+
+    protected_mutations = (
+        'systemctl start "$unit"',
+        'systemctl stop "$unit"',
+        'systemctl restart "$unit"',
+        'systemctl enable "$unit"',
+        'systemctl disable "$unit"',
+    )
+    for token in protected_mutations:
+        assert token not in text
+
+    protected_units = (
+        "technocore-safe-agent-resident.service",
+        "technocore-safe-agent-lobby-capture.service",
+        "technocore-safe-agent-signer.service",
+    )
+    for unit in protected_units:
+        assert unit in text
+        for verb in ("start", "stop", "restart", "enable", "disable"):
+            assert f"systemctl {verb} {unit}" not in text
+            assert f'systemctl {verb} "{unit}"' not in text
+
+    assert 'SUPERVISOR="technocore-safe-agent-precontest-supervisor.service"' in text
+    assert 'DISCORD="technocore-safe-agent-discord.service"' in text
+    assert 'sudo -n systemctl start "$SUPERVISOR"' in text
+    assert 'sudo -n systemctl restart "$DISCORD"' in text
+    assert 'systemctl show "$unit" -p MainPID --value' in text
+    assert 'systemctl show "$unit" -p NRestarts --value' in text
 
     assert '"bootstrap $bootstrapNonce"' in text
     assert "$bootstrap.binding_capable -ne $false" in text
@@ -120,6 +144,28 @@ def test_bootstrap_dispatches_exact_manual_workflow_and_requires_pass_markers():
     assert "CI_BOOTSTRAP_CONTROL_PATH_PROOF=PASS" in text
     assert "CONTROL_PATH_REDUNDANCY_GATE_CHANGED=NO" in text
     assert "CI_BOOTSTRAP_PHASE_B=READY" in text
+
+
+def test_postdeploy_activation_runs_only_after_ci_bootstrap_and_fails_on_protected_drift():
+    text = _text()
+
+    ci_pass_check = text.index("GH_BOOTSTRAP_PASS_MARKER_MISSING")
+    activation = text.index("=== SAFE POST-DEPLOY ACTIVATION ===")
+    supervisor = text.index('sudo -n systemctl start "$SUPERVISOR"')
+    discord = text.index('sudo -n systemctl restart "$DISCORD"')
+    compare_pid = text.index('[ "$PID_POST" = "${PID_PRE[$unit]}" ]')
+    compare_restarts = text.index('[ "$RESTART_POST" = "${RESTART_PRE[$unit]}" ]')
+
+    assert ci_pass_check < activation < supervisor < discord < compare_pid
+    assert compare_pid < compare_restarts
+    assert '[ "$(systemctl is-active "$DISCORD")" = "active" ]' in text
+    assert '[ "$SUP_RESULT" = "success" ]' in text
+    assert '[ "$SUP_EXIT" = "0" ]' in text
+    assert "PRECONTEST_SUPERVISOR_REFRESH=PASS" in text
+    assert "DISCORD_PRESENTATION_REFRESH=PASS" in text
+    assert "PROTECTED_SERVICES_UNCHANGED=YES" in text
+    assert "POST_DEPLOY_ACTIVATION=PASS" in text
+    assert "ONE_SHOT_POST_DEPLOY_ACTIVATION=PASS" in text
 
 
 def test_powershell_syntax_when_pwsh_is_available():
