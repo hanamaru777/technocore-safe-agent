@@ -28,7 +28,11 @@ def test_windows_ci_proves_lf_only_bootstrap_source_before_keygen_regression():
     assert "WINDOWS_PS51_REMOTE_SHELL_LF_REGRESSION=PASS" in workflow
 
 
-def test_remote_preflight_still_uses_bash_pipefail_marker():
+def test_remote_preflight_still_uses_bash_pipefail_marker_and_safe_capture():
     bootstrap = BOOTSTRAP.read_text("utf-8")
     assert "set -euo pipefail" in bootstrap
-    assert "$preflightOutput = & $script:SshExe @sshBase" in bootstrap
+    assert "$preflightArgs = @($sshBase)" in bootstrap
+    assert (
+        "Invoke-CapturedNative $script:SshExe $preflightArgs "
+        "'REMOTE_PRECHECK_FAILED'"
+    ) in bootstrap
