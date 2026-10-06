@@ -197,6 +197,7 @@ jobs:
           if (-not $failedClosed) {
             throw 'nonzero native exit did not fail closed'
           }
+          $global:LASTEXITCODE = 0
           Write-Host 'WINDOWS_PS51_NATIVE_STDERR_HANDLING=PASS'
 
       - name: Prove Windows PowerShell 5.1 non-interactive key generation
@@ -224,79 +225,3 @@ jobs:
             throw 'keypair mismatch'
           }
           Write-Host 'WINDOWS_PS51_CI_KEYGEN_REGRESSION=PASS'
-
-  windows-native-stderr-diagnostic:
-    runs-on: windows-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Capture PS5.1 native stderr diagnostic
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $diag = Join-Path $env:RUNNER_TEMP 'ps51-native-stderr-diagnostic.txt'
-          function Add-Diag([string]$Text) {
-            Add-Content -LiteralPath $diag -Value $Text -Encoding UTF8
-          }
-          Add-Diag "PS_VERSION=$($PSVersionTable.PSVersion)"
-          Add-Diag "INITIAL_EAP=$ErrorActionPreference"
-          $bootstrapPath = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\bootstrap-technocore-ci-readonly-path.ps1'
-          $tokens = $null
-          $parseErrors = $null
-          $ast = [System.Management.Automation.Language.Parser]::ParseFile($bootstrapPath,[ref]$tokens,[ref]$parseErrors)
-          $capture = $ast.Find({
-            param($node)
-            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-CapturedNative'
-          }, $true)
-          function Stop-Stage([string]$Reason) { throw "STOP_$Reason" }
-          Invoke-Expression $capture.Extent.Text
-          $powershellExe = (Get-Command powershell.exe).Source
-          $successProbe = Join-Path $env:RUNNER_TEMP 'diag-success.ps1'
-          @'
-          [Console]::Out.WriteLine('expected-stdout')
-          [Console]::Error.WriteLine('benign-stderr')
-          exit 0
-          '@ | Set-Content -LiteralPath $successProbe -Encoding ASCII
-          try {
-            $result = @(Invoke-CapturedNative $powershellExe @('-NoProfile','-NonInteractive','-File',$successProbe) 'DIAG_SUCCESS')
-            Add-Diag "SUCCESS_CALL=RETURNED"
-            Add-Diag "SUCCESS_COUNT=$($result.Count)"
-            foreach ($item in $result) {
-              Add-Diag "SUCCESS_ITEM_TYPE=$($item.GetType().FullName) VALUE=$([string]$item)"
-            }
-            Add-Diag "SUCCESS_LASTEXITCODE=$LASTEXITCODE"
-          } catch {
-            Add-Diag "SUCCESS_CALL=THREW"
-            Add-Diag "SUCCESS_EXCEPTION_TYPE=$($_.Exception.GetType().FullName)"
-            Add-Diag "SUCCESS_EXCEPTION_MESSAGE=$($_.Exception.Message)"
-            Add-Diag "SUCCESS_FQID=$($_.FullyQualifiedErrorId)"
-            Add-Diag "SUCCESS_LASTEXITCODE=$LASTEXITCODE"
-          }
-          $failureProbe = Join-Path $env:RUNNER_TEMP 'diag-failure.ps1'
-          @'
-          [Console]::Error.WriteLine('expected-failure-stderr')
-          exit 23
-          '@ | Set-Content -LiteralPath $failureProbe -Encoding ASCII
-          try {
-            $failureResult = @(Invoke-CapturedNative $powershellExe @('-NoProfile','-NonInteractive','-File',$failureProbe) 'DIAG_FAILURE')
-            Add-Diag "FAILURE_CALL=RETURNED"
-            Add-Diag "FAILURE_COUNT=$($failureResult.Count)"
-            Add-Diag "FAILURE_LASTEXITCODE=$LASTEXITCODE"
-          } catch {
-            Add-Diag "FAILURE_CALL=THREW"
-            Add-Diag "FAILURE_EXCEPTION_TYPE=$($_.Exception.GetType().FullName)"
-            Add-Diag "FAILURE_EXCEPTION_MESSAGE=$($_.Exception.Message)"
-            Add-Diag "FAILURE_FQID=$($_.FullyQualifiedErrorId)"
-            Add-Diag "FAILURE_LASTEXITCODE=$LASTEXITCODE"
-          }
-          Write-Host "DIAGNOSTIC_PATH=$diag"
-
-      - name: Upload diagnostic artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ps51-native-stderr-diagnostic
-          path: ${{ runner.temp }}\ps51-native-stderr-diagnostic.txt
-          if-no-files-found: error
-          retention-days: 1
