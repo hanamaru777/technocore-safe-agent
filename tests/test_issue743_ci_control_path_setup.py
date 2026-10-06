@@ -25,7 +25,7 @@ def test_installer_has_valid_bash_syntax():
 def test_installer_is_root_only_and_accepts_public_key_file_only():
     text = _text()
 
-    assert 'ROOT_REQUIRED' in text
+    assert "ROOT_REQUIRED" in text
     assert '[[ "$#" -eq 1 ]]' in text
     assert 'KEY_TYPE" == "ssh-ed25519"' in text
     assert "/usr/bin/ssh-keygen -l -f" in text
@@ -56,7 +56,7 @@ def test_authorized_keys_is_exact_forced_command_with_all_forwarding_disabled():
 def test_sudoers_allows_only_exact_executor_start_and_no_wildcard():
     text = _text()
 
-    expected = '$ACCOUNT ALL=(root) NOPASSWD: $SYSTEMCTL start $EXECUTOR_UNIT'
+    expected = "$ACCOUNT ALL=(root) NOPASSWD: $SYSTEMCTL start $EXECUTOR_UNIT"
     assert expected in text
     assert 'EXECUTOR_UNIT="technocore-safe-agent-close1-approved-trade.service"' in text
     assert 'SYSTEMCTL="/usr/bin/systemctl"' in text
@@ -96,6 +96,7 @@ def test_existing_exact_state_is_idempotent_and_conflicts_fail_before_mutation()
         '/usr/bin/cmp -s "$SOURCE_WRAPPER" "$INSTALLED_WRAPPER" || fail "WRAPPER_CONTENT_CONFLICT"',
         '/usr/bin/cmp -s "$EXPECTED_AUTH" "$AUTHORIZED_KEYS" || fail "AUTHORIZED_KEYS_CONTENT_CONFLICT"',
         '/usr/bin/cmp -s "$EXPECTED_SUDOERS" "$SUDOERS_FILE" || fail "SUDOERS_CONTENT_CONFLICT"',
+        'fail "ACCOUNT_HOME_WRITABLE_BY_OTHERS"',
         'fail "WRAPPER_METADATA_CONFLICT"',
         'fail "SSH_DIR_METADATA_CONFLICT"',
         'fail "AUTHORIZED_KEYS_METADATA_CONFLICT"',
@@ -114,20 +115,23 @@ def test_symlink_and_account_conflicts_are_fail_closed():
     text = _text()
 
     for marker in (
-        'SOURCE_WRAPPER_INVALID',
-        'ACCOUNT_HOME_CONFLICT',
-        'ACCOUNT_SHELL_CONFLICT',
-        'ACCOUNT_HOME_PATH_CONFLICT',
-        'HOME_EXISTS_WITHOUT_ACCOUNT',
-        'WRAPPER_DIR_CONFLICT',
-        'WRAPPER_PATH_CONFLICT',
-        'SSH_DIR_PATH_CONFLICT',
-        'AUTHORIZED_KEYS_PATH_CONFLICT',
-        'SUDOERS_PATH_CONFLICT',
-        'ACCOUNT_PASSWORD_NOT_LOCKED',
+        "SOURCE_WRAPPER_INVALID",
+        "ACCOUNT_HOME_CONFLICT",
+        "ACCOUNT_SHELL_CONFLICT",
+        "ACCOUNT_HOME_PATH_CONFLICT",
+        "ACCOUNT_HOME_WRITABLE_BY_OTHERS",
+        "HOME_EXISTS_WITHOUT_ACCOUNT",
+        "WRAPPER_DIR_CONFLICT",
+        "WRAPPER_PATH_CONFLICT",
+        "SSH_DIR_PATH_CONFLICT",
+        "AUTHORIZED_KEYS_PATH_CONFLICT",
+        "SUDOERS_PATH_CONFLICT",
+        "ACCOUNT_PASSWORD_NOT_LOCKED",
     ):
         assert marker in text
 
+    assert "home_is_safe" in text
+    assert "(8#$mode & 0022) == 0" in text
     assert re.search(r'\[\[ -f "\$AUTHORIZED_KEYS" && ! -L "\$AUTHORIZED_KEYS" \]\]', text)
     assert re.search(r'\[\[ -f "\$SUDOERS_FILE" && ! -L "\$SUDOERS_FILE" \]\]', text)
 
@@ -136,8 +140,9 @@ def test_installer_locks_new_account_and_emits_no_key_material():
     text = _text()
 
     assert '/usr/sbin/usermod --lock "$ACCOUNT"' in text
-    assert 'ACCOUNT_POSTCHECK_PASSWORD_UNLOCKED' in text
-    assert 'printf \'%s\\n\' \'CI_CONTROL_PATH_SETUP=READY\'' in text
+    assert "ACCOUNT_POSTCHECK_PASSWORD_UNLOCKED" in text
+    assert "ACCOUNT_POSTCHECK_HOME_WRITABLE" in text
+    assert "printf '%s\\n' 'CI_CONTROL_PATH_SETUP=READY'" in text
 
     # The safe summary contains only fixed paths/account name, never the key blob.
     summary = text[text.index("printf '%s\\n' 'CI_CONTROL_PATH_SETUP=READY'") :]
