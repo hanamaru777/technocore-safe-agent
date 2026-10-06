@@ -11,16 +11,32 @@ block() {
 }
 
 # This file is intended to be used as the forced command for one dedicated
-# GitHub-Actions-only SSH public key. Interpret only the exact fixed grammar below.
+# GitHub-Actions-only SSH public key. Interpret only the exact fixed grammars below.
 ORIGINAL="${SSH_ORIGINAL_COMMAND:-}"
-read -r VERB CHALLENGE NONCE EXTRA <<< "$ORIGINAL"
+read -r VERB ARG1 ARG2 EXTRA <<< "$ORIGINAL"
 
-[[ "$VERB" == "proof" ]] || block
-[[ -n "${CHALLENGE:-}" && -n "${NONCE:-}" && -z "${EXTRA:-}" ]] || block
-[[ "$CHALLENGE" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || block
-[[ "$NONCE" =~ ^[0-9a-f]{32}$ ]] || block
-
-exec env \
-  FLOP_STATE_DIR="$STATE" \
-  PYTHONPATH="$REPO/src" \
-  "$PYTHON" -m flop_agent.precontest_ci_control_path_probe "$CHALLENGE" "$NONCE"
+case "$VERB" in
+  bootstrap)
+    NONCE="$ARG1"
+    [[ -n "${NONCE:-}" && -z "${ARG2:-}" && -z "${EXTRA:-}" ]] || block
+    [[ "$NONCE" =~ ^[0-9a-f]{32}$ ]] || block
+    exec env \
+      FLOP_STATE_DIR="$STATE" \
+      PYTHONPATH="$REPO/src" \
+      "$PYTHON" -m flop_agent.precontest_ci_bootstrap_probe "$NONCE"
+    ;;
+  proof)
+    CHALLENGE="$ARG1"
+    NONCE="$ARG2"
+    [[ -n "${CHALLENGE:-}" && -n "${NONCE:-}" && -z "${EXTRA:-}" ]] || block
+    [[ "$CHALLENGE" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || block
+    [[ "$NONCE" =~ ^[0-9a-f]{32}$ ]] || block
+    exec env \
+      FLOP_STATE_DIR="$STATE" \
+      PYTHONPATH="$REPO/src" \
+      "$PYTHON" -m flop_agent.precontest_ci_control_path_probe "$CHALLENGE" "$NONCE"
+    ;;
+  *)
+    block
+    ;;
+esac
