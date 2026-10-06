@@ -275,7 +275,8 @@ if [ "$HEAD" != "$TARGET" ]; then
 fi
 [ "$(sudo -n git -c safe.directory="$REPO" -C "$REPO" rev-parse HEAD)" = "$TARGET" ] || exit 35
 [ -z "$(sudo -n git -c safe.directory="$REPO" -C "$REPO" status --porcelain)" ] || exit 36
-sudo -n "$REPO/packaging/oracle/install-technocore-ci-control-proof.sh" "$PUB"
+[ -x /bin/bash ] || exit 37
+sudo -n /bin/bash "$REPO/packaging/oracle/install-technocore-ci-control-proof.sh" "$PUB"
 printf 'REMOTE_SETUP=READY\n'
 '@
 $remoteApply = $remoteApplyTemplate.Replace('__TARGET__', $ExpectedMainSha).Replace('__PUB__', $remotePublic)
