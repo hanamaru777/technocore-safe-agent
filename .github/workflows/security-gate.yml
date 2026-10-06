@@ -47,3 +47,36 @@ jobs:
 
       - name: Scan reachable Git history for secrets
         run: PYTHONPATH=src uv run python -m flop_agent.cli history-secret-scan
+
+  windows-keygen-regression:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prove Windows PowerShell 5.1 non-interactive key generation
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
+          }
+          $sshKeygen = (Get-Command ssh-keygen.exe).Source
+          $keyPath = Join-Path $env:RUNNER_TEMP 'technocore-ci-actions-regression'
+          & .\packaging\windows\new-technocore-ci-keypair.ps1 `
+            -SshKeygenExe $sshKeygen `
+            -KeyPath $keyPath `
+            -TimeoutMilliseconds 10000
+          if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
+            throw 'private key missing'
+          }
+          if (-not (Test-Path -LiteralPath "$keyPath.pub" -PathType Leaf)) {
+            throw 'public key missing'
+          }
+          $derived = (& $sshKeygen -y -f $keyPath 2>$null).Trim()
+          $public = (Get-Content -LiteralPath "$keyPath.pub" -Raw).Trim()
+          if (($derived -split '\s+')[1] -ne ($public -split '\s+')[1]) {
+            throw 'keypair mismatch'
+          }
+          Write-Host 'WINDOWS_PS51_CI_KEYGEN_REGRESSION=PASS'

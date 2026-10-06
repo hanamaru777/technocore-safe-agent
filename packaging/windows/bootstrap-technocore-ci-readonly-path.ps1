@@ -77,6 +77,10 @@ $script:SshExe = Require-Command 'ssh.exe'
 $ScpExe = Require-Command 'scp.exe'
 $SshKeygenExe = Require-Command 'ssh-keygen.exe'
 $script:GhExe = Require-Command 'gh.exe'
+$KeygenHelper = Join-Path $PSScriptRoot 'new-technocore-ci-keypair.ps1'
+if (-not (Test-Path -LiteralPath $KeygenHelper -PathType Leaf)) {
+    Stop-Stage 'CI_KEYGEN_HELPER_MISSING'
+}
 
 $OperatorKey = [IO.Path]::GetFullPath($OperatorKey)
 $KnownHostsPath = [IO.Path]::GetFullPath($KnownHostsPath)
@@ -178,15 +182,16 @@ Write-Host 'preflight=PASS'
 Write-Host '=== DEDICATED CI KEYPAIR ==='
 
 if (-not $privateExists) {
-    $ciParent = Split-Path -Parent $CiKeyPath
-    if (-not (Test-Path -LiteralPath $ciParent -PathType Container)) {
-        New-Item -ItemType Directory -Path $ciParent -Force | Out-Null
+    & $KeygenHelper -SshKeygenExe $SshKeygenExe -KeyPath $CiKeyPath *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Stop-Stage 'CI_KEYGEN_HELPER_FAILED'
     }
-    Invoke-CheckedQuiet $SshKeygenExe @(
-        '-q', '-t', 'ed25519', '-N', '', '-C', 'technocore-ci-actions', '-f', $CiKeyPath
-    ) 'CI_KEYGEN_FAILED'
-    $privateExists = $true
-    $publicExists = $true
+}
+
+$privateExists = Test-Path -LiteralPath $CiKeyPath -PathType Leaf
+$publicExists = Test-Path -LiteralPath $CiPublicKeyPath -PathType Leaf
+if (-not $privateExists -or -not $publicExists) {
+    Stop-Stage 'CI_KEYGEN_OUTPUT_MISSING'
 }
 
 $publicLine = (Get-Content -LiteralPath $CiPublicKeyPath -Raw).Trim()
