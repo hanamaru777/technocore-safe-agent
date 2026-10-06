@@ -10,7 +10,7 @@ User=technocore
 WorkingDirectory=/opt/technocore-safe-agent
 Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent
 Environment=PYTHONPATH=/opt/technocore-safe-agent/src
-ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.cli airdrop-monitor-once
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -m flop_agent.airdrop_monitor_challenge_routing
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
