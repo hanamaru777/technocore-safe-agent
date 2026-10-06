@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="/opt/technocore-safe-agent"
+PYTHON="$REPO/.venv/bin/python"
+STATE="/var/lib/technocore-safe-agent"
+
+block() {
+  printf '%s\n' '{"status":"blocked","reason":"command_not_allowed"}'
+  exit 2
+}
+
+# This file is intended to be used as the forced command for one dedicated
+# GitHub-Actions-only SSH public key. Interpret only the exact fixed grammar below.
+ORIGINAL="${SSH_ORIGINAL_COMMAND:-}"
+read -r VERB CHALLENGE NONCE EXTRA <<< "$ORIGINAL"
+
+[[ "$VERB" == "proof" ]] || block
+[[ -n "${CHALLENGE:-}" && -n "${NONCE:-}" && -z "${EXTRA:-}" ]] || block
+[[ "$CHALLENGE" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || block
+[[ "$NONCE" =~ ^[0-9a-f]{32}$ ]] || block
+
+exec env \
+  FLOP_STATE_DIR="$STATE" \
+  PYTHONPATH="$REPO/src" \
+  "$PYTHON" -m flop_agent.precontest_ci_control_path_probe "$CHALLENGE" "$NONCE"
