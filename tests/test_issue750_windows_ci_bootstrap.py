@@ -7,10 +7,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "packaging/windows/bootstrap-technocore-ci-readonly-path.ps1"
+KEYGEN_HELPER = ROOT / "packaging/windows/new-technocore-ci-keypair.ps1"
 
 
 def _text() -> str:
     return SCRIPT.read_text("utf-8")
+
+
+def _keygen_text() -> str:
+    return KEYGEN_HELPER.read_text("utf-8")
 
 
 def test_bootstrap_requires_exact_main_and_pinned_host_key():
@@ -113,14 +118,36 @@ def test_bootstrap_preflights_before_key_generation_and_remote_mutation():
     gh_auth = text.index("GH_AUTH_REQUIRED")
     pinned_host = text.index("PINNED_HOST_KEY_MISSING")
     remote_preflight = text.index("REMOTE_PRECHECK=PASS")
-    keygen = text.index("'-q', '-t', 'ed25519'")
+    keygen = text.index("& $KeygenHelper -SshKeygenExe $SshKeygenExe -KeyPath $CiKeyPath")
+    output_guard = text.index("CI_KEYGEN_OUTPUT_MISSING")
     scp = text.index("$scpArgs = @(")
     remote_fetch = text.index("fetch --no-tags origin main")
 
     assert gh_auth < keygen
     assert pinned_host < keygen
     assert remote_preflight < keygen
-    assert keygen < scp < remote_fetch
+    assert keygen < output_guard < scp < remote_fetch
+
+
+def test_bootstrap_uses_repaired_keygen_helper_and_never_old_empty_array_argument():
+    text = _text()
+    keygen = _keygen_text()
+
+    assert "new-technocore-ci-keypair.ps1" in text
+    assert "CI_KEYGEN_HELPER_MISSING" in text
+    assert "CI_KEYGEN_OUTPUT_MISSING" in text
+    assert "'-q', '-t', 'ed25519', '-N', ''" not in text
+
+    assert "System.Diagnostics.ProcessStartInfo" in keygen
+    assert "UseShellExecute = $false" in keygen
+    assert "RedirectStandardInput = $true" in keygen
+    assert "$process.StandardInput.Close()" in keygen
+    assert "$process.WaitForExit($TimeoutMilliseconds)" in keygen
+    assert "CI_KEYGEN_TIMEOUT" in keygen
+    assert "-N \"\"" in keygen
+    assert "CI_KEYGEN_PRIVATE_MISSING" in keygen
+    assert "CI_KEYGEN_PUBLIC_MISSING" in keygen
+    assert "CI_KEYGEN_NONINTERACTIVE=PASS" in keygen
 
 
 def test_bootstrap_handles_existing_setup_fail_closed_and_idempotently():
@@ -173,11 +200,12 @@ def test_powershell_syntax_when_pwsh_is_available():
     if pwsh is None:
         pytest.skip("pwsh not installed in this environment")
 
-    path = str(SCRIPT).replace("'", "''")
-    command = f"$null=[scriptblock]::Create([IO.File]::ReadAllText('{path}'))"
-    subprocess.run(
-        [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    for script in (SCRIPT, KEYGEN_HELPER):
+        path = str(script).replace("'", "''")
+        command = f"$null=[scriptblock]::Create([IO.File]::ReadAllText('{path}'))"
+        subprocess.run(
+            [pwsh, "-NoProfile", "-NonInteractive", "-Command", command],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
