@@ -71,6 +71,8 @@ def test_external_github_discovery_is_strictly_scoped_to_flop_labs_https() -> No
       <a href="http://github.com/flop-labs/testnet">http</a>
       <a href="https://evil@github.com/flop-labs/testnet">userinfo</a>
       <a href="https://github.com:444/flop-labs/testnet">port</a>
+      <a href="https://github.com/flop-labs/testnet/%2e%2e/attacker">encoded traversal</a>
+      <a href="https://github.com/flop-labs/testnet/../attacker">traversal</a>
       <a href="https://example.com/flop-labs/testnet">external</a>
     </body></html>
     """
@@ -90,6 +92,20 @@ def test_non_flop_html_source_cannot_delegate_github_discovery() -> None:
         "html",
         False,
         ("example.com",),
+    )
+    html = '<a href="https://github.com/flop-labs/testnet-client">link</a>'
+    assert airdrop_radar._official_interest_links(html, source) == []
+
+
+def test_flop_source_with_external_redirect_authority_cannot_delegate_github_discovery() -> None:
+    source = airdrop_radar.SourceSpec(
+        "redirecting_form",
+        "https://flop.finance/apply/example",
+        2,
+        "official",
+        "html",
+        False,
+        ("flop.finance", "docs.google.com"),
     )
     html = '<a href="https://github.com/flop-labs/testnet-client">link</a>'
     assert airdrop_radar._official_interest_links(html, source) == []
