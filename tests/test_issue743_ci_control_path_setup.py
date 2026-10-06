@@ -98,6 +98,7 @@ def test_existing_exact_state_is_idempotent_and_conflicts_fail_before_mutation()
         '/usr/bin/cmp -s "$EXPECTED_AUTH" "$AUTHORIZED_KEYS" || fail "AUTHORIZED_KEYS_CONTENT_CONFLICT"',
         '/usr/bin/cmp -s "$EXPECTED_SUDOERS" "$SUDOERS_FILE" || fail "SUDOERS_CONTENT_CONFLICT"',
         'fail "ACCOUNT_HOME_WRITABLE_BY_OTHERS"',
+        'fail "ACCOUNT_PASSWORD_SENTINEL_CONFLICT"',
         'fail "WRAPPER_METADATA_CONFLICT"',
         'fail "SSH_DIR_METADATA_CONFLICT"',
         'fail "AUTHORIZED_KEYS_METADATA_CONFLICT"',
@@ -127,7 +128,7 @@ def test_symlink_and_account_conflicts_are_fail_closed():
         "SSH_DIR_PATH_CONFLICT",
         "AUTHORIZED_KEYS_PATH_CONFLICT",
         "SUDOERS_PATH_CONFLICT",
-        "ACCOUNT_PASSWORD_NOT_LOCKED",
+        "ACCOUNT_PASSWORD_SENTINEL_CONFLICT",
     ):
         assert marker in text
 
@@ -137,11 +138,16 @@ def test_symlink_and_account_conflicts_are_fail_closed():
     assert re.search(r'\[\[ -f "\$SUDOERS_FILE" && ! -L "\$SUDOERS_FILE" \]\]', text)
 
 
-def test_installer_locks_new_account_and_emits_no_key_material():
+def test_installer_uses_invalid_noncrypt_password_sentinel_and_emits_no_key_material():
     text = _text()
 
-    assert '/usr/sbin/usermod --lock "$ACCOUNT"' in text
-    assert "ACCOUNT_POSTCHECK_PASSWORD_UNLOCKED" in text
+    assert 'PASSWORD_SENTINEL="NP"' in text
+    assert '--password "$PASSWORD_SENTINEL" "$ACCOUNT"' in text
+    assert '/usr/sbin/usermod --lock "$ACCOUNT"' not in text
+    assert '/usr/sbin/usermod' not in text
+    assert '[[ "$PASSWORD_FIELD" == "$PASSWORD_SENTINEL" ]]' in text
+    assert "ACCOUNT_PASSWORD_SENTINEL_CONFLICT" in text
+    assert "ACCOUNT_POSTCHECK_PASSWORD_SENTINEL" in text
     assert "ACCOUNT_POSTCHECK_HOME_WRITABLE" in text
     assert "printf '%s\\n' 'CI_CONTROL_PATH_SETUP=READY'" in text
 
