@@ -35,10 +35,35 @@ function Require-Command([string]$Name) {
 }
 
 function Invoke-CheckedQuiet([string]$Exe, [string[]]$ArgumentList, [string]$Reason) {
-    & $Exe @ArgumentList *> $null
-    if ($LASTEXITCODE -ne 0) {
+    $savedErrorActionPreference = $ErrorActionPreference
+    $exitCode = 999
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @ArgumentList *> $null
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if ($exitCode -ne 0) {
         Stop-Stage $Reason
     }
+}
+
+function Invoke-CapturedNative([string]$Exe, [string[]]$ArgumentList, [string]$Reason) {
+    $savedErrorActionPreference = $ErrorActionPreference
+    $output = @()
+    $exitCode = 999
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& $Exe @ArgumentList 2>$null)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if ($exitCode -ne 0) {
+        Stop-Stage $Reason
+    }
+    return $output
 }
 
 function Set-RepoSecret([string]$Name, [string]$Value) {
@@ -159,10 +184,8 @@ fi
 printf 'REMOTE_PRECHECK=PASS head=%s ci_setup=%s\n' "$HEAD" "$CI_SETUP"
 '@
 
-$preflightOutput = & $script:SshExe @sshBase "$OperatorUser@$ProductionHost" $remotePreflight 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Stop-Stage 'REMOTE_PRECHECK_FAILED'
-}
+$preflightArgs = @($sshBase) + @("$OperatorUser@$ProductionHost", $remotePreflight)
+$preflightOutput = @(Invoke-CapturedNative $script:SshExe $preflightArgs 'REMOTE_PRECHECK_FAILED')
 $preflightLine = @($preflightOutput | Where-Object { $_ -like 'REMOTE_PRECHECK=PASS*' })
 if ($preflightLine.Count -ne 1) {
     Stop-Stage 'REMOTE_PRECHECK_RESPONSE_INVALID'
@@ -256,8 +279,9 @@ sudo -n "$REPO/packaging/oracle/install-technocore-ci-control-proof.sh" "$PUB"
 printf 'REMOTE_SETUP=READY\n'
 '@
 $remoteApply = $remoteApplyTemplate.Replace('__TARGET__', $ExpectedMainSha).Replace('__PUB__', $remotePublic)
-$applyOutput = & $script:SshExe @sshBase "$OperatorUser@$ProductionHost" $remoteApply 2>$null
-if ($LASTEXITCODE -ne 0 -or -not (@($applyOutput) -contains 'REMOTE_SETUP=READY')) {
+$applyArgs = @($sshBase) + @("$OperatorUser@$ProductionHost", $remoteApply)
+$applyOutput = @(Invoke-CapturedNative $script:SshExe $applyArgs 'REMOTE_SETUP_FAILED')
+if (-not ($applyOutput -contains 'REMOTE_SETUP=READY')) {
     Stop-Stage 'REMOTE_SETUP_FAILED'
 }
 Write-Host 'production_setup=READY'
@@ -277,10 +301,7 @@ $ciSshArgs = @(
     "technocore-ci@$ProductionHost",
     "bootstrap $bootstrapNonce"
 )
-$bootstrapJson = (& $script:SshExe @ciSshArgs 2>$null) -join "`n"
-if ($LASTEXITCODE -ne 0) {
-    Stop-Stage 'LOCAL_BOOTSTRAP_PROOF_FAILED'
-}
+$bootstrapJson = (Invoke-CapturedNative $script:SshExe $ciSshArgs 'LOCAL_BOOTSTRAP_PROOF_FAILED') -join "`n"
 try {
     $bootstrap = $bootstrapJson | ConvertFrom-Json
 } catch {
@@ -411,10 +432,8 @@ printf 'PROTECTED_SERVICES_UNCHANGED=YES\n'
 printf 'POST_DEPLOY_ACTIVATION=PASS\n'
 '@
 $remoteActivation = $remoteActivationTemplate.Replace('__TARGET__', $ExpectedMainSha)
-$activationOutput = & $script:SshExe @sshBase "$OperatorUser@$ProductionHost" $remoteActivation 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Stop-Stage 'POST_DEPLOY_ACTIVATION_FAILED'
-}
+$activationArgs = @($sshBase) + @("$OperatorUser@$ProductionHost", $remoteActivation)
+$activationOutput = @(Invoke-CapturedNative $script:SshExe $activationArgs 'POST_DEPLOY_ACTIVATION_FAILED')
 $activationLines = @($activationOutput)
 foreach ($requiredMarker in @(
     'PRECONTEST_SUPERVISOR_REFRESH=PASS',
