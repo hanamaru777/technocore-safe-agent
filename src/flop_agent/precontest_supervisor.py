@@ -19,6 +19,7 @@ from . import (
     precontest_active_learning_proof,
     precontest_batch_rehearsal_proof,
     precontest_candidate_discovery,
+    precontest_candidate_review,
     precontest_challenge,
     precontest_control_path_proof,
     precontest_deadline_proof,
@@ -254,9 +255,11 @@ def _candidate_summary(*, now: datetime) -> tuple[list[dict], str | None]:
     try:
         state = precontest_candidate_discovery.refresh_from_ledger(now=now)
         rows = precontest_candidate_discovery.unregistered_candidates(state)
+        packets = precontest_candidate_review.ensure_for_unregistered(state, now=now)
+        packet_by_repo = {row["repo_name"]: row for row in packets}
     except Exception as error:
         reason = str(error)
-        if not reason.startswith("precontest_candidate_"):
+        if not reason.startswith(("precontest_candidate_", "precontest_review_")):
             reason = "precontest_candidate_discovery_failed"
         return [], reason
     return [
@@ -264,6 +267,8 @@ def _candidate_summary(*, now: datetime) -> tuple[list[dict], str | None]:
             "repo_name": row["repo_name"],
             "first_seen_at": row["first_seen_at"],
             "last_seen_at": row["last_seen_at"],
+            "review_status": packet_by_repo[row["repo_name"]]["status"],
+            "review_packet_sha256": packet_by_repo[row["repo_name"]]["packet_sha256"],
         }
         for row in rows
     ], None
