@@ -48,9 +48,9 @@ def test_windows_ps51_ci_proves_success_stderr_and_nonzero_fail_closed():
 
     assert "Prove Windows PowerShell 5.1 benign native stderr handling" in workflow
     assert "$node.Name -eq 'Invoke-CapturedNative'" in workflow
-    assert "benign-stderr 1>&2" in workflow
-    assert "exit /b 0" in workflow
-    assert "expected-failure-stderr 1>&2" in workflow
-    assert "exit /b 23" in workflow
+    assert "[Console]::Error.WriteLine('benign-stderr')" in workflow
+    assert "exit 0" in workflow
+    assert "[Console]::Error.WriteLine('expected-failure-stderr')" in workflow
+    assert "exit 23" in workflow
     assert "STOP_NONZERO_EXIT" in workflow
     assert "WINDOWS_PS51_NATIVE_STDERR_HANDLING=PASS" in workflow
