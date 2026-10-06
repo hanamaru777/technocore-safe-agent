@@ -23,6 +23,7 @@ for _name in dir(_core):
 
 _BASE_EXTRACT_FACTS = _core._extract_facts
 _BASE_SCAN_OFFICIAL_SOURCES = _core.scan_official_sources
+_BASE_NETWORK_FETCH = _core._network_fetch
 _NEW_SOURCE_NAMES = frozenset({"testnet", "airdrop"})
 
 _TESTNET_SOURCE = SourceSpec(
@@ -187,7 +188,7 @@ def _extract_testnet(text: str, source: SourceSpec) -> list[dict]:
         )
 
     faucet = re.search(
-        r"(?:test-token faucet|draw from the faucet|access to the test-token faucet)",
+        r"(?:\bfaucet\b|test-token faucet|draw from the faucet|access to the test-token faucet)",
         text,
         re.IGNORECASE,
     )
@@ -357,6 +358,16 @@ def _extract_facts(spec: SourceSpec, body: str) -> tuple[str, list[dict], list[d
 _core._extract_facts = _extract_facts
 
 
+def _network_fetch(spec: SourceSpec) -> FetchResult:
+    """Preserve legacy monkeypatch semantics for the public module surface."""
+    original_stream_read = _core._stream_read
+    try:
+        _core._stream_read = globals()["_stream_read"]
+        return _BASE_NETWORK_FETCH(spec)
+    finally:
+        _core._stream_read = original_stream_read
+
+
 def scan_official_sources(
     *,
     fetcher: Callable[[SourceSpec], FetchResult] | None = None,
@@ -386,4 +397,5 @@ def scan_official_sources(
 # Export the enhanced functions from this public module while the existing core
 # implementation keeps using the patched extractor/source registry internally.
 globals()["_extract_facts"] = _extract_facts
+globals()["_network_fetch"] = _network_fetch
 globals()["scan_official_sources"] = scan_official_sources
