@@ -73,6 +73,59 @@ jobs:
           }
           Write-Host 'WINDOWS_PS51_REMOTE_SHELL_LF_REGRESSION=PASS'
 
+      - name: Prove Windows PowerShell 5.1 native argv forwarding
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
+          }
+          $bootstrapPath = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\bootstrap-technocore-ci-readonly-path.ps1'
+          $tokens = $null
+          $parseErrors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            $bootstrapPath,
+            [ref]$tokens,
+            [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) {
+            throw 'bootstrap PowerShell parse failed'
+          }
+          $wrapper = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Invoke-CheckedQuiet'
+          }, $true)
+          if ($null -eq $wrapper) {
+            throw 'Invoke-CheckedQuiet function missing'
+          }
+          function Stop-Stage([string]$Reason) {
+            throw "STOP_$Reason"
+          }
+          Invoke-Expression $wrapper.Extent.Text
+          $probe = Join-Path $env:RUNNER_TEMP 'technocore-native-argv-probe.ps1'
+          @'
+          param(
+            [string]$First,
+            [string]$Second,
+            [string]$Third
+          )
+          if ($First -ne 'alpha') { exit 41 }
+          if ($Second -ne 'beta gamma') { exit 42 }
+          if ($Third -ne 'delta') { exit 43 }
+          exit 0
+          '@ | Set-Content -LiteralPath $probe -Encoding ASCII
+          $powershellExe = (Get-Command powershell.exe).Source
+          Invoke-CheckedQuiet $powershellExe @(
+            '-NoProfile',
+            '-NonInteractive',
+            '-File', $probe,
+            'alpha',
+            'beta gamma',
+            'delta'
+          ) 'NATIVE_ARGV_FORWARDING'
+          Write-Host 'WINDOWS_PS51_NATIVE_ARGV_FORWARDING=PASS'
+
       - name: Prove Windows PowerShell 5.1 non-interactive key generation
         shell: powershell
         run: |
