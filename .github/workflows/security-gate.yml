@@ -55,6 +55,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prove bootstrap remote shell source is LF-only
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
+          }
+          $bootstrapPath = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\bootstrap-technocore-ci-readonly-path.ps1'
+          $bootstrapBytes = [IO.File]::ReadAllBytes($bootstrapPath)
+          if ($bootstrapBytes -contains [byte]13) {
+            throw 'bootstrap contains CR bytes; remote Bash payload is not LF-only'
+          }
+          $bootstrapText = [IO.File]::ReadAllText($bootstrapPath)
+          if ($bootstrapText -notmatch 'set -euo pipefail') {
+            throw 'remote Bash preflight marker missing'
+          }
+          Write-Host 'WINDOWS_PS51_REMOTE_SHELL_LF_REGRESSION=PASS'
+
       - name: Prove Windows PowerShell 5.1 non-interactive key generation
         shell: powershell
         run: |
