@@ -92,6 +92,11 @@ def _precontest_blocker() -> str | None:
         return "次回キャンペーン準備状態を確認できません"
     if not isinstance(value, dict) or value.get("schema_version") != precontest_supervisor.SCHEMA_VERSION:
         return "次回キャンペーン準備状態を確認できません"
+    if value.get("candidate_discovery_status") == "error":
+        return "新しい公式challenge候補の検知状態を確認できません"
+    count = value.get("unregistered_candidate_count", 0)
+    if isinstance(count, int) and count > 0:
+        return "新しい公式challenge候補のルール固定・spec登録が未完了"
     status = value.get("status")
     labels = {
         "BLOCKED_LIVE": "開始済みキャンペーンの実行準備が未完了",
