@@ -19,13 +19,13 @@ fail() {
   exit "${2:-1}"
 }
 
-[[ "${EUID:-$(id -u)}" -eq 0 ]] || fail "ROOT_REQUIRED" 10
+[[ "${EUID:-$(/usr/bin/id -u)}" -eq 0 ]] || fail "ROOT_REQUIRED" 10
 [[ "$#" -eq 1 ]] || fail "USAGE_PUBLIC_KEY_FILE" 11
 PUBLIC_KEY_FILE="$1"
 
 [[ -f "$PUBLIC_KEY_FILE" && ! -L "$PUBLIC_KEY_FILE" ]] || fail "PUBLIC_KEY_FILE_INVALID" 12
 [[ -s "$PUBLIC_KEY_FILE" ]] || fail "PUBLIC_KEY_FILE_EMPTY" 13
-[[ "$(wc -c < "$PUBLIC_KEY_FILE")" -le 1024 ]] || fail "PUBLIC_KEY_FILE_TOO_LARGE" 14
+[[ "$(/usr/bin/wc -c < "$PUBLIC_KEY_FILE")" -le 1024 ]] || fail "PUBLIC_KEY_FILE_TOO_LARGE" 14
 
 mapfile -t KEY_LINES < "$PUBLIC_KEY_FILE"
 [[ "${#KEY_LINES[@]}" -eq 1 ]] || fail "PUBLIC_KEY_NOT_SINGLE_LINE" 15
@@ -35,15 +35,18 @@ read -r KEY_TYPE KEY_BLOB KEY_COMMENT <<< "$KEY_LINE"
 [[ -n "${KEY_BLOB:-}" ]] || fail "PUBLIC_KEY_BLOB_MISSING" 17
 [[ "$KEY_BLOB" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] || fail "PUBLIC_KEY_BLOB_INVALID" 18
 
-for required in /usr/bin/getent /usr/sbin/useradd /usr/sbin/usermod /usr/bin/install /usr/bin/cmp /usr/bin/ssh-keygen /usr/sbin/visudo "$SYSTEMCTL"; do
+for required in \
+  /usr/bin/getent /usr/bin/id /usr/bin/install /usr/bin/cmp /usr/bin/ssh-keygen \
+  /usr/bin/stat /usr/bin/wc /usr/bin/mktemp /usr/bin/rm \
+  /usr/sbin/useradd /usr/sbin/usermod /usr/sbin/visudo "$SYSTEMCTL"; do
   [[ -x "$required" ]] || fail "REQUIRED_BINARY_MISSING" 19
 done
 
 [[ -f "$SOURCE_WRAPPER" && ! -L "$SOURCE_WRAPPER" ]] || fail "SOURCE_WRAPPER_INVALID" 20
-[[ "$(stat -c '%U:%G' "$SOURCE_WRAPPER")" == "root:root" ]] || fail "SOURCE_WRAPPER_OWNER_INVALID" 21
+[[ "$(/usr/bin/stat -c '%U:%G' "$SOURCE_WRAPPER")" == "root:root" ]] || fail "SOURCE_WRAPPER_OWNER_INVALID" 21
 
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_DIR="$(/usr/bin/mktemp -d)"
+trap '/usr/bin/rm -rf "$TMP_DIR"' EXIT
 CANONICAL_KEY="$TMP_DIR/key.pub"
 EXPECTED_AUTH="$TMP_DIR/authorized_keys"
 EXPECTED_SUDOERS="$TMP_DIR/sudoers"
@@ -62,33 +65,53 @@ printf '%s\n' \
 # Preflight every existing object before the first mutation. Exact matches are
 # accepted for idempotence; any conflicting state fails closed.
 ACCOUNT_EXISTS=0
+ACCOUNT_UID=""
+ACCOUNT_GID=""
 if /usr/bin/getent passwd "$ACCOUNT" >/dev/null; then
   ACCOUNT_EXISTS=1
   PASSWD_ROW="$(/usr/bin/getent passwd "$ACCOUNT")"
-  IFS=: read -r _ _ _ _ _ EXISTING_HOME EXISTING_SHELL <<< "$PASSWD_ROW"
+  IFS=: read -r _ _ ACCOUNT_UID ACCOUNT_GID _ EXISTING_HOME EXISTING_SHELL <<< "$PASSWD_ROW"
   [[ "$EXISTING_HOME" == "$HOME_DIR" ]] || fail "ACCOUNT_HOME_CONFLICT" 30
   [[ "$EXISTING_SHELL" == "$SHELL_PATH" ]] || fail "ACCOUNT_SHELL_CONFLICT" 31
+  [[ -d "$HOME_DIR" && ! -L "$HOME_DIR" ]] || fail "ACCOUNT_HOME_PATH_CONFLICT" 32
+  [[ "$(/usr/bin/stat -c '%u:%g' "$HOME_DIR")" == "$ACCOUNT_UID:$ACCOUNT_GID" ]] || fail "ACCOUNT_HOME_OWNER_CONFLICT" 33
+
+  SHADOW_ROW="$(/usr/bin/getent shadow "$ACCOUNT")" || fail "ACCOUNT_SHADOW_MISSING" 34
+  IFS=: read -r _ PASSWORD_FIELD _ <<< "$SHADOW_ROW"
+  [[ "$PASSWORD_FIELD" == '!'* || "$PASSWORD_FIELD" == '*'* ]] || fail "ACCOUNT_PASSWORD_NOT_LOCKED" 35
 else
-  [[ ! -e "$HOME_DIR" && ! -L "$HOME_DIR" ]] || fail "HOME_EXISTS_WITHOUT_ACCOUNT" 32
+  [[ ! -e "$HOME_DIR" && ! -L "$HOME_DIR" ]] || fail "HOME_EXISTS_WITHOUT_ACCOUNT" 36
+fi
+
+if [[ -e "$WRAPPER_DIR" || -L "$WRAPPER_DIR" ]]; then
+  [[ -d "$WRAPPER_DIR" && ! -L "$WRAPPER_DIR" ]] || fail "WRAPPER_DIR_CONFLICT" 37
+  [[ "$(/usr/bin/stat -c '%u:%g:%a' "$WRAPPER_DIR")" == "0:0:755" ]] || fail "WRAPPER_DIR_METADATA_CONFLICT" 38
 fi
 
 if [[ -e "$INSTALLED_WRAPPER" || -L "$INSTALLED_WRAPPER" ]]; then
-  [[ -f "$INSTALLED_WRAPPER" && ! -L "$INSTALLED_WRAPPER" ]] || fail "WRAPPER_PATH_CONFLICT" 33
-  /usr/bin/cmp -s "$SOURCE_WRAPPER" "$INSTALLED_WRAPPER" || fail "WRAPPER_CONTENT_CONFLICT" 34
-  [[ "$(stat -c '%u:%g:%a' "$INSTALLED_WRAPPER")" == "0:0:755" ]] || fail "WRAPPER_METADATA_CONFLICT" 35
+  [[ -f "$INSTALLED_WRAPPER" && ! -L "$INSTALLED_WRAPPER" ]] || fail "WRAPPER_PATH_CONFLICT" 39
+  /usr/bin/cmp -s "$SOURCE_WRAPPER" "$INSTALLED_WRAPPER" || fail "WRAPPER_CONTENT_CONFLICT" 40
+  [[ "$(/usr/bin/stat -c '%u:%g:%a' "$INSTALLED_WRAPPER")" == "0:0:755" ]] || fail "WRAPPER_METADATA_CONFLICT" 41
+fi
+
+if [[ -e "$SSH_DIR" || -L "$SSH_DIR" ]]; then
+  [[ "$ACCOUNT_EXISTS" -eq 1 ]] || fail "SSH_DIR_WITHOUT_ACCOUNT" 42
+  [[ -d "$SSH_DIR" && ! -L "$SSH_DIR" ]] || fail "SSH_DIR_PATH_CONFLICT" 43
+  [[ "$(/usr/bin/stat -c '%u:%g:%a' "$SSH_DIR")" == "$ACCOUNT_UID:$ACCOUNT_GID:700" ]] || fail "SSH_DIR_METADATA_CONFLICT" 44
 fi
 
 if [[ -e "$AUTHORIZED_KEYS" || -L "$AUTHORIZED_KEYS" ]]; then
-  [[ "$ACCOUNT_EXISTS" -eq 1 ]] || fail "AUTHORIZED_KEYS_WITHOUT_ACCOUNT" 36
-  [[ -f "$AUTHORIZED_KEYS" && ! -L "$AUTHORIZED_KEYS" ]] || fail "AUTHORIZED_KEYS_PATH_CONFLICT" 37
-  /usr/bin/cmp -s "$EXPECTED_AUTH" "$AUTHORIZED_KEYS" || fail "AUTHORIZED_KEYS_CONTENT_CONFLICT" 38
+  [[ "$ACCOUNT_EXISTS" -eq 1 ]] || fail "AUTHORIZED_KEYS_WITHOUT_ACCOUNT" 45
+  [[ -f "$AUTHORIZED_KEYS" && ! -L "$AUTHORIZED_KEYS" ]] || fail "AUTHORIZED_KEYS_PATH_CONFLICT" 46
+  /usr/bin/cmp -s "$EXPECTED_AUTH" "$AUTHORIZED_KEYS" || fail "AUTHORIZED_KEYS_CONTENT_CONFLICT" 47
+  [[ "$(/usr/bin/stat -c '%u:%g:%a' "$AUTHORIZED_KEYS")" == "$ACCOUNT_UID:$ACCOUNT_GID:600" ]] || fail "AUTHORIZED_KEYS_METADATA_CONFLICT" 48
 fi
 
 if [[ -e "$SUDOERS_FILE" || -L "$SUDOERS_FILE" ]]; then
-  [[ -f "$SUDOERS_FILE" && ! -L "$SUDOERS_FILE" ]] || fail "SUDOERS_PATH_CONFLICT" 39
-  /usr/bin/cmp -s "$EXPECTED_SUDOERS" "$SUDOERS_FILE" || fail "SUDOERS_CONTENT_CONFLICT" 40
-  [[ "$(stat -c '%u:%g:%a' "$SUDOERS_FILE")" == "0:0:440" ]] || fail "SUDOERS_METADATA_CONFLICT" 41
-  /usr/sbin/visudo -cf "$SUDOERS_FILE" >/dev/null || fail "SUDOERS_EXISTING_INVALID" 42
+  [[ -f "$SUDOERS_FILE" && ! -L "$SUDOERS_FILE" ]] || fail "SUDOERS_PATH_CONFLICT" 49
+  /usr/bin/cmp -s "$EXPECTED_SUDOERS" "$SUDOERS_FILE" || fail "SUDOERS_CONTENT_CONFLICT" 50
+  [[ "$(/usr/bin/stat -c '%u:%g:%a' "$SUDOERS_FILE")" == "0:0:440" ]] || fail "SUDOERS_METADATA_CONFLICT" 51
+  /usr/sbin/visudo -cf "$SUDOERS_FILE" >/dev/null || fail "SUDOERS_EXISTING_INVALID" 52
 fi
 
 # Create the dedicated locked account only when absent. A real shell is needed
@@ -100,11 +123,12 @@ if [[ "$ACCOUNT_EXISTS" -eq 0 ]]; then
 fi
 
 PASSWD_ROW="$(/usr/bin/getent passwd "$ACCOUNT")"
-IFS=: read -r _ _ _ _ _ EXISTING_HOME EXISTING_SHELL <<< "$PASSWD_ROW"
-[[ "$EXISTING_HOME" == "$HOME_DIR" && "$EXISTING_SHELL" == "$SHELL_PATH" ]] || fail "ACCOUNT_POSTCHECK_INVALID" 50
-ACCOUNT_GROUP="$(id -gn "$ACCOUNT")"
-ACCOUNT_UID="$(id -u "$ACCOUNT")"
-ACCOUNT_GID="$(id -g "$ACCOUNT")"
+IFS=: read -r _ _ ACCOUNT_UID ACCOUNT_GID _ EXISTING_HOME EXISTING_SHELL <<< "$PASSWD_ROW"
+[[ "$EXISTING_HOME" == "$HOME_DIR" && "$EXISTING_SHELL" == "$SHELL_PATH" ]] || fail "ACCOUNT_POSTCHECK_INVALID" 60
+SHADOW_ROW="$(/usr/bin/getent shadow "$ACCOUNT")" || fail "ACCOUNT_POSTCHECK_SHADOW_MISSING" 61
+IFS=: read -r _ PASSWORD_FIELD _ <<< "$SHADOW_ROW"
+[[ "$PASSWORD_FIELD" == '!'* || "$PASSWORD_FIELD" == '*'* ]] || fail "ACCOUNT_POSTCHECK_PASSWORD_UNLOCKED" 62
+ACCOUNT_GROUP="$(/usr/bin/id -gn "$ACCOUNT")"
 
 /usr/bin/install -d -o root -g root -m 0755 "$WRAPPER_DIR"
 if [[ ! -e "$INSTALLED_WRAPPER" ]]; then
@@ -119,20 +143,20 @@ if [[ ! -e "$SUDOERS_FILE" ]]; then
 fi
 
 # Exact postconditions. Do not start/restart/enable any service here.
-[[ -f "$INSTALLED_WRAPPER" && ! -L "$INSTALLED_WRAPPER" ]] || fail "WRAPPER_POSTCHECK_INVALID" 51
-/usr/bin/cmp -s "$SOURCE_WRAPPER" "$INSTALLED_WRAPPER" || fail "WRAPPER_POSTCHECK_MISMATCH" 52
-[[ "$(stat -c '%u:%g:%a' "$INSTALLED_WRAPPER")" == "0:0:755" ]] || fail "WRAPPER_POSTCHECK_METADATA" 53
+[[ -f "$INSTALLED_WRAPPER" && ! -L "$INSTALLED_WRAPPER" ]] || fail "WRAPPER_POSTCHECK_INVALID" 70
+/usr/bin/cmp -s "$SOURCE_WRAPPER" "$INSTALLED_WRAPPER" || fail "WRAPPER_POSTCHECK_MISMATCH" 71
+[[ "$(/usr/bin/stat -c '%u:%g:%a' "$INSTALLED_WRAPPER")" == "0:0:755" ]] || fail "WRAPPER_POSTCHECK_METADATA" 72
 
-[[ -d "$SSH_DIR" && ! -L "$SSH_DIR" ]] || fail "SSH_DIR_POSTCHECK_INVALID" 54
-[[ "$(stat -c '%u:%g:%a' "$SSH_DIR")" == "$ACCOUNT_UID:$ACCOUNT_GID:700" ]] || fail "SSH_DIR_POSTCHECK_METADATA" 55
-[[ -f "$AUTHORIZED_KEYS" && ! -L "$AUTHORIZED_KEYS" ]] || fail "AUTHORIZED_KEYS_POSTCHECK_INVALID" 56
-/usr/bin/cmp -s "$EXPECTED_AUTH" "$AUTHORIZED_KEYS" || fail "AUTHORIZED_KEYS_POSTCHECK_MISMATCH" 57
-[[ "$(stat -c '%u:%g:%a' "$AUTHORIZED_KEYS")" == "$ACCOUNT_UID:$ACCOUNT_GID:600" ]] || fail "AUTHORIZED_KEYS_POSTCHECK_METADATA" 58
+[[ -d "$SSH_DIR" && ! -L "$SSH_DIR" ]] || fail "SSH_DIR_POSTCHECK_INVALID" 73
+[[ "$(/usr/bin/stat -c '%u:%g:%a' "$SSH_DIR")" == "$ACCOUNT_UID:$ACCOUNT_GID:700" ]] || fail "SSH_DIR_POSTCHECK_METADATA" 74
+[[ -f "$AUTHORIZED_KEYS" && ! -L "$AUTHORIZED_KEYS" ]] || fail "AUTHORIZED_KEYS_POSTCHECK_INVALID" 75
+/usr/bin/cmp -s "$EXPECTED_AUTH" "$AUTHORIZED_KEYS" || fail "AUTHORIZED_KEYS_POSTCHECK_MISMATCH" 76
+[[ "$(/usr/bin/stat -c '%u:%g:%a' "$AUTHORIZED_KEYS")" == "$ACCOUNT_UID:$ACCOUNT_GID:600" ]] || fail "AUTHORIZED_KEYS_POSTCHECK_METADATA" 77
 
-[[ -f "$SUDOERS_FILE" && ! -L "$SUDOERS_FILE" ]] || fail "SUDOERS_POSTCHECK_INVALID" 59
-/usr/bin/cmp -s "$EXPECTED_SUDOERS" "$SUDOERS_FILE" || fail "SUDOERS_POSTCHECK_MISMATCH" 60
-[[ "$(stat -c '%u:%g:%a' "$SUDOERS_FILE")" == "0:0:440" ]] || fail "SUDOERS_POSTCHECK_METADATA" 61
-/usr/sbin/visudo -cf "$SUDOERS_FILE" >/dev/null || fail "SUDOERS_POSTCHECK_PARSE" 62
+[[ -f "$SUDOERS_FILE" && ! -L "$SUDOERS_FILE" ]] || fail "SUDOERS_POSTCHECK_INVALID" 78
+/usr/bin/cmp -s "$EXPECTED_SUDOERS" "$SUDOERS_FILE" || fail "SUDOERS_POSTCHECK_MISMATCH" 79
+[[ "$(/usr/bin/stat -c '%u:%g:%a' "$SUDOERS_FILE")" == "0:0:440" ]] || fail "SUDOERS_POSTCHECK_METADATA" 80
+/usr/sbin/visudo -cf "$SUDOERS_FILE" >/dev/null || fail "SUDOERS_POSTCHECK_PARSE" 81
 
 printf '%s\n' 'CI_CONTROL_PATH_SETUP=READY'
 printf 'account=%s\n' "$ACCOUNT"
