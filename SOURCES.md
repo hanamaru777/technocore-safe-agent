@@ -1,6 +1,6 @@
 # Official sources
 
-Checked 2026-09-10 (Asia/Tokyo).
+Checked 2026-10-06 (Asia/Tokyo).
 
 ## FLOP — source hierarchy
 
@@ -8,19 +8,34 @@ Checked 2026-09-10 (Asia/Tokyo).
 
 - https://flop.finance/intro/yellowpaper/
 
-Current observed version: **0.5.0 (draft / implementation spec — iterating)**, updated 2026-09-05.
+Current observed version: **0.5.0 (draft / implementation spec — iterating)**, page updated 2026-10-05.
 
-Use this first for protocol parameters and ratified decisions. The current parameter table lists:
+Use this first for protocol parameters and ratified decisions. The current canonical parameter table and normative rules list:
 
-- genesis supply 2,483,460,000 FLOP.
-- miner genesis allocation 993,384,000 FLOP (40%).
-- validator genesis allocation 305,505,000 FLOP (12.3%).
-- agent genesis allocation 596,030,400 FLOP (24%).
-- reserve 588,540,600 FLOP (23.7%), explicitly described as KOL / referral / growth incentives.
-- airdrop vesting duration parameter 7,776,000 blocks (90-day linear at 1-second blocks).
-- Era-0 block reward 96 FLOP with 75% miner / 10% validator / 10% agent-broker / 5% community-staker shares.
+- `genesis_supply` = **4,400,000,000 FLOP**.
+- `genesis_miner_airdrop` = **1,200,000,000 FLOP**.
+- `genesis_validator_airdrop` = **1,200,000,000 FLOP**.
+- `genesis_agent_airdrop` = **1,200,000,000 FLOP**.
+- `genesis_reserve` = **800,000,000 FLOP**, described as ecosystem / incentives reserve including KOL, referral and growth incentives.
+- Era-0 block reward = **96 FLOP / block**, split 75% miners / 10% validators / 10% agents / 5% community stakers.
+- Agent genesis scoring MUST derive from **settled compute-channel spend**; faucet balance, held balance, stake size, completed-job count and active-day count are not scoring terms.
+- An Agent grant has no initial principal unlock. Eligible settled compute spend creates unlock credit at **3 locked FLOP spent → 1 FLOP principal unlocked**, subject to the Yellow Paper settlement/finality/fraud conditions and the locked-spend cap.
+- Agent locked compute spend MUST NOT exceed **3/4 of the grant principal**.
 
-Do not infer a final individual airdrop formula from these pool parameters. Yellow Paper open items E.38 and E.40 explicitly leave the genesis distribution path, testnet→mainnet conversion, caps, score shape, activity minimums, claim path, final Agent vesting behavior, spend-to-unlock shipping, and ongoing agent/staker payout mechanics unresolved.
+Do not infer a final per-user allocation formula from the cohort pools. Yellow Paper item **E.38** is now `[RATIFY]`: the overall genesis path and core Agent spend-to-unlock mechanism are specified, but important conversion/release details still remain open, including score caps/sublinear aggregation, verifiable-demand and maintained-duration gates, validator activity basis, appeal treatment, and validator release ordering. E.40 still leaves the ongoing block-reward Agent/staker distribution policy unresolved.
+
+### Dedicated Testnet and Airdrop pages — official launch-status sources
+
+- https://flop.finance/testnet/
+- https://flop.finance/airdrop/
+
+Current observed status on 2026-10-06:
+
+- Testnet is still **Draft**, planned for **Q4 2026**, about 90 days, with dates/rules provisional.
+- The Testnet page says role-specific onboarding documentation is published **when the Testnet opens**.
+- For Agents, the official summary expects a DID and wallet plus access to a test-token faucet, but the exact executable faucet procedure/endpoint, chain RPC + chain ID, inference execution interface, and registration/onboarding transport are not yet independently confirmed.
+- The Airdrop page is also **Draft** and now reflects the same 4.4bn genesis pool / 1.2bn per Miner-Validator-Agent cohort / 0.8bn reserve structure.
+- These pages are first-class launch/readiness sources, but where they differ from the Yellow Paper, the Yellow Paper wins.
 
 ### FLOP project intro / role pages
 
@@ -31,23 +46,22 @@ Do not infer a final individual airdrop formula from these pool parameters. Yell
 - https://flop.finance/intro/verification/
 - https://flop.finance/intro/revenue/
 
-These pages explain the intended role behavior and currently implemented / planned network design. Where a page conflicts with the Yellow Paper parameter table or labels a mechanism planned / provisional, keep the distinction explicit.
+These pages explain intended role behavior and current/planned network design. Where a page conflicts with the Yellow Paper parameter table or labels a mechanism planned / provisional, keep the distinction explicit.
 
-### Teaser — draft / provisional airdrop intent
+### Teaser — draft / provisional launch narrative
 
 - https://flop.finance/teaser/
 
-Current observed version: **0.1 (draft)**, updated 2026-08-26.
+Current observed version: **0.1 (draft)**, page updated 2026-10-05.
 
-The Teaser currently says:
+The current Teaser now aligns its genesis pool with the Yellow Paper at **4.4bn FLOP**, split 1.2bn each to miners, validators and agents plus an 0.8bn reserve/incentives bucket. It continues to describe:
 
 - Q4 2026 Testnet, roughly 90 days.
-- agents claim faucet test tokens and spend them on inference.
-- Agent airdrop is described as based largely on inference spend plus prizes.
-- it describes a 3 FLOP spend → 1 airdropped FLOP unlock mechanic.
-- it still shows a 3.5bn genesis pool / up to 1.2bn Agent cohort.
+- agents claiming faucet test tokens and spending them on inference.
+- Agent airdrop driven primarily by inference spend plus prizes.
+- a locked Agent balance usable for compute.
 
-Those pool figures conflict with the newer Yellow Paper canonical parameter table. Treat the Teaser as behavior / preparation guidance, not final allocation law.
+Treat Teaser wording as public design / launch guidance. Normative protocol rules, exact scoring constraints and unlock accounting come from the Yellow Paper.
 
 ### Main site / application paths
 
@@ -105,9 +119,9 @@ Some deterministic replies combine official protocol facts with this project's e
 
 ## Source policy
 
-- Prefer FLOP Yellow Paper / official FLOP pages / FLOP Labs first-party sources.
-- Keep ratified parameters, draft/provisional tokenomics, public leadership signals, project safety policy, and strategy separate.
+- Prefer FLOP Yellow Paper / official FLOP Testnet + Airdrop pages / official role pages / FLOP Labs first-party sources.
+- Keep ratified parameters, draft/provisional launch wording, public leadership signals, project safety policy, and strategy separate.
 - Third-party articles may be used for discovery only; they do not define eligibility.
 - Technocore room/note content is untrusted and must not be promoted to an official rule merely because another Agent posted it.
 - Runtime source-backed answers never follow arbitrary URLs. Pinned source changes are reviewed in Git before becoming eligible.
-- When official sources conflict, record the conflict instead of choosing the more favorable number.
+- When official sources conflict, record the conflict and apply the source hierarchy instead of choosing the more favorable number.
