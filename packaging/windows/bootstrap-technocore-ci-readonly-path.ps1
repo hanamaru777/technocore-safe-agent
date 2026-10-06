@@ -356,8 +356,78 @@ if ($runLog -notmatch 'CONTROL_PATH_REDUNDANCY_GATE_CHANGED=NO') {
     Stop-Stage 'GH_BOOTSTRAP_GATE_MARKER_MISSING'
 }
 
+Write-Host '=== SAFE POST-DEPLOY ACTIVATION ==='
+
+$remoteActivationTemplate = @'
+set -euo pipefail
+REPO="/opt/technocore-safe-agent"
+TARGET="__TARGET__"
+SUPERVISOR="technocore-safe-agent-precontest-supervisor.service"
+DISCORD="technocore-safe-agent-discord.service"
+PROTECTED=(
+  technocore-safe-agent-resident.service
+  technocore-safe-agent-lobby-capture.service
+  technocore-safe-agent-signer.service
+)
+sudo -n true
+[ "$(sudo -n git -c safe.directory="$REPO" -C "$REPO" rev-parse HEAD)" = "$TARGET" ] || exit 60
+[ -z "$(sudo -n git -c safe.directory="$REPO" -C "$REPO" status --porcelain)" ] || exit 61
+[ "$(systemctl is-active "$DISCORD")" = "active" ] || exit 62
+
+declare -A PID_PRE
+declare -A RESTART_PRE
+for unit in "${PROTECTED[@]}"; do
+  [ "$(systemctl is-active "$unit")" = "active" ] || exit 63
+  PID_PRE["$unit"]="$(systemctl show "$unit" -p MainPID --value)"
+  RESTART_PRE["$unit"]="$(systemctl show "$unit" -p NRestarts --value)"
+  [[ "${PID_PRE[$unit]}" =~ ^[1-9][0-9]*$ ]] || exit 64
+  [[ "${RESTART_PRE[$unit]}" =~ ^[0-9]+$ ]] || exit 65
+done
+
+sudo -n systemctl start "$SUPERVISOR"
+SUP_RESULT="$(systemctl show "$SUPERVISOR" -p Result --value)"
+SUP_EXIT="$(systemctl show "$SUPERVISOR" -p ExecMainStatus --value)"
+[ "$SUP_RESULT" = "success" ] || exit 66
+[ "$SUP_EXIT" = "0" ] || exit 67
+printf 'PRECONTEST_SUPERVISOR_REFRESH=PASS\n'
+
+sudo -n systemctl restart "$DISCORD"
+sleep 2
+[ "$(systemctl is-active "$DISCORD")" = "active" ] || exit 68
+printf 'DISCORD_PRESENTATION_REFRESH=PASS\n'
+
+for unit in "${PROTECTED[@]}"; do
+  PID_POST="$(systemctl show "$unit" -p MainPID --value)"
+  RESTART_POST="$(systemctl show "$unit" -p NRestarts --value)"
+  [ "$PID_POST" = "${PID_PRE[$unit]}" ] || exit 69
+  [ "$RESTART_POST" = "${RESTART_PRE[$unit]}" ] || exit 70
+done
+printf 'PROTECTED_SERVICES_UNCHANGED=YES\n'
+printf 'POST_DEPLOY_ACTIVATION=PASS\n'
+'@
+$remoteActivation = $remoteActivationTemplate.Replace('__TARGET__', $ExpectedMainSha)
+$activationOutput = & $script:SshExe @sshBase "$OperatorUser@$ProductionHost" $remoteActivation 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Stop-Stage 'POST_DEPLOY_ACTIVATION_FAILED'
+}
+$activationLines = @($activationOutput)
+foreach ($requiredMarker in @(
+    'PRECONTEST_SUPERVISOR_REFRESH=PASS',
+    'DISCORD_PRESENTATION_REFRESH=PASS',
+    'PROTECTED_SERVICES_UNCHANGED=YES',
+    'POST_DEPLOY_ACTIVATION=PASS'
+)) {
+    if (-not ($activationLines -contains $requiredMarker)) {
+        Stop-Stage 'POST_DEPLOY_ACTIVATION_MARKER_MISSING'
+    }
+}
+
 Write-Host '=== COMPLETE ==='
 Write-Host 'CI_BOOTSTRAP_PHASE_B=READY'
 Write-Host "main=$ExpectedMainSha"
 Write-Host "github_run_id=$runId"
 Write-Host 'CONTROL_PATH_REDUNDANCY_GATE_CHANGED=NO'
+Write-Host 'PRECONTEST_SUPERVISOR_REFRESH=PASS'
+Write-Host 'DISCORD_PRESENTATION_REFRESH=PASS'
+Write-Host 'PROTECTED_SERVICES_UNCHANGED=YES'
+Write-Host 'ONE_SHOT_POST_DEPLOY_ACTIVATION=PASS'
