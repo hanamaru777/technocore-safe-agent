@@ -34,8 +34,8 @@ function Require-Command([string]$Name) {
     return $cmd.Source
 }
 
-function Invoke-CheckedQuiet([string]$Exe, [string[]]$Args, [string]$Reason) {
-    & $Exe @Args *> $null
+function Invoke-CheckedQuiet([string]$Exe, [string[]]$ArgumentList, [string]$Reason) {
+    & $Exe @ArgumentList *> $null
     if ($LASTEXITCODE -ne 0) {
         Stop-Stage $Reason
     }
