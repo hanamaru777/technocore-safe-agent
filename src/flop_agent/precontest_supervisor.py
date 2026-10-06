@@ -18,6 +18,7 @@ from . import (
     observer,
     precontest_active_learning_proof,
     precontest_batch_rehearsal_proof,
+    precontest_candidate_discovery,
     precontest_challenge,
     precontest_control_path_proof,
     precontest_deadline_proof,
@@ -226,7 +227,12 @@ def _error_row(challenge_id: str, reason: str) -> dict:
     }
 
 
-def _overall(rows: list[dict]) -> str:
+def _overall(
+    rows: list[dict],
+    *,
+    unregistered_candidate_count: int = 0,
+    candidate_discovery_error: str | None = None,
+) -> str:
     priorities = {
         "BLOCKED_LIVE": 0,
         "ACTION_REQUIRED": 1,
@@ -235,9 +241,32 @@ def _overall(rows: list[dict]) -> str:
         "CLOSED": 4,
     }
     active = [row["status"] for row in rows if row["status"] != "CLOSED"]
+    if candidate_discovery_error:
+        active.append("ACTION_REQUIRED")
+    elif unregistered_candidate_count:
+        active.append("PREP_REQUIRED")
     if not active:
         return "IDLE"
     return min(active, key=lambda item: priorities.get(item, -1))
+
+
+def _candidate_summary(*, now: datetime) -> tuple[list[dict], str | None]:
+    try:
+        state = precontest_candidate_discovery.refresh_from_ledger(now=now)
+        rows = precontest_candidate_discovery.unregistered_candidates(state)
+    except Exception as error:
+        reason = str(error)
+        if not reason.startswith("precontest_candidate_"):
+            reason = "precontest_candidate_discovery_failed"
+        return [], reason
+    return [
+        {
+            "repo_name": row["repo_name"],
+            "first_seen_at": row["first_seen_at"],
+            "last_seen_at": row["last_seen_at"],
+        }
+        for row in rows
+    ], None
 
 
 def build_status(*, now: datetime | None = None) -> dict:
@@ -245,6 +274,7 @@ def build_status(*, now: datetime | None = None) -> dict:
     if current.tzinfo is None:
         raise ValueError("precontest_supervisor_timezone_required")
     current = current.astimezone(UTC)
+    unregistered_candidates, candidate_error = _candidate_summary(now=current)
     root = challenges_root()
     rows: list[dict] = []
     if root.exists():
@@ -274,10 +304,18 @@ def build_status(*, now: datetime | None = None) -> dict:
     return {
         "schema_version": SCHEMA_VERSION,
         "non_binding": True,
-        "status": _overall(rows),
+        "status": _overall(
+            rows,
+            unregistered_candidate_count=len(unregistered_candidates),
+            candidate_discovery_error=candidate_error,
+        ),
         "evaluated_at": current.isoformat(),
         "action_window_seconds": int(ACTION_WINDOW.total_seconds()),
         "challenge_count": len(rows),
+        "candidate_discovery_status": "error" if candidate_error else "ok",
+        "candidate_discovery_error": candidate_error,
+        "unregistered_candidate_count": len(unregistered_candidates),
+        "unregistered_candidates": unregistered_candidates,
         "challenges": rows,
     }
 
