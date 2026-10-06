@@ -156,30 +156,37 @@ jobs:
             throw "STOP_$Reason"
           }
           Invoke-Expression $capture.Extent.Text
+          $powershellExe = (Get-Command powershell.exe).Source
 
-          $successProbe = Join-Path $env:RUNNER_TEMP 'technocore-native-stderr-success.cmd'
+          $successProbe = Join-Path $env:RUNNER_TEMP 'technocore-native-stderr-success.ps1'
           @'
-          @echo off
-          echo expected-stdout
-          echo benign-stderr 1>&2
-          exit /b 0
+          [Console]::Out.WriteLine('expected-stdout')
+          [Console]::Error.WriteLine('benign-stderr')
+          exit 0
           '@ | Set-Content -LiteralPath $successProbe -Encoding ASCII
           $successOutput = @(
-            Invoke-CapturedNative $env:ComSpec @('/d', '/c', $successProbe) 'BENIGN_STDERR_SUCCESS'
+            Invoke-CapturedNative $powershellExe @(
+              '-NoProfile',
+              '-NonInteractive',
+              '-File', $successProbe
+            ) 'BENIGN_STDERR_SUCCESS'
           )
           if ($successOutput -notcontains 'expected-stdout') {
             throw 'captured stdout missing'
           }
 
-          $failureProbe = Join-Path $env:RUNNER_TEMP 'technocore-native-stderr-failure.cmd'
+          $failureProbe = Join-Path $env:RUNNER_TEMP 'technocore-native-stderr-failure.ps1'
           @'
-          @echo off
-          echo expected-failure-stderr 1>&2
-          exit /b 23
+          [Console]::Error.WriteLine('expected-failure-stderr')
+          exit 23
           '@ | Set-Content -LiteralPath $failureProbe -Encoding ASCII
           $failedClosed = $false
           try {
-            $null = Invoke-CapturedNative $env:ComSpec @('/d', '/c', $failureProbe) 'NONZERO_EXIT'
+            $null = Invoke-CapturedNative $powershellExe @(
+              '-NoProfile',
+              '-NonInteractive',
+              '-File', $failureProbe
+            ) 'NONZERO_EXIT'
           } catch {
             if ($_.Exception.Message -eq 'STOP_NONZERO_EXIT') {
               $failedClosed = $true
