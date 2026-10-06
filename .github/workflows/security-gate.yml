@@ -126,6 +126,72 @@ jobs:
           ) 'NATIVE_ARGV_FORWARDING'
           Write-Host 'WINDOWS_PS51_NATIVE_ARGV_FORWARDING=PASS'
 
+      - name: Prove Windows PowerShell 5.1 benign native stderr handling
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
+          }
+          $bootstrapPath = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\bootstrap-technocore-ci-readonly-path.ps1'
+          $tokens = $null
+          $parseErrors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            $bootstrapPath,
+            [ref]$tokens,
+            [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) {
+            throw 'bootstrap PowerShell parse failed'
+          }
+          $capture = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Invoke-CapturedNative'
+          }, $true)
+          if ($null -eq $capture) {
+            throw 'Invoke-CapturedNative function missing'
+          }
+          function Stop-Stage([string]$Reason) {
+            throw "STOP_$Reason"
+          }
+          Invoke-Expression $capture.Extent.Text
+
+          $successProbe = Join-Path $env:RUNNER_TEMP 'technocore-native-stderr-success.cmd'
+          @'
+          @echo off
+          echo expected-stdout
+          echo benign-stderr 1>&2
+          exit /b 0
+          '@ | Set-Content -LiteralPath $successProbe -Encoding ASCII
+          $successOutput = @(
+            Invoke-CapturedNative $env:ComSpec @('/d', '/c', $successProbe) 'BENIGN_STDERR_SUCCESS'
+          )
+          if ($successOutput -notcontains 'expected-stdout') {
+            throw 'captured stdout missing'
+          }
+
+          $failureProbe = Join-Path $env:RUNNER_TEMP 'technocore-native-stderr-failure.cmd'
+          @'
+          @echo off
+          echo expected-failure-stderr 1>&2
+          exit /b 23
+          '@ | Set-Content -LiteralPath $failureProbe -Encoding ASCII
+          $failedClosed = $false
+          try {
+            $null = Invoke-CapturedNative $env:ComSpec @('/d', '/c', $failureProbe) 'NONZERO_EXIT'
+          } catch {
+            if ($_.Exception.Message -eq 'STOP_NONZERO_EXIT') {
+              $failedClosed = $true
+            } else {
+              throw
+            }
+          }
+          if (-not $failedClosed) {
+            throw 'nonzero native exit did not fail closed'
+          }
+          Write-Host 'WINDOWS_PS51_NATIVE_STDERR_HANDLING=PASS'
+
       - name: Prove Windows PowerShell 5.1 non-interactive key generation
         shell: powershell
         run: |
