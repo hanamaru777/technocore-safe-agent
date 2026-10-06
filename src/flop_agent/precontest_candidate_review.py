@@ -153,7 +153,7 @@ def validate_packet(value: object, *, expected_repo: str | None = None) -> dict:
     if value.get("pushed_at") is not None:
         _parse_time(value.get("pushed_at"), label="pushed_at")
     unknowns = value.get("unknown_rules")
-    if not isinstance(unknowns, dict) or tuple(unknowns) != REQUIRED_UNKNOWN_FIELDS:
+    if not isinstance(unknowns, dict) or set(unknowns) != set(REQUIRED_UNKNOWN_FIELDS):
         raise CandidateReviewError("precontest_review_unknown_rules_invalid")
     for field in REQUIRED_UNKNOWN_FIELDS:
         row = unknowns.get(field)
