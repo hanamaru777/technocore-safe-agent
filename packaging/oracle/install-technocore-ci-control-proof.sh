@@ -13,6 +13,11 @@ SUDOERS_FILE="/etc/sudoers.d/technocore-ci-control-proof"
 SYSTEMCTL="/usr/bin/systemctl"
 EXECUTOR_UNIT="technocore-safe-agent-close1-approved-trade.service"
 SHELL_PATH="/bin/bash"
+# Linux OpenSSH rejects accounts whose shadow password begins with ! as locked,
+# even when public-key authentication is used. NP is deliberately not a valid
+# crypt(3) password hash: Unix password login cannot match it, while the account
+# remains accessible to the single restricted authorized_keys forced command.
+PASSWORD_SENTINEL="NP"
 
 fail() {
   printf 'STOP_%s\n' "$1" >&2
@@ -43,7 +48,7 @@ read -r KEY_TYPE KEY_BLOB KEY_COMMENT <<< "$KEY_LINE"
 for required in \
   /usr/bin/getent /usr/bin/id /usr/bin/install /usr/bin/cmp /usr/bin/ssh-keygen \
   /usr/bin/stat /usr/bin/wc /usr/bin/mktemp /usr/bin/rm \
-  /usr/sbin/useradd /usr/sbin/usermod /usr/sbin/visudo "$SYSTEMCTL"; do
+  /usr/sbin/useradd /usr/sbin/visudo "$SYSTEMCTL"; do
   [[ -x "$required" ]] || fail "REQUIRED_BINARY_MISSING" 19
 done
 
@@ -85,7 +90,7 @@ if /usr/bin/getent passwd "$ACCOUNT" >/dev/null; then
 
   SHADOW_ROW="$(/usr/bin/getent shadow "$ACCOUNT")" || fail "ACCOUNT_SHADOW_MISSING" 35
   IFS=: read -r _ PASSWORD_FIELD _ <<< "$SHADOW_ROW"
-  [[ "$PASSWORD_FIELD" == '!'* || "$PASSWORD_FIELD" == '*'* ]] || fail "ACCOUNT_PASSWORD_NOT_LOCKED" 36
+  [[ "$PASSWORD_FIELD" == "$PASSWORD_SENTINEL" ]] || fail "ACCOUNT_PASSWORD_SENTINEL_CONFLICT" 36
 else
   [[ ! -e "$HOME_DIR" && ! -L "$HOME_DIR" ]] || fail "HOME_EXISTS_WITHOUT_ACCOUNT" 37
 fi
@@ -121,12 +126,11 @@ if [[ -e "$SUDOERS_FILE" || -L "$SUDOERS_FILE" ]]; then
   /usr/sbin/visudo -cf "$SUDOERS_FILE" >/dev/null || fail "SUDOERS_EXISTING_INVALID" 53
 fi
 
-# Create the dedicated locked account only when absent. A real shell is needed
-# for sshd forced-command execution; generic SSH use is prevented by the sole
-# restricted authorized_keys entry below and the locked password.
+# A real shell is required for sshd forced-command execution. The invalid
+# non-crypt password sentinel blocks Unix password login without marking the
+# account locked; generic SSH use remains blocked by the sole restricted key.
 if [[ "$ACCOUNT_EXISTS" -eq 0 ]]; then
-  /usr/sbin/useradd --system --create-home --home-dir "$HOME_DIR" --shell "$SHELL_PATH" "$ACCOUNT"
-  /usr/sbin/usermod --lock "$ACCOUNT"
+  /usr/sbin/useradd --system --create-home --home-dir "$HOME_DIR" --shell "$SHELL_PATH" --password "$PASSWORD_SENTINEL" "$ACCOUNT"
 fi
 
 PASSWD_ROW="$(/usr/bin/getent passwd "$ACCOUNT")"
@@ -138,7 +142,7 @@ HOME_MODE="$(/usr/bin/stat -c '%a' "$HOME_DIR")"
 home_is_safe "$HOME_MODE" || fail "ACCOUNT_POSTCHECK_HOME_WRITABLE" 63
 SHADOW_ROW="$(/usr/bin/getent shadow "$ACCOUNT")" || fail "ACCOUNT_POSTCHECK_SHADOW_MISSING" 64
 IFS=: read -r _ PASSWORD_FIELD _ <<< "$SHADOW_ROW"
-[[ "$PASSWORD_FIELD" == '!'* || "$PASSWORD_FIELD" == '*'* ]] || fail "ACCOUNT_POSTCHECK_PASSWORD_UNLOCKED" 65
+[[ "$PASSWORD_FIELD" == "$PASSWORD_SENTINEL" ]] || fail "ACCOUNT_POSTCHECK_PASSWORD_SENTINEL" 65
 ACCOUNT_GROUP="$(/usr/bin/id -gn "$ACCOUNT")"
 
 /usr/bin/install -d -o root -g root -m 0755 "$WRAPPER_DIR"
