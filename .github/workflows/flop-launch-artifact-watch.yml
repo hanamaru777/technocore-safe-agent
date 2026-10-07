@@ -1,0 +1,129 @@
+name: FLOP launch artifact watch
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: flop-launch-artifact-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require default main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check uv
+
+      - name: Sync locked runtime dependencies
+        run: uv sync --frozen
+
+      - name: Scan official FLOP sources read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src uv run python -m flop_agent.airdrop_launch_watch > launch-watch.json
+
+      - name: Create one durable review issue per new candidate
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require("fs");
+            const report = JSON.parse(fs.readFileSync("launch-watch.json", "utf8"));
+            if (report.read_only !== true || report.health !== "ok") {
+              throw new Error("launch watch report is not healthy/read-only");
+            }
+            if (!Array.isArray(report.candidates)) {
+              throw new Error("launch watch candidates missing");
+            }
+            if (report.candidates.length === 0) {
+              core.info("FLOP_LAUNCH_WATCH=NO_CANDIDATE");
+              return;
+            }
+
+            const allIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "all",
+                per_page: 100,
+              }
+            );
+            const existingTitles = new Set(
+              allIssues
+                .filter((item) => !item.pull_request)
+                .map((item) => item.title)
+            );
+            const allowedKinds = new Set([
+              "official_status_open",
+              "official_launch_link",
+            ]);
+
+            for (const candidate of report.candidates) {
+              const fingerprint = String(candidate.fingerprint || "");
+              const kind = String(candidate.kind || "");
+              if (!/^[0-9a-f]{64}$/.test(fingerprint)) {
+                throw new Error("invalid candidate fingerprint");
+              }
+              if (!allowedKinds.has(kind)) {
+                throw new Error("invalid candidate kind");
+              }
+
+              const title =
+                `[FLOP launch watch] ${kind} ${fingerprint.slice(0, 12)}`;
+              if (existingTitles.has(title)) {
+                core.info(`FLOP_LAUNCH_WATCH=ALREADY_RECORDED ${title}`);
+                continue;
+              }
+
+              const marker = `<!-- FLOP_LAUNCH_WATCH:${fingerprint} -->`;
+              const safeJson = JSON.stringify(candidate, null, 2);
+              const body = [
+                marker,
+                "Read-only FLOP launch evidence candidate detected from current main.",
+                "",
+                "Review required before any implementation or external action.",
+                "Do **not** infer Testnet write readiness from this issue alone.",
+                "",
+                "Candidate:",
+                "~~~json",
+                safeJson,
+                "~~~",
+                "",
+                `Scan time: ${String(report.scanned_at || "unknown")}`,
+                "",
+                "Next: independently verify official authority/currentness and update #311/#765.",
+                "No registration, claim, spend, inference, wallet, signer, or other binding action is authorized by this issue.",
+              ].join("\n");
+
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+              existingTitles.add(title);
+              core.info(`FLOP_LAUNCH_WATCH=ISSUE_CREATED ${title}`);
+            }
