@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 SCRIPT = Path("packaging/oracle/prune-expired-campaign-runtime.sh")
@@ -59,3 +60,7 @@ def test_cleanup_requires_apply_and_checks_protected_pid_restart_invariants() ->
     assert "PRE_PID" in TEXT
     assert "PRE_RESTARTS" in TEXT
     assert "ORACLE_EXPIRED_CAMPAIGN_CLEANUP=PASS" in TEXT
+
+
+def test_cleanup_script_is_valid_bash() -> None:
+    subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
