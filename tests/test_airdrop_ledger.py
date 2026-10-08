@@ -516,3 +516,55 @@ def test_ledger_stored_snapshot_validation_matches_radar_schema_contract():
     ):
         with pytest.raises(RuntimeError, match="airdrop_radar_previous_snapshot_invalid"):
             airdrop_ledger._normalize_stored_snapshot(bad)
+
+
+def test_non_ascii_radar_event_id_verifies_without_rewriting_ledger(
+    isolated_state: Path,
+) -> None:
+    """Radar ID canonicalization differs from Ledger row-hash canonicalization."""
+    event = airdrop_radar._event(
+        event_type="FACT_CHANGED",
+        key="testnet_status",
+        before={"value": "準備中"},
+        after={"value": "公開中"},
+        severity="HIGH",
+    )
+    record = airdrop_ledger._append_ledger_event(event, NOW2.isoformat(), [])
+    path = isolated_state / "airdrop-radar" / "events.jsonl"
+    saved_bytes = path.read_bytes()
+
+    assert record["event_id"] == event["event_id"]
+    assert airdrop_ledger._sha(
+        {k: v for k, v in record.items() if k != "hash"}
+    ) == record["hash"]
+
+    verified = airdrop_ledger.verify_ledger()
+    assert verified["valid"] is True
+    assert verified["count"] == 1
+    assert verified["records"][0] == record
+    assert path.read_bytes() == saved_bytes
+
+
+def test_non_ascii_event_id_tampering_still_fails_closed_with_valid_row_hash(
+    isolated_state: Path,
+) -> None:
+    event = airdrop_radar._event(
+        event_type="FACT_CHANGED",
+        key="testnet_status",
+        before={"value": "準備中"},
+        after={"value": "公開中"},
+        severity="HIGH",
+    )
+    airdrop_ledger._append_ledger_event(event, NOW2.isoformat(), [])
+    path = isolated_state / "airdrop-radar" / "events.jsonl"
+    record = json.loads(path.read_text("utf-8"))
+    record["event_id"] = record["event"]["event_id"] = "0" * 24
+    record["hash"] = airdrop_ledger._sha(
+        {k: v for k, v in record.items() if k != "hash"}
+    )
+    path.write_text(json.dumps(record, ensure_ascii=False) + "\n", "utf-8")
+    original_bytes = path.read_bytes()
+
+    with pytest.raises(airdrop_ledger.LedgerIntegrityError, match="event_id_mismatch"):
+        airdrop_ledger.verify_ledger()
+    assert path.read_bytes() == original_bytes
