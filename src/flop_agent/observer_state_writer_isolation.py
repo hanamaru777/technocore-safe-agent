@@ -104,11 +104,17 @@ def _serialize_snapshot(writer) -> tuple[int, str, str, str]:
     generation = int(getattr(writer, "_dirty_generation", 0))
     writer.state["updated_at"] = observer.now()
     metrics = writer.state.get("metrics", {})
+    # Export only the cursor from this exact state snapshot. An invalid or
+    # unknown cursor must never authorize pruning unread captured messages.
+    lobby_cursor = writer.state.get("cursors", {}).get("lobby", 0)
+    if type(lobby_cursor) is not int or lobby_cursor < 0:
+        lobby_cursor = 0
     heartbeat = {
         "schema_version": 1,
         "updated_at": writer.state["updated_at"],
         "status": writer.state.get("health", {}).get("current", "degraded"),
         "agent_count": len(writer.state.get("agents", {})),
+        "lobby_cursor": lobby_cursor,
         "tclk_revision": tclk_watch.tclk_revision(writer.state),
         "metrics": {
             "unique_dids_discovered": int(metrics.get("unique_dids_discovered", 0)),
