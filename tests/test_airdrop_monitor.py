@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -674,3 +677,27 @@ def test_monitor_core_has_no_external_write_transport_or_observer_path(
     assert ' / "observer"' not in source_code
     assert "discord" not in lowered
     assert "sign_seed" not in lowered
+
+
+def test_monitor_default_scanner_lazy_loads_radar(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root / "src")
+    env["FLOP_STATE_DIR"] = str(tmp_path / "state")
+    code = """
+import sys
+from flop_agent import airdrop_monitor
+assert 'flop_agent.airdrop_radar' not in sys.modules
+scanner = airdrop_monitor._default_scanner()
+assert callable(scanner)
+print('flop_agent.airdrop_radar' in sys.modules)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "True"

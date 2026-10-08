@@ -384,7 +384,7 @@ def test_monitor_status_and_daily_summary_surface_readiness(
         },
     }
     monkeypatch.setattr(
-        airdrop_monitor.airdrop_adapter_readiness,
+        airdrop_adapter_readiness,
         "evaluate",
         lambda now=None: report,
     )

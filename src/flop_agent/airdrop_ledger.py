@@ -14,9 +14,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
 
-from . import airdrop_radar, core
+from . import core
 
 SCHEMA_VERSION = 1
+RADAR_SCHEMA_VERSION = 2
 DIR_NAME = "airdrop-radar"
 STATE_NAME = "state.json"
 CURRENT_NAME = "current-snapshot.json"
@@ -225,8 +226,25 @@ def _sanitize_resolved_fact(row: object) -> dict | None:
     return result
 
 
+def _normalize_stored_snapshot(value: object) -> dict:
+    """Validate the persisted Radar snapshot without importing network Radar code."""
+    if isinstance(value, dict) and isinstance(value.get("snapshot"), dict):
+        value = value["snapshot"]
+    if (
+        not isinstance(value, dict)
+        or value.get("schema_version") != RADAR_SCHEMA_VERSION
+        or not isinstance(value.get("snapshot_id"), str)
+        or not isinstance(value.get("resolved_facts"), dict)
+        or not isinstance(value.get("sources"), list)
+    ):
+        raise RuntimeError("airdrop_radar_previous_snapshot_invalid")
+    return value
+
+
 def sanitize_snapshot(snapshot: dict) -> dict:
     """Persist only the Radar evidence model, never fetched bodies/headers/cookies."""
+    from . import airdrop_radar
+
     normalized = airdrop_radar.normalize_previous_snapshot(snapshot)
     sources = [_sanitize_source(row) for row in normalized.get("sources", [])]
     resolved = {
@@ -426,7 +444,7 @@ def _load_current() -> dict | None:
     snapshot = wrapper.get("snapshot")
     if not isinstance(snapshot, dict):
         raise LedgerIntegrityError("airdrop_ledger_current_snapshot_invalid")
-    return airdrop_radar.normalize_previous_snapshot(snapshot)
+    return _normalize_stored_snapshot(snapshot)
 
 
 def current_snapshot() -> dict:
@@ -569,6 +587,8 @@ def _recovered_source_events(
     current: dict,
     last_success: dict,
 ) -> list[dict]:
+    from . import airdrop_radar
+
     if previous is None:
         return []
     before = _source_map(previous)
@@ -733,6 +753,8 @@ def _recovered_source_events(
 
 
 def _dedupe_events(events: Iterable[dict]) -> list[dict]:
+    from . import airdrop_radar
+
     rows: dict[str, dict] = {}
     for event in events:
         event_id = event.get("event_id")
@@ -750,6 +772,8 @@ def _dedupe_events(events: Iterable[dict]) -> list[dict]:
 
 
 def record_scan(snapshot: dict, *, now: datetime | None = None) -> dict:
+    from . import airdrop_radar
+
     """Record one Radar snapshot and its material changes using local files only."""
     current = sanitize_snapshot(snapshot)
     observed_at = _utc(now)
