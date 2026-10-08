@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from flop_agent import close1_account_reconciliation as account
+from flop_agent import close1_candidate_scanner as scanner_module
 from flop_agent import close1_discord_progress as progress
 from flop_agent import close1_standalone_watch as watch
 
@@ -737,7 +738,7 @@ def test_discord_progress_scanner_uses_reconciled_owner_state(monkeypatch):
     captured = {}
     monkeypatch.setattr(account, "reconcile_pending", lambda **kwargs: ledger)
     monkeypatch.setattr(
-        progress.close1_candidate_scanner,
+        scanner_module,
         "fetch_candidate_scan",
         lambda **kwargs: captured.update(kwargs) or "scan",
     )
@@ -758,7 +759,7 @@ def test_discord_progress_scanner_blocks_pending_owner_state(monkeypatch):
         nonlocal called
         called = True
 
-    monkeypatch.setattr(progress.close1_candidate_scanner, "fetch_candidate_scan", scanner)
+    monkeypatch.setattr(scanner_module, "fetch_candidate_scan", scanner)
     with pytest.raises(RuntimeError, match="own_state_unreconciled"):
         progress._candidate_fetch()
     assert called is False

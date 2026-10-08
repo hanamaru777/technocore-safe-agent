@@ -10,9 +10,6 @@ reconciliation regression tests use the same read-only owner-state bridge.
 """
 from __future__ import annotations
 
-from . import close1_account_reconciliation, close1_candidate_scanner
-
-POLL_INTERVAL_SECONDS = 300
 OWNER_DID = "did:key:z6Mkw1wNtmT6hqZ57VJLCxijHT47bMbd6Mgh663LWegUyEAB"
 
 _RETIRED_STATUS = (
@@ -21,8 +18,10 @@ _RETIRED_STATUS = (
 )
 
 
-def _candidate_fetch() -> close1_candidate_scanner.CandidateScan:
+def _candidate_fetch():
     """Retain the read-only reconciled-account bridge; never notify Discord."""
+
+    from . import close1_account_reconciliation, close1_candidate_scanner
 
     ledger = close1_account_reconciliation.reconcile_pending(owner_did=OWNER_DID)
     available_cash, current_position = close1_account_reconciliation.scanner_account(ledger)
