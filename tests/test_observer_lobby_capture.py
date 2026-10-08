@@ -26,6 +26,76 @@ def test_spool_round_trip_and_complete_range(tmp_path):
     assert capture.contiguous_end(11, path) == 13
 
 
+def test_capture_cursor_gap_stops_scanning_unread_suffix(tmp_path):
+    """A large stored suffix after a hole must not be fetched every 240 ms."""
+    connection = capture._connect(tmp_path / "gap.sqlite3")
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": "x"} for seq in range(12, 5212)],
+        )
+
+        class CountingCursor:
+            def __init__(self, actual):
+                self.actual = actual
+                self.rows_consumed = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                row = next(self.actual)
+                self.rows_consumed += 1
+                return row
+
+            def close(self):
+                self.actual.close()
+
+        class CountingConnection:
+            def __init__(self, actual):
+                self.actual = actual
+                self.queries = []
+
+            def execute(self, sql, params=()):
+                cursor = self.actual.execute(sql, params)
+                if sql.startswith("SELECT seq FROM messages WHERE seq>?"):
+                    metered = CountingCursor(cursor)
+                    self.queries.append(metered)
+                    return metered
+                return cursor
+
+            def commit(self):
+                self.actual.commit()
+
+        metered = CountingConnection(connection)
+        assert capture._advance_contiguous(metered, 10) == 10
+        assert len(metered.queries) == 1
+        assert metered.queries[0].rows_consumed == 1
+        assert capture._meta_get(connection, "capture_cursor") == "10"
+        # The missing sequence remains unresolved; never jump to stored 12+.
+        assert capture.contiguous_end(11, tmp_path / "gap.sqlite3") == 10
+    finally:
+        connection.close()
+
+
+def test_capture_cursor_preserves_partial_and_multibatch_contiguity(tmp_path):
+    connection = capture._connect(tmp_path / "batch.sqlite3")
+    try:
+        rows = [{"seq": seq, "text": "x"} for seq in range(1, 5002)]
+        rows.extend([{"seq": 5003, "text": "after-gap"}])
+        assert capture.store_rows(connection, rows) == 5002
+        assert capture._advance_contiguous(connection, 0) == 5001
+        assert capture._meta_get(connection, "capture_cursor") == "5001"
+        assert capture._advance_contiguous(connection, 5001) == 5001
+
+        # Only a genuine filled gap may advance into previously retained rows.
+        assert capture.store_rows(connection, [{"seq": 5002, "text": "filled"}]) == 1
+        assert capture._advance_contiguous(connection, 5001) == 5003
+        assert capture._meta_get(connection, "capture_cursor") == "5003"
+    finally:
+        connection.close()
+
+
 def test_incomplete_range_fails_closed(tmp_path):
     path = tmp_path / "capture.sqlite3"
     connection = capture._connect(path)
