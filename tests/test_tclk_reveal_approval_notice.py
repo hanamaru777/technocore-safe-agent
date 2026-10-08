@@ -63,9 +63,9 @@ def test_reveal_notice_is_compact_and_keeps_exact_root_command(monkeypatch, tmp_
     (preview_dir / f"{STAGE_ID}.json").write_text("{}\n", encoding="utf-8")
     saved = []
 
-    monkeypatch.setattr(discord_tclk_approval.tclk_pilot_reveal, "preview_dir", lambda: preview_dir)
+    monkeypatch.setattr(discord_tclk_approval, "_reveal_preview_dir", lambda: preview_dir)
     monkeypatch.setattr(
-        discord_tclk_approval.tclk_pilot_reveal_approval,
+        tclk_pilot_reveal_approval,
         "public_prepared_approval",
         lambda *_a, **_k: prepared(),
     )
@@ -114,9 +114,9 @@ def test_reveal_notice_dedupe_survives_restart_state(monkeypatch, tmp_path):
         "notified_at": "2033-05-18T03:33:20+00:00",
     }
 
-    monkeypatch.setattr(discord_tclk_approval.tclk_pilot_reveal, "preview_dir", lambda: preview_dir)
+    monkeypatch.setattr(discord_tclk_approval, "_reveal_preview_dir", lambda: preview_dir)
     monkeypatch.setattr(
-        discord_tclk_approval.tclk_pilot_reveal_approval,
+        tclk_pilot_reveal_approval,
         "public_prepared_approval",
         lambda *_a, **_k: prepared(),
     )
@@ -135,14 +135,14 @@ def test_expired_or_missing_reveal_public_binding_never_prompts(monkeypatch, tmp
     preview_dir.mkdir()
     (preview_dir / f"{STAGE_ID}.json").write_text("{}\n", encoding="utf-8")
 
-    monkeypatch.setattr(discord_tclk_approval.tclk_pilot_reveal, "preview_dir", lambda: preview_dir)
+    monkeypatch.setattr(discord_tclk_approval, "_reveal_preview_dir", lambda: preview_dir)
     monkeypatch.setattr(
         discord_tclk_approval,
         "_load_reveal_notice_state",
         lambda: {"schema_version": 1, "notified": []},
     )
     monkeypatch.setattr(
-        discord_tclk_approval.tclk_pilot_reveal_approval,
+        tclk_pilot_reveal_approval,
         "public_prepared_approval",
         lambda *_a, **_k: (_ for _ in ()).throw(
             tclk_pilot_reveal_approval.RevealApprovalError("reveal_approval_window_elapsed")
@@ -157,7 +157,7 @@ def test_reveal_notice_durable_state_error_fails_closed(monkeypatch, tmp_path):
     preview_dir.mkdir()
     (preview_dir / f"{STAGE_ID}.json").write_text("{}\n", encoding="utf-8")
 
-    monkeypatch.setattr(discord_tclk_approval.tclk_pilot_reveal, "preview_dir", lambda: preview_dir)
+    monkeypatch.setattr(discord_tclk_approval, "_reveal_preview_dir", lambda: preview_dir)
     monkeypatch.setattr(
         discord_tclk_approval,
         "_load_reveal_notice_state",
@@ -179,3 +179,13 @@ def test_discord_reveal_notice_has_no_private_reveal_or_write_capability():
     assert "httpx.post" not in source
     assert "EnvironmentFile=/etc/technocore-safe-agent/signer.env" not in unit
     assert "-m flop_agent.discord_tclk_approval" in unit
+
+
+def test_local_reveal_preview_path_matches_canonical(tmp_path, monkeypatch):
+    from flop_agent import core, tclk_pilot_reveal
+
+    monkeypatch.setattr(core, "STATE", tmp_path)
+    assert (
+        discord_tclk_approval._reveal_preview_dir()
+        == tclk_pilot_reveal.preview_dir()
+    )
