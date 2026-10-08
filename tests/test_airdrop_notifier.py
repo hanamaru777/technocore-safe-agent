@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import inspect
 import json
 from datetime import UTC, datetime, timedelta
@@ -393,3 +398,28 @@ def test_notifier_module_has_only_discord_external_write_path() -> None:
     assert ".post(endpoint" in source
     assert ".put(" not in source
     assert ".delete(" not in source
+
+
+def test_notifier_local_status_path_does_not_import_full_radar(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    state = tmp_path / "state"
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(root / "src")
+    env["FLOP_STATE_DIR"] = str(state)
+    code = """
+import sys
+from flop_agent import airdrop_notifier, airdrop_monitor
+assert 'flop_agent.airdrop_radar' not in sys.modules
+airdrop_notifier._pending_by_route()
+airdrop_monitor.monitor_status()
+print('flop_agent.airdrop_radar' in sys.modules)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "False"

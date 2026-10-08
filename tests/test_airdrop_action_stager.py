@@ -399,7 +399,7 @@ def test_monitor_calls_stager_without_changing_alert_routing(
     calls: list[list[str]] = []
 
     monkeypatch.setattr(
-        airdrop_monitor.airdrop_action_stager,
+        airdrop_action_stager,
         "stage_new_events",
         lambda event_ids, records_by_id, now=None: (
             calls.append(list(event_ids))
@@ -444,7 +444,7 @@ def test_monitor_staging_failure_is_visible_but_radar_recording_survives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        airdrop_monitor.airdrop_action_stager,
+        airdrop_action_stager,
         "stage_new_events",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             airdrop_action_stager.StagingBridgeError("blocked")

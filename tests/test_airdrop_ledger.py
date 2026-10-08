@@ -492,3 +492,27 @@ def test_ledger_is_isolated_from_observer_and_has_no_network_or_process_calls(
     assert "post(" not in lowered
     assert "put(" not in lowered
     assert "delete(" not in lowered
+
+
+def test_ledger_stored_snapshot_validation_matches_radar_schema_contract():
+    from flop_agent import airdrop_radar
+
+    assert airdrop_ledger.RADAR_SCHEMA_VERSION == airdrop_radar.SCHEMA_VERSION
+    value = {
+        "schema_version": airdrop_ledger.RADAR_SCHEMA_VERSION,
+        "snapshot_id": "a" * 64,
+        "resolved_facts": {},
+        "sources": [],
+    }
+    assert airdrop_ledger._normalize_stored_snapshot(value) is value
+
+    for bad in (
+        None,
+        {},
+        {**value, "schema_version": -1},
+        {**value, "snapshot_id": None},
+        {**value, "resolved_facts": []},
+        {**value, "sources": {}},
+    ):
+        with pytest.raises(RuntimeError, match="airdrop_radar_previous_snapshot_invalid"):
+            airdrop_ledger._normalize_stored_snapshot(bad)

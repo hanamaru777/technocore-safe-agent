@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
 
-from . import airdrop_action_stager, airdrop_adapter_readiness, airdrop_ledger, airdrop_radar
+from . import airdrop_ledger
 
 SCHEMA_VERSION = 1
 CONFIG_NAME = "monitor-config.json"
@@ -374,6 +374,12 @@ def _scan_floor(heartbeat: dict, config: dict, current: datetime) -> dict | None
     }
 
 
+def _default_scanner() -> Callable[[], dict]:
+    from . import airdrop_radar
+
+    return airdrop_radar.scan_official_sources
+
+
 def run_once(
     *,
     scanner: Callable[[], dict] | None = None,
@@ -397,7 +403,7 @@ def run_once(
         error_type=None,
     )
 
-    scan = scanner or airdrop_radar.scan_official_sources
+    scan = scanner or _default_scanner()
     try:
         snapshot = scan()
     except Exception as error:
@@ -483,6 +489,8 @@ def run_once(
     staged_approvals = 0
     repaired_approvals = 0
     try:
+        from . import airdrop_action_stager
+
         staging = airdrop_action_stager.stage_new_events(
             new_event_ids,
             records_by_id,
@@ -529,6 +537,8 @@ def run_once(
 
 def _adapter_readiness_status(*, now: datetime | None = None) -> dict:
     try:
+        from . import airdrop_adapter_readiness
+
         return airdrop_adapter_readiness.concise(
             airdrop_adapter_readiness.evaluate(now=now)
         )
@@ -721,6 +731,8 @@ def daily_summary(*, now: datetime | None = None) -> dict:
         )
 
     rows = rows[: config["max_daily_summary_events"]]
+    from . import airdrop_radar
+
     counts = {
         severity: sum(1 for row in rows if row.get("severity") == severity)
         for severity in airdrop_radar.SEVERITY_ORDER
