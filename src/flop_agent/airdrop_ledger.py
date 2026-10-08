@@ -323,14 +323,20 @@ def verify_ledger() -> dict:
         event = row.get("event")
         if row.get("record_type") != "material_event" or not isinstance(event, dict):
             raise LedgerIntegrityError("airdrop_ledger_event_record_invalid")
+        # Event IDs originate from Radar's ensure_ascii=True canonical JSON.
+        # Keep Ledger record-hash canonicalization (_canonical) unchanged:
+        # its historical bytes use ensure_ascii=False.
         expected_event_id = hashlib.sha256(
-            _canonical(
+            json.dumps(
                 {
                     "type": event.get("type"),
                     "key": event.get("key"),
                     "before": event.get("before"),
                     "after": event.get("after"),
-                }
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
             ).encode("utf-8")
         ).hexdigest()[:24]
         if (
