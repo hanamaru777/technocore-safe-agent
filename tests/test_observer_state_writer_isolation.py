@@ -48,6 +48,36 @@ def test_serialize_snapshot_skips_full_compaction_when_within_bounds(monkeypatch
     }
 
 
+def test_heartbeat_lobby_cursor_is_identical_to_persisted_state(monkeypatch, tmp_path):
+    state, writer = _setup(monkeypatch, tmp_path)
+    state["cursors"]["lobby"] = 71_155_086
+    observer_state_writer_isolation.mark_dirty(writer)
+
+    asyncio.run(observer_state_writer_isolation.flush_async(writer))
+
+    saved = json.loads(observer.state_path().read_text("utf-8"))
+    heartbeat = json.loads(observer.heartbeat_path().read_text("utf-8"))
+    assert saved["cursors"]["lobby"] == heartbeat["lobby_cursor"] == 71_155_086
+    assert heartbeat["updated_at"] == saved["updated_at"]
+    assert heartbeat["schema_version"] == 1
+
+
+def test_heartbeat_lobby_cursor_fails_closed_on_unusable_values(monkeypatch, tmp_path):
+    state, writer = _setup(monkeypatch, tmp_path)
+    for unusable in (-1, "71155086", True, None):
+        state["cursors"]["lobby"] = unusable
+        _generation, _state_text, heartbeat_text, _safety_text = (
+            observer_state_writer_isolation._serialize_snapshot(writer)
+        )
+        assert json.loads(heartbeat_text)["lobby_cursor"] == 0
+
+    state["cursors"].pop("lobby")
+    _generation, _state_text, heartbeat_text, _safety_text = (
+        observer_state_writer_isolation._serialize_snapshot(writer)
+    )
+    assert json.loads(heartbeat_text)["lobby_cursor"] == 0
+
+
 def test_over_bound_snapshot_still_compacts(monkeypatch, tmp_path):
     state, writer = _setup(monkeypatch, tmp_path)
     writer.config = {**observer.DEFAULT_CONFIG, "max_agents": 100}
