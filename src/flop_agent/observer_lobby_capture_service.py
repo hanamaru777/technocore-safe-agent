@@ -24,7 +24,6 @@ import threading
 from pathlib import Path
 
 from . import (
-    observer,
     observer_lobby_capture as capture,
     observer_lobby_capture_request_deadline,
 )
@@ -36,11 +35,11 @@ _INSTALLED = False
 
 
 def legacy_path() -> Path:
-    return observer.observer_dir() / LEGACY_DB_NAME
+    return capture.observer_dir() / LEGACY_DB_NAME
 
 
 def service_path() -> Path:
-    return observer.observer_dir() / SERVICE_DB_NAME
+    return capture.observer_dir() / SERVICE_DB_NAME
 
 
 def install_reader() -> None:

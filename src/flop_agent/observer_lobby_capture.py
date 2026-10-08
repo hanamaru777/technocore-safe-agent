@@ -14,12 +14,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 
-from . import core, observer
+from . import core
 
 ROOM = "lobby"
 DB_NAME = "lobby-capture.sqlite3"
@@ -38,10 +39,25 @@ MAX_EXPORT_BYTES = 12 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 2.0
 READ_TIMEOUT_SECONDS = 5.0
 OBSERVER_CURSOR_BOOTSTRAP_NAME = "observer-lobby-prune-cursor-bootstrap.json"
+OBSERVER_HEARTBEAT_NAME = "observer-heartbeat.json"
+
+
+def observer_dir() -> Path:
+    """Return the shared Observer state directory without importing rich Observer code."""
+    core.STATE.mkdir(exist_ok=True)
+    return core.STATE / "observer"
+
+
+def heartbeat_path() -> Path:
+    return observer_dir() / OBSERVER_HEARTBEAT_NAME
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def capture_path() -> Path:
-    return observer.observer_dir() / DB_NAME
+    return observer_dir() / DB_NAME
 
 
 def _connect(path: Path | None = None) -> sqlite3.Connection:
@@ -79,7 +95,7 @@ def _cursor_value(value: object) -> int:
 
 
 def observer_cursor_bootstrap_path() -> Path:
-    return observer.observer_dir() / OBSERVER_CURSOR_BOOTSTRAP_NAME
+    return observer_dir() / OBSERVER_CURSOR_BOOTSTRAP_NAME
 
 
 def _observer_cursor_from_bootstrap() -> int:
@@ -96,7 +112,7 @@ def _observer_cursor_from_bootstrap() -> int:
 def _observer_cursor() -> int:
     """Prefer the tiny persisted heartbeat; fail closed if no safe cursor is proven."""
     try:
-        heartbeat = json.loads(observer.heartbeat_path().read_text("utf-8"))
+        heartbeat = json.loads(heartbeat_path().read_text("utf-8"))
         if heartbeat.get("schema_version") == 1:
             cursor = _cursor_value(heartbeat.get("lobby_cursor"))
             if cursor > 0 or heartbeat.get("lobby_cursor") == 0:
@@ -543,7 +559,7 @@ def capture_process(stop) -> None:
 
                 cursor = max(cursor, new_cursor)
                 _meta_set(connection, "capture_cursor", cursor)
-                _meta_set(connection, "last_success_at", observer.now())
+                _meta_set(connection, "last_success_at", _now())
                 _meta_set(connection, "last_error", "")
                 connection.commit()
                 if inserted_since_prune >= PRUNE_EVERY_INSERTS:
