@@ -9,7 +9,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import autopilot, core, observer
+from . import autopilot, core, state_io
 
 CONFIG = "autopilot-ssh.json"
 RECEIPTS = "autopilot-session-receipts.json"
@@ -58,7 +58,7 @@ def validate_intent(intent: dict) -> dict:
     if not isinstance(intent["seq"], int) or intent["seq"] < 0 or intent["category"] not in CATEGORIES or intent["topic"] not in TOPICS: raise RuntimeError("autopilot enum rejected")
     if intent["public_knowledge_ids"] != ["public-profile:1"]: raise RuntimeError("autopilot knowledge id rejected")
     if not all(isinstance(intent[key], str) and len(intent[key]) <= 128 for key in ("created_at", "expires_at")) or intent["safety_decision"] not in SAFETY_DECISIONS: raise RuntimeError("autopilot metadata rejected")
-    if observer.parse_time(intent["created_at"]) is None or observer.parse_time(intent["expires_at"]) is None or observer.parse_time(intent["expires_at"]) <= datetime.now(UTC): raise RuntimeError("autopilot intent expired")
+    if state_io.parse_time(intent["created_at"]) is None or state_io.parse_time(intent["expires_at"]) is None or state_io.parse_time(intent["expires_at"]) <= datetime.now(UTC): raise RuntimeError("autopilot intent expired")
     return intent
 
 
@@ -78,7 +78,7 @@ def load_receipts() -> dict:
     return data
 
 
-def save_receipts(data: dict) -> None: observer.atomic_json_write(receipts_path(), data)
+def save_receipts(data: dict) -> None: state_io.atomic_json_write(receipts_path(), data)
 def receipt_hash(intent: dict, text: str) -> str: return hashlib.sha256(f"{intent['intent_id']}|{text}".encode()).hexdigest()
 
 

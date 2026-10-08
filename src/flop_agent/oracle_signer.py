@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 
-from . import autopilot, autopilot_transport, core, observer
+from . import autopilot, autopilot_transport, core, state_io
 
 RECEIPT_NAME = "oracle-signer-receipts.json"
 HEALTH_NAME = "signer-health.json"
@@ -51,7 +51,7 @@ def load_health() -> dict:
     return data
 
 
-def save_health(data: dict) -> None: observer.atomic_json_write(health_path(), data, mode=0o600)
+def save_health(data: dict) -> None: state_io.atomic_json_write(health_path(), data, mode=0o600)
 
 
 def default_upstream() -> dict:
@@ -68,7 +68,7 @@ def load_upstream() -> dict:
     return data
 
 
-def save_upstream(data: dict) -> None: observer.atomic_json_write(upstream_path(), data, mode=0o600)
+def save_upstream(data: dict) -> None: state_io.atomic_json_write(upstream_path(), data, mode=0o600)
 
 
 def record_upstream_success() -> dict:
@@ -82,7 +82,7 @@ def record_upstream_failure(error: Exception) -> dict:
 
 
 def probe_upstream(room: str) -> None:
-    value = load_upstream(); due = observer.parse_time(value.get("next_probe_at"))
+    value = load_upstream(); due = state_io.parse_time(value.get("next_probe_at"))
     if value["status"] == "degraded" and due and due > datetime.now(UTC): raise RuntimeError("upstream_unavailable")
     try:
         core.read_room(room, limit=1, cache_buster=secrets.token_hex(16))
@@ -114,7 +114,7 @@ def load_receipts() -> dict:
     return data
 
 
-def save_receipts(data: dict) -> None: observer.atomic_json_write(receipt_path(), data, mode=0o600)
+def save_receipts(data: dict) -> None: state_io.atomic_json_write(receipt_path(), data, mode=0o600)
 
 
 def expected_did() -> str:
@@ -265,7 +265,7 @@ def process_intent(state: dict, receipts: dict, intent: dict) -> str:
 def expire_queued_intent(state: dict, intent: dict) -> bool:
     item = state["outbox"].get(intent.get("intent_id"))
     if not isinstance(item, dict) or item.get("status", "queued") != "queued": return False
-    expires_at = observer.parse_time(item.get("expires_at"))
+    expires_at = state_io.parse_time(item.get("expires_at"))
     if expires_at is None or expires_at > datetime.now(UTC): return False
     item["status"] = "expired"; item["expired_at"] = now(); item["expiration_reason"] = "intent_ttl_elapsed"
     autopilot.save(state, allow_legacy=False)
@@ -299,7 +299,7 @@ def run_once() -> dict:
 def reconcile_ambiguous(state: dict, receipts: dict) -> str | None:
     """Bounded, read-only reconciliation obeys the same upstream circuit."""
     upstream = load_upstream()
-    due = observer.parse_time(upstream.get("next_probe_at"))
+    due = state_io.parse_time(upstream.get("next_probe_at"))
     if upstream["status"] == "degraded" and due and due > datetime.now(UTC):
         return None
     candidates = [
@@ -334,7 +334,7 @@ def reconcile_ambiguous(state: dict, receipts: dict) -> str | None:
 def signer_status() -> dict:
     state = autopilot.load(allow_legacy=False); upstream = load_upstream()
     ambiguous = [item for item in state["outbox"].values() if item.get("status") == "ambiguous"]
-    ages = [observer.parse_time(item.get("ambiguous_at")) for item in ambiguous]
+    ages = [state_io.parse_time(item.get("ambiguous_at")) for item in ambiguous]
     oldest = min((item for item in ages if item), default=None)
     return {"upstream_status": upstream["status"], "circuit": "open" if upstream["status"] == "degraded" else "closed", "next_probe_at": upstream["next_probe_at"], "consecutive_upstream_failures": upstream["consecutive_failures"], "ambiguous_intents": len(ambiguous), "oldest_ambiguous_age_seconds": None if oldest is None else max(0, int((datetime.now(UTC) - oldest).total_seconds()))}
 
