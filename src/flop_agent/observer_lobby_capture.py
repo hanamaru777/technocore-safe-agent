@@ -175,24 +175,25 @@ def store_rows(connection: sqlite3.Connection, rows: list[dict]) -> int:
 def _advance_contiguous(connection: sqlite3.Connection, cursor: int) -> int:
     current = int(cursor)
     while True:
+        # Consume only the consecutive prefix. A saved gap can leave thousands
+        # of later rows in the spool; fetching all 5000 on every capture poll
+        # would repeatedly read rows that cannot advance the safe cursor.
         rows = connection.execute(
             "SELECT seq FROM messages WHERE seq>? ORDER BY seq LIMIT 5000",
             (current,),
-        ).fetchall()
-        if not rows:
+        )
+        consecutive = 0
+        try:
+            for row in rows:
+                if int(row[0]) != current + consecutive + 1:
+                    break
+                consecutive += 1
+        finally:
+            rows.close()
+        if consecutive == 0:
             break
-        expected = current + 1
-        advanced = current
-        for row in rows:
-            seq = int(row[0])
-            if seq != expected:
-                break
-            advanced = seq
-            expected += 1
-        if advanced == current:
-            break
-        current = advanced
-        if len(rows) < 5000 or int(rows[-1][0]) != current:
+        current += consecutive
+        if consecutive < 5000:
             break
     _meta_set(connection, "capture_cursor", current)
     connection.commit()
