@@ -251,7 +251,7 @@ def test_observer_cursor_prefers_tiny_heartbeat_without_bootstrap(monkeypatch, t
         def read_text(self, *args, **kwargs):
             raise AssertionError("bootstrap must not be read when heartbeat has a cursor")
 
-    monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
+    monkeypatch.setattr(capture, "heartbeat_path", lambda: heartbeat)
     monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: BombBootstrapPath())
     assert capture._observer_cursor() == 123
 
@@ -267,7 +267,7 @@ def test_observer_cursor_accepts_zero_heartbeat_cursor_without_fallback(monkeypa
         def read_text(self, *args, **kwargs):
             raise AssertionError("zero is a valid fail-closed heartbeat cursor")
 
-    monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
+    monkeypatch.setattr(capture, "heartbeat_path", lambda: heartbeat)
     monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: BombBootstrapPath())
     assert capture._observer_cursor() == 0
 
@@ -283,7 +283,7 @@ def test_observer_cursor_rolling_fallback_reads_tiny_bootstrap(monkeypatch, tmp_
         '{"schema_version":1,"lobby_cursor":456}',
         encoding="utf-8",
     )
-    monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
+    monkeypatch.setattr(capture, "heartbeat_path", lambda: heartbeat)
     monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: bootstrap)
 
     assert capture._observer_cursor() == 456
@@ -298,7 +298,7 @@ def test_observer_cursor_bootstrap_fails_closed_when_missing_or_invalid(monkeypa
     heartbeat = tmp_path / "old-heartbeat.json"
     heartbeat.write_text('{"schema_version":1}', encoding="utf-8")
     bootstrap = tmp_path / "missing-bootstrap.json"
-    monkeypatch.setattr(capture.observer, "heartbeat_path", lambda: heartbeat)
+    monkeypatch.setattr(capture, "heartbeat_path", lambda: heartbeat)
     monkeypatch.setattr(capture, "observer_cursor_bootstrap_path", lambda: bootstrap)
 
     assert capture._observer_cursor() == 0
