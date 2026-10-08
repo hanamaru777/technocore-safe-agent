@@ -8,19 +8,12 @@ root-operated one-shot actions with distinct approval domains.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 
 from . import discord_tclk_review as app
 from . import airdrop_approval, discord_notice
-from . import (
-    core,
-    observer,
-    tclk_pilot,
-    tclk_pilot_approval,
-    tclk_pilot_reveal,
-    tclk_pilot_reveal_approval,
-    tclk_review_evidence,
-)
+from . import core, observer
 
 NOTICE_SCHEMA_VERSION = 1
 NOTICE_NAME = "tclk-approval-notices.json"
@@ -28,6 +21,8 @@ REVEAL_NOTICE_NAME = "tclk-reveal-approval-notices.json"
 MAX_NOTIFIED = 128
 PREPARED_NOTICE_LIMIT = 1
 REVEAL_NOTICE_LIMIT = 1
+_HEX32 = re.compile(r"^[0-9a-f]{32}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class NoticeError(RuntimeError):
@@ -36,6 +31,18 @@ class NoticeError(RuntimeError):
 
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
+
+
+def _pilot_root():
+    return core.STATE / "autopilot" / "tclk-pilot"
+
+
+def _accept_preview_dir():
+    return _pilot_root() / "previews"
+
+
+def _reveal_preview_dir():
+    return _pilot_root() / "reveal-previews"
 
 
 def notice_path():
@@ -65,9 +72,9 @@ def _validate_notice_state(value: object, *, error_code: str) -> dict:
             not isinstance(item, dict)
             or set(item) != {"stage_id", "approval_digest", "notified_at"}
             or not isinstance(item.get("stage_id"), str)
-            or not tclk_pilot_approval._HEX32.fullmatch(item["stage_id"])
+            or not _HEX32.fullmatch(item["stage_id"])
             or not isinstance(item.get("approval_digest"), str)
-            or not tclk_pilot_approval._HEX64.fullmatch(item["approval_digest"])
+            or not _HEX64.fullmatch(item["approval_digest"])
             or not isinstance(item.get("notified_at"), str)
             or item["stage_id"] in seen
         ):
@@ -115,6 +122,8 @@ def _save_reveal_notice_state(value: dict) -> None:
 
 
 def _evidence_for(stage: dict) -> dict:
+    from . import tclk_review_evidence
+
     try:
         record = tclk_review_evidence.get(stage["offer_id"])
     except tclk_review_evidence.EvidenceError as error:
@@ -183,9 +192,20 @@ def _new_prepared_approval_notices() -> list[str]:
     """Return bounded durable accept decision notices; public/local reads only."""
     current = _now_ms()
     try:
+        paths = sorted(
+            _accept_preview_dir().glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return []
+    if not paths:
+        return []
+
+    from . import tclk_pilot_approval
+
+    try:
         state = _load_notice_state()
-        paths = sorted(tclk_pilot.preview_dir().glob("*.json"), key=lambda path: path.stat().st_mtime)
-    except (NoticeError, OSError):
+    except NoticeError:
         return []
 
     notified = {item["stage_id"]: item["approval_digest"] for item in state["notified"]}
@@ -222,9 +242,20 @@ def _new_prepared_reveal_notices() -> list[str]:
     """Return bounded durable reveal decision notices; public/local reads only."""
     current = _now_ms()
     try:
+        paths = sorted(
+            _reveal_preview_dir().glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return []
+    if not paths:
+        return []
+
+    from . import tclk_pilot_reveal_approval
+
+    try:
         state = _load_reveal_notice_state()
-        paths = sorted(tclk_pilot_reveal.preview_dir().glob("*.json"), key=lambda path: path.stat().st_mtime)
-    except (NoticeError, OSError):
+    except NoticeError:
         return []
 
     notified = {item["stage_id"]: item["approval_digest"] for item in state["notified"]}
