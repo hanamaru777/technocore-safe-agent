@@ -25,10 +25,10 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -45,7 +45,7 @@ jobs:
           PYTHONPATH=src uv run python -m flop_agent.airdrop_launch_watch > launch-watch.json
 
       - name: Create one durable review issue per new candidate
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           github-token: ${{ github.token }}
           script: |
