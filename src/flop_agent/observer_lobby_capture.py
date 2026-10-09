@@ -35,6 +35,8 @@ MAX_ROWS = 300_000
 MAX_PROTECTED_ROWS = 2_000_000
 CAPACITY_RECHECK_SECONDS = 1.0
 PRUNE_EVERY_INSERTS = 5_000
+# Keep each transaction small even when a stale Observer prune cursor catches up.
+MAX_PRUNE_ROWS_PER_PASS = 5_000
 MAX_EXPORT_BYTES = 12 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 2.0
 READ_TIMEOUT_SECONDS = 5.0
@@ -259,7 +261,16 @@ def _prune(
 
     target_cutoff = int(cutoff[0])
     safe_cutoff = min(target_cutoff, observed + 1)
-    connection.execute("DELETE FROM messages WHERE seq<?", (safe_cutoff,))
+    # Never turn a newly advanced Observer cursor into a multi-million-row
+    # SQLite DELETE/WAL transaction. Every candidate is already consumed and
+    # falls strictly before the newest MAX_ROWS suffix.
+    eligible = connection.execute(
+        "SELECT seq FROM messages WHERE seq<? ORDER BY seq LIMIT ?",
+        (safe_cutoff, MAX_PRUNE_ROWS_PER_PASS),
+    ).fetchall()
+    if not eligible:
+        return count
+    connection.execute("DELETE FROM messages WHERE seq<=?", (int(eligible[-1][0]),))
     connection.commit()
     return _row_count(connection)
 
