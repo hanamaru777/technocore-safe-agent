@@ -323,9 +323,100 @@ def test_capture_checks_protected_capacity_before_network_fetch():
 
     source = inspect.getsource(capture.capture_process)
     assert source.index("if row_count >= MAX_PROTECTED_ROWS") < source.index("_fetch_live(client, cursor)")
-    assert "row_count = _prune(connection)" in source
+    assert "row_count = _prune(connection, observer_cursor=observed)" in source
     assert "protected_backlog_capacity" in source
 
+
+
+def _run_capacity_idle_script(tmp_path, monkeypatch, *, cursor_samples, prune_counts):
+    """Exercise the real capacity control loop with synthetic, private SQLite."""
+    path = tmp_path / "only-test-spool.sqlite3"
+    original_connect = capture._connect
+    conn = original_connect(path)
+    try:
+        capture.store_rows(
+            conn, [{"seq": seq, "text": "synthetic"} for seq in range(1, 9)]
+        )
+    finally:
+        conn.close()
+    monkeypatch.setattr(capture, "_connect", lambda: original_connect(path))
+    monkeypatch.setattr(capture, "initialize_cursor", lambda conn: 0)
+    monkeypatch.setattr(capture, "MAX_PROTECTED_ROWS", 5)
+
+    class FakeStop:
+        def __init__(self):
+            self.cycles = 0
+        def is_set(self):
+            return self.cycles >= len(cursor_samples)
+        def wait(self, seconds):
+            assert seconds == capture.CAPACITY_RECHECK_SECONDS
+            self.cycles += 1
+            return self.is_set()
+
+    fetch_attempts = []
+    class FakePacer:
+        def wait(self, stop):
+            fetch_attempts.append("pacer")
+            return False
+
+    class FakeClient:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(capture, "_Pacer", FakePacer)
+    monkeypatch.setattr(capture.httpx, "Client", FakeClient)
+    cursor_steps = iter(cursor_samples)
+    monkeypatch.setattr(capture, "_observer_cursor", lambda: next(cursor_steps))
+    calls = []
+    prune_steps = iter(prune_counts)
+    def fake_prune(conn, observer_cursor=None):
+        calls.append(observer_cursor)
+        return next(prune_steps)
+    monkeypatch.setattr(capture, "_prune", fake_prune)
+    meta_writes = []
+    monkeypatch.setattr(capture, "_meta_set", lambda conn, key, val: meta_writes.append((key, val)))
+
+    capture.capture_process(FakeStop())
+    return calls, meta_writes, fetch_attempts
+
+
+def test_hard_cap_stable_cursor_skips_repeat_count_and_meta_commits(tmp_path, monkeypatch):
+    calls, writes, fetches = _run_capacity_idle_script(
+        tmp_path, monkeypatch, cursor_samples=[2] * 6, prune_counts=[8],
+    )
+    assert calls == [2]
+    assert writes == [("last_error", "protected_backlog_capacity")]
+    assert fetches == []
+
+
+def test_hard_cap_cursor_change_rechecks_then_waits_without_fetch(tmp_path, monkeypatch):
+    calls, writes, fetches = _run_capacity_idle_script(
+        tmp_path, monkeypatch, cursor_samples=[2, 2, 3, 3, 3],
+        prune_counts=[8, 8],
+    )
+    assert calls == [2, 3]
+    assert writes == [("last_error", "protected_backlog_capacity")]
+    assert fetches == []
+
+
+def test_hard_cap_progress_continues_bounded_prunes_on_same_cursor(tmp_path, monkeypatch):
+    calls, writes, fetches = _run_capacity_idle_script(
+        tmp_path, monkeypatch, cursor_samples=[8] * 5,
+        prune_counts=[7, 6, 6],
+    )
+    assert calls == [8, 8, 8]
+    assert writes == [("last_error", "protected_backlog_capacity")]
+    assert fetches == []
+
+
+def test_hard_cap_resumes_capture_pacer_only_below_hard_limit(tmp_path, monkeypatch):
+    calls, writes, fetches = _run_capacity_idle_script(
+        tmp_path, monkeypatch, cursor_samples=[8],
+        prune_counts=[4],
+    )
+    assert calls == [8]
+    assert writes == []
+    assert fetches == ["pacer"]
 
 
 def test_normalize_export_result_supports_legacy_and_partial_shapes():
