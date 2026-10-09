@@ -1,0 +1,65 @@
+# R826: a single PR-scoped, offline ARM64 compatibility check.
+# No deployment, OCI integration, secrets, signer activation or runtime pollers.
+name: R826 ARM64 offline compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/r826-arm64-offline-compat.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  arm64-offline:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm native ARM64 and absence of Production state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "aarch64"
+          test ! -e /etc/technocore-safe-agent/env
+          test ! -d /var/lib/technocore-safe-agent
+          echo "R826_NATIVE_ARM64=PASS"
+
+      - name: Configure Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install only lockfile-pinned official parser packages
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check uv
+
+      - name: Resolve locked Python dependencies including optional signer imports
+        run: uv sync --frozen --group dev --extra oracle-signer --extra discord
+
+      - name: Verify ARM64 imports without credentials
+        run: uv run python -c 'import cryptography, httpx, discord, oci, sqlite3; print("R826_ARM64_IMPORTS=PASS")'
+
+      - name: Run targeted existing offline compatibility regression
+        run: |
+          uv run pytest -q \
+            tests/test_observer_lobby_capture.py \
+            tests/test_observer_lobby_capture_service.py \
+            tests/test_observer_state_writer_isolation.py \
+            tests/test_observer_tclk_parser_guard.py \
+            tests/test_tclk_watch.py \
+            tests/test_oracle_signer.py \
+            tests/test_signer.py \
+            tests/test_issue813_lobby_recovery_gate.py \
+            tests/test_issue815_lobby_60s_readonly_collector.py
