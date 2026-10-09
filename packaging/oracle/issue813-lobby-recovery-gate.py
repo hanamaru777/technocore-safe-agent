@@ -56,7 +56,7 @@ def _units(value: Any) -> tuple:
         if unit.get("active_state") != "active":
             raise ValueError("unit_not_active")
         pid = unit.get("pid")
-        if not _integer(pid) or pid == 0 or unit.get("n_restarts") != 0:
+        if not _integer(pid) or pid == 0 or not _integer(unit.get("n_restarts")) or unit["n_restarts"] != 0:
             raise ValueError("unit_identity_invalid")
         fingerprint.append((name, pid, 0))
     return tuple(fingerprint)
