@@ -1,3 +1,13 @@
+> **HISTORICAL SNAPSHOT — 2026-09-10. NOT CURRENT FLOP REWARD/PRODUCTION AUTHORITY.**
+>
+> Preserve the September 10 strategy below as dated history only. Its past genesis figures (2.48346bn, Agent ~596m, older Teaser 3.5bn) are SUPERSEDED by the **2026-10-05 first-party Draft**: genesis **4.4bn FLOP**, Agent **1.2bn**, other Miner/Validator cohorts **1.2bn each**, reserve **0.8bn**. All are Draft/provisional, NOT a guaranteed allocation.
+>
+> This dated file also mentions a historical "Production gap-recovery P0 closure"; it **does not mean the current Capture P0 #805 is recovered**. Production remains NO-GO. For decisions use [AIRDROP_RULES.md](../AIRDROP_RULES.md), [SOURCES.md](../SOURCES.md), and the **latest authoritative comment in [handoff Issue #765](https://github.com/hanamaru777/technocore-safe-agent/issues/765)**. Testnet Agent #311 remains WAIT; no guessing wallet/registration/faucet/claims or repeating completed operations.
+>
+> Original historical content follows unchanged.
+
+---
+
 # FLOP airdrop opportunity plan — 2026-09-10
 
 Purpose: maximize legitimate FLOP opportunity without inventing eligibility rules or creating artificial activity.
