@@ -105,6 +105,17 @@ Still not independently confirmed as exact executable public artifacts:
 
 Therefore **#311 remains WAIT/BLOCKED**. Do not implement or enable speculative Testnet writes from marketing text alone.
 
+## 2026-10-09 AGENT IDENTITY / EVIDENCE UNRESOLVED GATES
+
+This is a **dated review of unresolved public specification questions**, not a new live Testnet launch, new scoring entitlement, or override of the official Draft.
+
+- [FLOP Labs Yellow Paper #123](https://github.com/flop-labs/yellowpaper/issues/123) is still **OPEN** on how a continuing Technocore `did:key` is linked to the FLOP chain account/Genesis allocation and how owner-key rotation or delegated session keys preserve identity history. Do not assume the existing DID is already a chain wallet or change/rotate keys speculatively.
+- [#130](https://github.com/flop-labs/yellowpaper/issues/130) is **OPEN** on agent cluster identity and whether unrelated owners sharing a runner/IP and bounded delegates are grouped. Neither multiple wallets nor multiple hosted DIDs are an authorized reward strategy; retain one genuine operator identity.
+- [#72](https://github.com/flop-labs/yellowpaper/issues/72) and [#76](https://github.com/flop-labs/yellowpaper/issues/76) are **OPEN** on the scored activity substrate and admissible durable evidence/cutoff. A Technocore signed envelope proves authorship/content, **not** when the venue observed a server-assigned sequence or timestamp. Do not promise a Genesis allocation from pre-Testnet Technocore posts, captures, receipts, or Github history.
+- [#127](https://github.com/flop-labs/yellowpaper/issues/127) identifies a **Draft text mismatch** about when locked Agent grants become liquid. The currently published Yellow Paper / Airdrop 3:1 settled-compute unlock rule is the latest documented design, but the launch specification is not final.
+
+Until the official executable Agent onboarding chain ID/RPC, faucet, DID-wallet association, inference session and settlement/receipt rules are published, **#311 stays WAIT**. Read-only monitoring and legitimate public-source/evidence preservation are fine; no guessed registration, signing, claiming, spending, self-dealing or paid hardware. The current Capture incident **#805 remains P0/NO-GO**.
+
 ## TEASER — DRAFT NARRATIVE, NOW ALIGNED ON GENESIS SIZE
 
 Official Teaser:
