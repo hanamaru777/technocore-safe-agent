@@ -83,19 +83,21 @@ def _extract_testnet(text: str, source: SourceSpec) -> list[dict]:
         text,
         re.IGNORECASE,
     )
-    if header_status and header_status.group(1).lower() in {"live", "open", "enabled"}:
-        status = header_status.group(1).lower()
+    # An explicit Draft status is authoritative even if body prose describes a
+    # hypothetical live Testnet. Never promote conditional text into a launch.
+    if header_status:
+        label = header_status.group(1).lower()
+        status = "planned" if label == "draft" else label
         status_evidence = _context(text, *header_status.span())
     elif explicit_live:
         status = "live"
         status_evidence = _context(text, *explicit_live.span())
     elif (
-        (header_status and header_status.group(1).lower() == "draft")
-        or re.search(r"\bOpens\s*Q[1-4]\s*20\d{2}\b", text, re.IGNORECASE)
+        re.search(r"\bOpens\s*Q[1-4]\s*20\d{2}\b", text, re.IGNORECASE)
         or "the testnet opens when its readiness criteria are met" in lower
     ):
         status = "planned"
-        anchor = header_status or re.search(r"\bOpens\s*Q[1-4]\s*20\d{2}\b", text, re.IGNORECASE)
+        anchor = re.search(r"\bOpens\s*Q[1-4]\s*20\d{2}\b", text, re.IGNORECASE)
         status_evidence = _context(text, *anchor.span()) if anchor else "official Testnet readiness language"
     else:
         status = "described"
@@ -194,11 +196,13 @@ def _extract_testnet(text: str, source: SourceSpec) -> list[dict]:
         re.IGNORECASE,
     )
     if faucet:
-        faucet_open = re.search(
-            r"\bfaucet\s+(?:is\s+)?(?:open|live)\b|\bclaim\s+(?:from\s+)?(?:the\s+)?faucet\s+now\b",
-            text,
-            re.IGNORECASE,
-        )
+        faucet_open = None
+        if not header_status or header_status.group(1).lower() != "draft":
+            faucet_open = re.search(
+                r"\bfaucet\s+(?:is\s+)?(?:open|live)\b|\bclaim\s+(?:from\s+)?(?:the\s+)?faucet\s+now\b",
+                text,
+                re.IGNORECASE,
+            )
         facts.append(
             _fact(
                 key="faucet_status",
