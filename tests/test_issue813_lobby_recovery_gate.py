@@ -86,6 +86,11 @@ def test_r809_pressure_sample_would_fail_gate():
     result = gate.assess(proof)
     assert result["decision"] == "NO_GO"
     assert any("memory_window_failed" in r for r in result["reasons"])
+
+    proof = _proof()
+    proof["samples"][2]["mem_psi_full_avg10"] = 7.94
+    result = gate.assess(proof)
+    assert result["decision"] == "NO_GO"
     assert any("memory_psi_window_failed" in r for r in result["reasons"])
 
 
