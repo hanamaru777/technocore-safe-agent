@@ -218,6 +218,76 @@ def test_prune_fails_closed_when_observer_cursor_is_unknown(tmp_path, monkeypatc
     assert _seqs(path) == [1, 2, 3, 4, 5, 6]
 
 
+def test_prune_batches_large_safe_backlog_without_crossing_cursor(tmp_path, monkeypatch):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": str(seq)} for seq in range(1, 11)],
+        )
+        monkeypatch.setattr(capture, "MAX_ROWS", 3)
+        monkeypatch.setattr(capture, "MAX_PRUNE_ROWS_PER_PASS", 2)
+
+        # A cursor suddenly catching up must not issue one unbounded DELETE.
+        assert capture._prune(connection, observer_cursor=9) == 8
+        assert _seqs(path) == list(range(3, 11))
+        assert capture._prune(connection, observer_cursor=9) == 6
+        assert _seqs(path) == list(range(5, 11))
+        assert capture._prune(connection, observer_cursor=9) == 4
+        assert _seqs(path) == list(range(7, 11))
+        assert capture._prune(connection, observer_cursor=9) == 3
+        assert _seqs(path) == [8, 9, 10]
+    finally:
+        connection.close()
+
+
+def test_bounded_prune_remains_fail_closed_on_unread_rows(tmp_path, monkeypatch):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": str(seq)} for seq in range(1, 9)],
+        )
+        monkeypatch.setattr(capture, "MAX_ROWS", 3)
+        monkeypatch.setattr(capture, "MAX_PRUNE_ROWS_PER_PASS", 2)
+        assert capture._prune(connection, observer_cursor=2) == 6
+        assert _seqs(path) == [3, 4, 5, 6, 7, 8]
+        assert capture._prune(connection, observer_cursor=2) == 6
+        assert _seqs(path) == [3, 4, 5, 6, 7, 8]
+        assert capture._prune(connection, observer_cursor=5) == 4
+        assert _seqs(path) == [5, 6, 7, 8]
+        assert capture._prune(connection, observer_cursor=5) == 3
+        assert _seqs(path) == [6, 7, 8]
+    finally:
+        connection.close()
+
+
+def test_bounded_capacity_only_resumes_after_safe_prune_below_hard_cap(tmp_path, monkeypatch):
+    path = tmp_path / "capture.sqlite3"
+    connection = capture._connect(path)
+    try:
+        capture.store_rows(
+            connection,
+            [{"seq": seq, "text": str(seq)} for seq in range(1, 13)],
+        )
+        monkeypatch.setattr(capture, "MAX_ROWS", 3)
+        monkeypatch.setattr(capture, "MAX_PROTECTED_ROWS", 6)
+        monkeypatch.setattr(capture, "MAX_PRUNE_ROWS_PER_PASS", 2)
+
+        assert capture._protected_backlog_full(connection, observer_cursor=2) is True
+        assert _seqs(path) == list(range(3, 13))
+        assert capture._protected_backlog_full(connection, observer_cursor=8) is True
+        assert _seqs(path) == list(range(5, 13))
+        assert capture._protected_backlog_full(connection, observer_cursor=8) is True
+        assert _seqs(path) == list(range(7, 13))
+        assert capture._protected_backlog_full(connection, observer_cursor=8) is False
+        assert _seqs(path) == list(range(9, 13))
+    finally:
+        connection.close()
+
+
 def test_hard_capacity_pauses_until_safe_prune_can_free_rows(tmp_path, monkeypatch):
     path = tmp_path / "capture.sqlite3"
     connection = capture._connect(path)
