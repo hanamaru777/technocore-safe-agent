@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flop_agent import airdrop_radar
+from flop_agent import airdrop_launch_watch, airdrop_radar
 
 
 TESTNET_DRAFT = """
@@ -75,6 +75,42 @@ def test_testnet_draft_stays_planned_and_onboarding_remains_blocked() -> None:
     assert facts["faucet_status"]["value"] == "planned"
     assert facts["testnet_agent_earning_basis"]["value"] == "compute_purchased_in_settled_sessions"
     assert all("action_candidate" not in row for row in facts.values())
+
+
+def test_draft_header_blocks_hypothetical_launch_and_faucet_in_watch() -> None:
+    # Hypothetical onboarding prose is not a launch announcement while Draft remains.
+    conditional = TESTNET_DRAFT.replace(
+        "</body>", "<p>If the testnet is live, the faucet is open. Claim from the faucet now.</p></body>"
+    )
+    facts = _facts("testnet", conditional)
+
+    assert facts["testnet_status"]["value"] == "planned"
+    assert facts["faucet_status"]["value"] == "planned"
+    assert airdrop_launch_watch.collect_candidates(
+        {
+            "read_only": True,
+            "health": "ok",
+            "sources": [
+                {
+                    "name": "testnet",
+                    "url": "https://flop.finance/testnet/",
+                    "status": "ok",
+                    "authority": "official",
+                    "interest_links": [],
+                }
+            ],
+            "resolved_facts": facts,
+        }
+    ) == []
+
+
+def test_explicit_live_language_without_status_header_is_still_detected() -> None:
+    facts = _facts(
+        "testnet",
+        "<html><body>Testnet is live. Faucet is open.</body></html>",
+    )
+    assert facts["testnet_status"]["value"] == "live"
+    assert facts["faucet_status"]["value"] == "open"
 
 
 def test_only_explicit_live_language_opens_testnet_and_faucet_signal() -> None:
