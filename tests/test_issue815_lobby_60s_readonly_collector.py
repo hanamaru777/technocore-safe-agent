@@ -28,7 +28,7 @@ gate = _load("issue813_gate_for_815", POLICY)
 
 
 def _fake_proof(*, healthy=False):
-    stamp = datetime(2026, 10, 9, 1, 0, tzinfo=timezone.utc)
+    stamp = datetime.now(timezone.utc) - timedelta(seconds=15)
     health = "ok" if healthy else "degraded"
     return {
         "at": stamp.isoformat(),
@@ -57,7 +57,7 @@ def _fake_units():
 
 
 def test_exact_seven_samples_are_policy_compatible_without_sleep(monkeypatch):
-    stamp = datetime(2026, 10, 9, 1, 0, tzinfo=timezone.utc)
+    stamp = datetime.now(timezone.utc) - timedelta(seconds=15)
     calls = []
 
     monkeypatch.setattr(collector.socket, "gethostname", lambda: "technocore-resident")

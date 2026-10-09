@@ -32,8 +32,8 @@ def _units():
 
 
 def _proof(*, healthy=False):
-    start = datetime(2026, 10, 9, 0, 0, tzinfo=timezone.utc)
-    end = start + timedelta(seconds=60)
+    end = datetime.now(timezone.utc) - timedelta(seconds=30)
+    start = end - timedelta(seconds=60)
     common = {
         "at": _iso(end),
         "health": "ok" if healthy else "degraded",
@@ -92,6 +92,49 @@ def test_r809_pressure_sample_would_fail_gate():
     result = gate.assess(proof)
     assert result["decision"] == "NO_GO"
     assert any("memory_psi_window_failed" in r for r in result["reasons"])
+
+
+def test_internally_consistent_old_window_cannot_pass():
+    proof = _proof(healthy=True)
+    old_time = timedelta(minutes=10)
+    for sample in proof["samples"]:
+        at = datetime.fromisoformat(sample["at"]) - old_time
+        sample["at"] = at.isoformat()
+    for key in ("rich", "safety"):
+        proof[key]["at"] = (
+            datetime.fromisoformat(proof[key]["at"]) - old_time
+        ).isoformat()
+    result = gate.assess(proof)
+    assert result["decision"] == "NO_GO"
+    assert "stale_or_future_sample_window" in result["reasons"]
+    assert result["restart_authorized"] is False
+
+
+def test_future_window_cannot_pass():
+    proof = _proof(healthy=True)
+    ahead = timedelta(minutes=5)
+    for sample in proof["samples"]:
+        sample["at"] = (
+            datetime.fromisoformat(sample["at"]) + ahead
+        ).isoformat()
+    for key in ("rich", "safety"):
+        proof[key]["at"] = (
+            datetime.fromisoformat(proof[key]["at"]) + ahead
+        ).isoformat()
+    result = gate.assess(proof)
+    assert result["decision"] == "NO_GO"
+    assert "stale_or_future_sample_window" in result["reasons"]
+    assert result["restart_authorized"] is False
+
+
+def test_fresh_sample_window_but_stale_snapshot_cannot_pass():
+    proof = _proof(healthy=True)
+    proof["safety"]["at"] = (
+        datetime.now(timezone.utc) - timedelta(minutes=10)
+    ).isoformat()
+    result = gate.assess(proof)
+    assert result["decision"] == "NO_GO"
+    assert "safety_not_fresh" in result["reasons"]
 
 
 def test_missing_bridge_counters_fail_closed():

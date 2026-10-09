@@ -23,6 +23,8 @@ MAX_PROOF_BYTES = 65536
 MIN_WINDOW_SECONDS = 60
 MAX_SAMPLE_GAP_SECONDS = 12
 MAX_SNAPSHOT_AGE_SECONDS = 120
+MAX_WINDOW_END_AGE_SECONDS = 180
+MAX_FUTURE_CLOCK_SKEW_SECONDS = 5
 MIN_MEM_AVAILABLE_KIB = 256 * 1024
 MAX_MEMORY_PSI_FULL = 5.0
 MAX_IO_PSI_FULL = 10.0
@@ -117,6 +119,14 @@ def assess(proof: Any) -> dict:
     if start is None or end is None or (end - start).total_seconds() < MIN_WINDOW_SECONDS:
         errors.append("window_shorter_than_60_seconds")
 
+    # A self-consistent old recording is NOT evidence of a safe window now.
+    # Sampling takes 60s; allow a bounded collector/transit delay only.
+    evaluation_time = datetime.now(timezone.utc)
+    if end is not None:
+        age = (evaluation_time - end).total_seconds()
+        if not -MAX_FUTURE_CLOCK_SKEW_SECONDS <= age <= MAX_WINDOW_END_AGE_SECONDS:
+            errors.append("stale_or_future_sample_window")
+
     rich = proof.get("rich")
     safety = proof.get("safety")
     try:
@@ -125,7 +135,7 @@ def assess(proof: Any) -> dict:
         if end is None:
             raise ValueError("sample_window_missing")
         for name,record in (("rich", rich), ("safety", safety)):
-            age = (end - _timestamp(record.get("at"))).total_seconds()
+            age = (evaluation_time - _timestamp(record.get("at"))).total_seconds()
             if not 0 <= age <= MAX_SNAPSHOT_AGE_SECONDS:
                 raise ValueError(name + "_not_fresh")
             _assert_counter(record, "core_gap_events", EXPECTED_CORE[0])
