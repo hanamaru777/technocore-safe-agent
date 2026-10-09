@@ -31,6 +31,20 @@ MAX_RICH_BYTES = 32 * 1024 * 1024
 MAX_SAFETY_BYTES = 4096
 MAX_STREAM_OUTPUT = 16384
 EXPECTED_ERROR = "startup_lobby_capture_protected_backlog_capacity"
+# Strictly allowlisted diagnostics. Never surface raw exceptions or command text.
+LAST_STAGE = "INIT"
+SAMPLES_TAKEN = 0
+SAFE_STAGES = frozenset(("INIT", "HOST", "REPO", "SAMPLES", "RICH", "SAFETY", "WINDOW", "DONE"))
+SAFE_FAILURE_REASONS = frozenset((
+    "unexpected_host", "unexpected_production_head", "unexpected_branch",
+    "dirty_worktree", "unit_not_allowlisted", "incomplete_unit_snapshot",
+    "invalid_pid", "invalid_n_restarts", "missing_mem_available",
+    "bad_psi_name", "missing_full_psi", "unsafe_rich_size",
+    "malformed_rich_stream", "untrusted_error_room",
+    "duplicate_rich_field", "missing_rich_fields", "unsafe_safety_size",
+    "invalid_safety_schema", "short_observation_window", "oversized_proof",
+    "read_only_command_failed", "command_output_too_large",
+))
 RICH_FILTER = r"""
 select(length == 2) | .[0] as $p | .[1] as $v
 | if $p == ["updated_at"] then ["at",$v]
@@ -180,31 +194,56 @@ def _safety() -> dict:
 
 
 def collect() -> dict:
+    global LAST_STAGE, SAMPLES_TAKEN
+    LAST_STAGE = "HOST"
+    SAMPLES_TAKEN = 0
     if socket.gethostname().split(".")[0] != HOST:
         raise ValueError("unexpected_host")
+    LAST_STAGE = "REPO"
     head, clean = _repo_status()
     began = time.monotonic()
     samples = []
+    LAST_STAGE = "SAMPLES"
     for i in range(SAMPLES):
         if i:
             time.sleep(max(0.0, began + i * INTERVAL_SECONDS - time.monotonic()))
         samples.append(_sample())
+        SAMPLES_TAKEN = len(samples)
+    LAST_STAGE = "RICH"
+    rich = _rich()
+    LAST_STAGE = "SAFETY"
+    safety = _safety()
     proof = {
         "schema_version": 1,
         "source_head": head,
         "target_head": TARGET_HEAD,
         "worktree_clean": clean,
         "samples": samples,
-        "rich": _rich(),
-        "safety": _safety(),
+        "rich": rich,
+        "safety": safety,
     }
+    LAST_STAGE = "WINDOW"
     # If the observational window was interrupted, fail without emitting a
     # possibly convincing-looking partial proof.
     start = datetime.fromisoformat(samples[0]["at"])
     end = datetime.fromisoformat(samples[-1]["at"])
     if (end - start).total_seconds() < 60:
         raise ValueError("short_observation_window")
+    LAST_STAGE = "DONE"
     return proof
+
+
+def classify_failure(error: BaseException) -> dict:
+    """Only fixed codes and stage names, even for untrusted parser errors."""
+    stage = LAST_STAGE if LAST_STAGE in SAFE_STAGES else "INIT"
+    reason = str(error) if type(error) is ValueError and str(error) in SAFE_FAILURE_REASONS else "unclassified_failure"
+    return {
+        "decision": "NO_GO",
+        "restart_authorized": False,
+        "stage": stage,
+        "samples_taken": SAMPLES_TAKEN if type(SAMPLES_TAKEN) is int and 0 <= SAMPLES_TAKEN <= SAMPLES else 0,
+        "reasons": [reason],
+    }
 
 
 def main() -> int:
@@ -216,9 +255,8 @@ def main() -> int:
         print(encoded)
         return 0
     except (OSError, ValueError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
-        # Never output raw command stderr, process environment or untrusted state.
-        print(json.dumps({"decision":"NO_GO","restart_authorized":False,
-                          "reasons":[type(error).__name__]}))
+        # No raw exception text or command stderr on failure.
+        print(json.dumps(classify_failure(error), sort_keys=True))
         return 2
 
 
