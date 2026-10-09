@@ -504,6 +504,11 @@ def capture_process(stop) -> None:
     pacer = _Pacer()
     inserted_since_prune = 0
     row_count = _row_count(connection)
+    # Only the standalone Capture writes this spool. Once a safe prune makes
+    # no progress, repeated scans of the same 2M protected rows cannot help
+    # until the durable Observer cursor changes. Keep polling the tiny cursor.
+    stalled_at_cursor: int | None = None
+    capacity_error_recorded = False
     client = httpx.Client()
     try:
         while not stop.is_set():
@@ -511,12 +516,27 @@ def capture_process(stop) -> None:
             # inserts in memory and only touch SQLite for capacity recovery when the
             # hard ceiling is actually reached.
             if row_count >= MAX_PROTECTED_ROWS:
-                row_count = _prune(connection)
-                if row_count >= MAX_PROTECTED_ROWS:
-                    _meta_set(connection, "last_error", "protected_backlog_capacity")
-                    connection.commit()
+                observed = _observer_cursor()
+                if stalled_at_cursor == observed:
+                    # No eligible rows changed, no new rows are inserted while
+                    # blocked, and Observer has not advanced: skip the costly
+                    # COUNT/OFFSET and duplicate SQLite meta commit this tick.
                     stop.wait(CAPACITY_RECHECK_SECONDS)
                     continue
+                previous_count = row_count
+                row_count = _prune(connection, observer_cursor=observed)
+                if row_count >= MAX_PROTECTED_ROWS:
+                    # A bounded prune may need MANY passes at one stable
+                    # cursor. Cache only an actual no-progress attempt.
+                    stalled_at_cursor = observed if row_count == previous_count else None
+                    if not capacity_error_recorded:
+                        _meta_set(connection, "last_error", "protected_backlog_capacity")
+                        connection.commit()
+                        capacity_error_recorded = True
+                    stop.wait(CAPACITY_RECHECK_SECONDS)
+                    continue
+                stalled_at_cursor = None
+                capacity_error_recorded = False
 
             if not pacer.wait(stop):
                 break
