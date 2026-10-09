@@ -228,6 +228,80 @@ def test_no_go_cli_never_echoes_exception_details(monkeypatch, capsys):
     assert result["restart_authorized"] is False
 
 
+def test_fail_closed_stage_categorizes_known_repo_error_without_six_minute_retry(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(collector.socket, "gethostname", lambda: "technocore-resident")
+    monkeypatch.setattr(
+        collector, "_repo_status",
+        lambda: (_ for _ in ()).throw(ValueError("unexpected_branch")),
+    )
+    monkeypatch.setattr(
+        collector, "_sample",
+        lambda: (_ for _ in ()).throw(AssertionError("no_60sec_probe")),
+    )
+    assert collector.main() == 2
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict == {
+        "decision": "NO_GO", "restart_authorized": False,
+        "stage": "REPO", "samples_taken": 0, "reasons": ["unexpected_branch"]
+    }
+
+
+def test_samples_fail_stage_and_count_after_two_samples(monkeypatch, capsys):
+    monkeypatch.setattr(collector.socket, "gethostname", lambda: "technocore-resident")
+    monkeypatch.setattr(collector, "_repo_status", lambda: (collector.OLD_HEAD, True))
+    monkeypatch.setattr(collector.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(collector.time, "sleep", lambda n: None)
+    call_count = [0]
+
+    def sample():
+        call_count[0] += 1
+        if call_count[0] > 2:
+            raise ValueError("missing_full_psi")
+        return {"at": "synthetic"}
+
+    monkeypatch.setattr(collector, "_sample", sample)
+    assert collector.main() == 2
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict["stage"] == "SAMPLES"
+    assert verdict["samples_taken"] == 2
+    assert verdict["reasons"] == ["missing_full_psi"]
+    assert verdict["restart_authorized"] is False
+
+
+def test_rich_failure_identifies_phase_without_raw_error(monkeypatch, capsys):
+    monkeypatch.setattr(collector.socket, "gethostname", lambda: "technocore-resident")
+    monkeypatch.setattr(collector, "_repo_status", lambda: (collector.OLD_HEAD, True))
+    monkeypatch.setattr(collector, "SAMPLES", 1)
+    monkeypatch.setattr(collector.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(collector, "_sample", lambda: {"at": "fake"})
+    monkeypatch.setattr(
+        collector, "_rich",
+        lambda: (_ for _ in ()).throw(ValueError("missing_rich_fields")),
+    )
+    assert collector.main() == 2
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict["stage"] == "RICH"
+    assert verdict["samples_taken"] == 1
+    assert verdict["reasons"] == ["missing_rich_fields"]
+
+
+def test_sensitive_unexpected_exception_is_redacted(monkeypatch, capsys):
+    monkeypatch.setattr(collector.socket, "gethostname", lambda: "technocore-resident")
+    monkeypatch.setattr(
+        collector, "_repo_status",
+        lambda: (_ for _ in ()).throw(ValueError("secret-operator-path")),
+    )
+    assert collector.main() == 2
+    out = capsys.readouterr().out
+    assert "secret-operator-path" not in out
+    verdict = json.loads(out)
+    assert verdict["stage"] == "REPO"
+    assert verdict["reasons"] == ["unclassified_failure"]
+    assert verdict["restart_authorized"] is False
+
+
 def test_run_command_does_not_use_shell_and_discards_errors(monkeypatch):
     commands = []
     def fake_subprocess_run(args, **kwargs):
