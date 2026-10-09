@@ -180,7 +180,8 @@ def test_scheduled_workflow_is_main_only_minimal_and_issue_deduped() -> None:
     workflow = (
         ROOT / ".github" / "workflows" / "flop-launch-artifact-watch.yml"
     ).read_text("utf-8")
-    assert 'cron: "17 * * * *"' in workflow
+    assert 'cron: "17,47 * * * *"' in workflow
+    assert workflow.count("cron:") == 1
     assert "workflow_dispatch:" in workflow
     assert "pull_request:" not in workflow
     assert "contents: read" in workflow
