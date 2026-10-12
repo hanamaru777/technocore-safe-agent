@@ -122,3 +122,24 @@ def test_k137_window_keeps_18m_until_next_scan():
         assert not m.slot_now(datetime(2026,10,12,4,minute,tzinfo=timezone.utc))
     for minute in (6, 10, 38, 44):
         assert m.slot_now(datetime(2026,10,12,4,minute,tzinfo=timezone.utc))
+
+
+def test_child_failure_report_is_stage_specific_not_generic_runuser():
+    m = load()
+    class FakeCompleted:
+        returncode = 17
+        stdout = ""
+        stderr = "potentially sensitive child stderr that must NOT be exposed"
+    class FakeSubprocess:
+        @staticmethod
+        def run(*a, **kw):
+            return FakeCompleted()
+    import unittest.mock
+    with unittest.mock.patch.object(m.subprocess, "run", FakeSubprocess.run):
+        with pytest.raises(m.Stop, match="CHILD_FAILED_PINNED_PIP_BOOTSTRAP") as ex:
+            m.cmd(["runuser", "-u", "flop-shadow"], label="PINNED_PIP_BOOTSTRAP")
+    assert "sensitive" not in str(ex.value)
+    src = SOURCE.read_text()
+    for marker in ("LOCKED_WHEEL_DOWNLOAD", "PINNED_PIP_BOOTSTRAP",
+                   "OFFLINE_LOCKED_WHEEL_INSTALL", "OFFLINE_IMPORT_SMOKE"):
+        assert f'label="{marker}"' in src
