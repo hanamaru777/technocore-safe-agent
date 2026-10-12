@@ -89,3 +89,42 @@ def test_no_application_dependency_installs_or_service_actions():
         assert forbidden not in source
     assert "FLOP_SHADOW_DISARMED_STAGE_PASS" in source
     assert "K137_SERVICE_TIMER_UNCHANGED_PASS" in source
+
+
+def test_ubuntu_syslog_group_writable_log_parent_is_only_exception(monkeypatch):
+    m = load_carrier()
+    monkeypatch.setattr(m.grp, "getgrnam", lambda n: SimpleNamespace(gr_gid=22))
+    monkeypatch.setattr(m.pathlib.Path, "lstat", lambda p: SimpleNamespace(
+        st_mode=m.stat.S_IFDIR | 0o775, st_uid=0, st_gid=22
+    ))
+    m.check_parent("/var/log")
+    with pytest.raises(m.Stop, match="UNSAFE_PARENT_STOP_var_cache"):
+        m.check_parent("/var/cache")
+
+
+@pytest.mark.parametrize("uid,gid,mode,is_dir", [
+    (5, 22, 0o775, True),
+    (0, 999, 0o775, True),
+    (0, 22, 0o777, True),
+    (0, 22, 0o2775, True),
+    (0, 22, 0o775, False),
+])
+def test_unsafe_log_parent_fails_closed_with_precise_path(
+    monkeypatch, uid, gid, mode, is_dir,
+):
+    m = load_carrier()
+    monkeypatch.setattr(m.grp, "getgrnam", lambda n: SimpleNamespace(gr_gid=22))
+    filetype = m.stat.S_IFDIR if is_dir else m.stat.S_IFLNK
+    monkeypatch.setattr(m.pathlib.Path, "lstat", lambda p: SimpleNamespace(
+        st_mode=filetype | mode, st_uid=uid, st_gid=gid
+    ))
+    with pytest.raises(m.Stop, match="UNSAFE_PARENT_STOP_var_log"):
+        m.check_parent("/var/log")
+
+
+def test_other_root_parent_no_group_or_world_write(monkeypatch):
+    m = load_carrier()
+    monkeypatch.setattr(m.pathlib.Path, "lstat", lambda p: SimpleNamespace(
+        st_mode=m.stat.S_IFDIR | 0o755, st_uid=0, st_gid=0
+    ))
+    m.check_parent("/var/cache")
