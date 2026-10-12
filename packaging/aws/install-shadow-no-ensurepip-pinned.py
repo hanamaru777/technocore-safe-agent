@@ -26,7 +26,8 @@ VENV = Path("/var/lib/flop-shadow/venv")
 CACHE = Path("/var/cache/flop-shadow")
 WHEELS = CACHE / "runtime-wheel-cache-v2"
 PIP_WHEEL = "pip-26.2.1-py3-none-any.whl"
-PIP_SHA256 = "71138adf1f4ca900cdb7d289c21b7494"\n              "329f2332b6d85f0e1c42108c0384ed3e"
+PIP_SHA256 = ("71138adf1f4ca900cdb7d289c21b7494"
+              "329f2332b6d85f0e1c42108c0384ed3e")
 PIP_URL = ("https://files.pythonhosted.org/packages/"
            "f3/6e/1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/"
            + PIP_WHEEL)
