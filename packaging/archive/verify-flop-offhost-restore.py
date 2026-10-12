@@ -101,11 +101,22 @@ def file_digest(path, max_size):
 def read_manifest(root, expected):
     path = root / "RETIREMENT-MANIFEST.json"
     require(not path.is_symlink(), "MANIFEST_SYMLINK")
-    size, actual = file_digest(path, MAX_MANIFEST)
-    require(actual == expected, "OUT_OF_BAND_MANIFEST_HASH_MISMATCH")
-    with path.open("rb") as f:
-        data = f.read(MAX_MANIFEST + 1)
-    require(len(data) == size, "MANIFEST_CHANGED_DURING_READ")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        require(stat.S_ISREG(before.st_mode) and
+                0 < before.st_size <= MAX_MANIFEST, "MANIFEST_SIZE_STOP")
+        data = os.read(fd, MAX_MANIFEST + 1)
+        after = os.fstat(fd)
+        require(len(data) == before.st_size and
+                (before.st_size, before.st_mtime_ns) ==
+                (after.st_size, after.st_mtime_ns),
+                "MANIFEST_CHANGED_DURING_READ")
+        require(hashlib.sha256(data).hexdigest() == expected,
+                "OUT_OF_BAND_MANIFEST_HASH_MISMATCH")
+    finally:
+        os.close(fd)
     doc = json.loads(data.decode("utf-8"))
     require(isinstance(doc, dict) and
             set(doc) == {"schema", "kind", "source_commit", "files"},
@@ -160,10 +171,15 @@ def verify_sqlite(path):
         conn.close()
 
 def read_small_json(path):
-    require(path.stat().st_size <= MAX_SMALL_JSON, "SMALL_JSON_TOO_LARGE")
-    with path.open("rb") as f:
-        content = f.read(MAX_SMALL_JSON + 1)
-    require(len(content) <= MAX_SMALL_JSON, "SMALL_JSON_LIMIT")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and
+                0 < info.st_size <= MAX_SMALL_JSON, "SMALL_JSON_TOO_LARGE")
+        content = os.read(fd, MAX_SMALL_JSON + 1)
+        require(len(content) == info.st_size, "SMALL_JSON_CHANGED_DURING_READ")
+    finally:
+        os.close(fd)
     return json.loads(content.decode("utf-8"))
 
 def verify_ledger(files):
