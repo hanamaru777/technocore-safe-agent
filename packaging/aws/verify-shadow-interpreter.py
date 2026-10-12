@@ -14,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 SOURCE_SHA = "3fb667837a8f01d17e97dabfd1a1bfe5ddc09e1e"
 RELEASE = Path("/opt/flop-shadow/releases") / SOURCE_SHA
@@ -55,8 +56,6 @@ def snapshot():
     return svc, timer
 
 def gate():
-    minute = datetime.datetime.now(datetime.timezone.utc).minute
-    require(9 <= minute <= 44, "K137_HOURLY_WINDOW_STOP")
     mem = Path("/proc/meminfo").read_text()
     available = int(next(x.split()[1] for x in mem.splitlines()
                          if x.startswith("MemAvailable:")))
@@ -68,6 +67,36 @@ def gate():
         require(avg <= maximum, "K137_" + which.upper() + "_PRESSURE_STOP")
     require(shutil.disk_usage("/").free >= 20 * 1024**3,
             "K137_DISK_HEADROOM_STOP")
+
+def safe_slot(now):
+    # K137's separately owned natural Q timer fires at hh:02 and may run
+    # for up to 180 seconds. 06..57 is a conservative source-only window:
+    # 06 leaves a recovery margin, 57 leaves five minutes to next hh:02.
+    return 6 <= now.minute <= 57
+
+
+def await_k137_idle(timeout_seconds=510, interval_seconds=15):
+    # No timer or K137 service is changed. This is bounded in the foreground;
+    # nothing is scheduled or backgrounded. No sleeps if a safe slot exists.
+    deadline = time.monotonic() + timeout_seconds
+    original = None
+    waiting_printed = False
+    while True:
+        st = snapshot()
+        if original is None:
+            original = st
+        # A timer state change is possible naturally; never "restore" it.
+        require(st[1] == original[1], "K137_TIMER_CHANGED_DURING_WAIT_STOP")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if safe_slot(now) and st[0] == "inactive":
+            return st
+        if not waiting_printed:
+            print("FLOP_SHADOW_WAIT_K137_NATURAL_TIMER_WINDOW", flush=True)
+            waiting_printed = True
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, "K137_WINDOW_WAIT_TIMEOUT_STOP")
+        time.sleep(min(interval_seconds, remaining))
+
 
 def preflight():
     require(os.geteuid() == 0, "ROOT_REQUIRED_STOP")
@@ -96,8 +125,9 @@ def preflight():
     require(exec_checked(["git", "-C", str(RELEASE), "rev-parse",
                           "HEAD:pyproject.toml"]) == "1032be41c75f279e58374a86eddb30325125a7ab",
             "SHADOW_PROJECT_DRIFT_STOP")
+    original = await_k137_idle()
     gate()
-    return user, snapshot()
+    return user, original
 
 SMOKE = r"""
 import pathlib, sys, tomllib
