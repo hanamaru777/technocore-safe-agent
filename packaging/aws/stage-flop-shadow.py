@@ -177,10 +177,10 @@ def install():
              "--shell", "/usr/sbin/nologin", "flop-shadow"])
     user = pwd.getpwnam("flop-shadow")
     groups = set(os.getgrouplist("flop-shadow", user.pw_gid))
-    forbidden = {grp.getgrnam("tradebot-k137").gr_gid,
-                 grp.getgrnam("sudo").gr_gid}
     require(user.pw_uid != 0 and user.pw_shell == "/usr/sbin/nologin" and
-            not groups.intersection(forbidden), "SHADOW_USER_ISOLATION_STOP")
+            groups == {user.pw_gid} and
+            user.pw_gid != grp.getgrnam("tradebot-k137").gr_gid,
+            "SHADOW_USER_ISOLATION_STOP")
     for p in BASES[1:]:
         os.chown(p, user.pw_uid, user.pw_gid)
         os.chmod(p, 0o700)
