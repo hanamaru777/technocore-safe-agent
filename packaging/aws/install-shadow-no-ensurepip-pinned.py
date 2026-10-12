@@ -43,10 +43,11 @@ def require(ok, reason):
     if not ok:
         raise Stop(reason)
 
-def cmd(argv, timeout=20, env=None):
+def cmd(argv, timeout=20, env=None, label=None):
     p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True, timeout=timeout, check=False, env=env)
-    require(p.returncode == 0, "CHILD_FAILED_" + Path(argv[0]).name.upper())
+    require(p.returncode == 0,
+            "CHILD_FAILED_" + (label if label else Path(argv[0]).name.upper()))
     return p.stdout.strip()
 
 def k137(name):
@@ -172,7 +173,7 @@ def preflight():
                       "HOME=/var/lib/flop-shadow", "PATH=/usr/bin:/bin",
                       "LANG=C", "PYTHONDONTWRITEBYTECODE=1"]
     current = cmd([*preflight_user, str(VENV / "bin" / "python3"), "-I", "-c",
-                   "import sys;print(sys.version_info.major,sys.version_info.minor)"])
+                   "import sys;print(sys.version_info.major,sys.version_info.minor)"], label="VENV_VERSION")
     require(current == "3 12", "VENV_PYTHON_VERSION_STOP")
     # Ubuntu on this host lacks ensurepip (proven via real operator).
     # Never install OS-wide Python packages. Bootstrap a pinned official pip
@@ -292,7 +293,7 @@ def main():
     pip_plan = ("pip", "26.2.1", PIP_WHEEL, PIP_URL, PIP_SHA256, 0)
     wheel_output = cmd([*isolated, "/usr/bin/python3", "-I", "-c", FETCH,
                         str(RELEASE), str(WHEELS), json.dumps([*plan, pip_plan])],
-                       timeout=220)
+                       timeout=220, label="LOCKED_WHEEL_DOWNLOAD")
     require("FLOP_SHADOW_PINNED_WHEELS_SHA256_PASS count=11" in wheel_output,
             "WHEEL_SHA256_CONFIRMATION_STOP")
     print("FLOP_SHADOW_PINNED_WHEELS_SHA256_PASS count=11", flush=True)
@@ -302,11 +303,12 @@ def main():
     require(k137_snapshot() == original, "K137_DRIFT_BEFORE_BOOTSTRAP_STOP")
     pip_site = str(VENV / "lib" / "python3.12" / "site-packages")
     pip_result = cmd([*isolated, str(VENV / "bin" / "python3"), "-I", "-c",
-                      PIP_BOOTSTRAP, pip_site, str(WHEELS / PIP_WHEEL)], timeout=90)
+                      PIP_BOOTSTRAP, pip_site, str(WHEELS / PIP_WHEEL)], timeout=90,
+                     label="PINNED_PIP_BOOTSTRAP")
     require("FLOP_SHADOW_PINNED_PIP_WHEEL_BOOTSTRAP_PASS" in pip_result,
             "PIP_BOOTSTRAP_CONFIRMATION_STOP")
     pip_version = cmd([*isolated, str(VENV / "bin" / "python3"), "-I",
-                       "-m", "pip", "--version"])
+                       "-m", "pip", "--version"], label="PINNED_PIP_VERSION")
     require(pip_version.startswith("pip 26.2.1 "), "PIP_VERSION_STOP")
     print("FLOP_SHADOW_PINNED_PIP_WHEEL_BOOTSTRAP_PASS", flush=True)
     archives = [str(WHEELS / x[2]) for x in plan]
@@ -314,9 +316,9 @@ def main():
          "--isolated", "install", "--quiet", "--no-index", "--no-deps",
          "--no-cache-dir", "--no-compile", "--no-input", "--only-binary=:all:",
          *archives],
-        timeout=120)
+        timeout=120, label="OFFLINE_LOCKED_WHEEL_INSTALL")
     cmd([*isolated, str(VENV / "bin" / "python3"), "-I", "-B",
-         "-c", SMOKE], timeout=30)
+         "-c", SMOKE], timeout=30, label="OFFLINE_IMPORT_SMOKE")
     headroom()
     require(k137_snapshot() == original, "K137_SERVICE_TIMER_CHANGED_STOP")
     print("K137_SERVICE_TIMER_UNCHANGED_PASS", flush=True)
