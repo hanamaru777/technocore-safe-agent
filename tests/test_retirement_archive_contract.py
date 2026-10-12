@@ -151,6 +151,61 @@ def test_source_never_accesses_live_data_network_or_mutates():
         assert token not in source
     assert "FLOP_R861_ORACLE_DELETION_NOT_AUTHORIZED" in source
 
+
+def test_close1_trade_attempt_receipt_and_account_are_preserved():
+    m = module()
+    c, state = fixtures(m)
+    token = "a" * 64
+    add(state, "close1/close1-own-account.json",
+        "close1/close1-autonomous-stage.json",
+        "observer/close1-standalone-watch.json",
+        "observer/resident-control.json",
+        "observer/resident-heartbeat.json",
+        "signer/close1-approved-trade.json",
+        "signer/close1-attempt-" + token + ".json",
+        "signer/close1-receipt-" + token + ".json",
+        "signer/close1-approved-trade.lock")
+    _, files = m.plan(c, state)
+    names = dict(files)
+    assert "state/close1/close1-own-account.json" in names
+    assert "state/signer/close1-attempt-" + token + ".json" in names
+    assert "state/signer/close1-receipt-" + token + ".json" in names
+    assert "state/signer/close1-approved-trade.lock" not in names
+
+
+def test_financial_attempt_without_receipt_is_never_a_clear_cutover():
+    m = module()
+    c, state = fixtures(m)
+    add(state, "close1/close1-own-account.json",
+        "signer/close1-attempt-" + "c" * 64 + ".json")
+    with pytest.raises(m.Stop, match="FINANCE_AMBIGUOUS_ATTEMPT_STOP"):
+        m.plan(c, state)
+
+
+def test_financial_receipt_without_matching_attempt_is_rejected():
+    m = module()
+    c, state = fixtures(m)
+    add(state, "close1/close1-own-account.json",
+        "signer/close1-receipt-" + "d" * 64 + ".json")
+    with pytest.raises(m.Stop, match="FINANCE_RECEIPT_WITHOUT_ATTEMPT"):
+        m.plan(c, state)
+
+
+def test_trade_approval_without_ledger_is_rejected():
+    m = module()
+    c, state = fixtures(m)
+    add(state, "signer/close1-approved-batch.json")
+    with pytest.raises(m.Stop, match="FINANCE_ACCOUNT_LEDGER_MISSING"):
+        m.plan(c, state)
+
+
+def test_unclassified_finance_filename_stays_fail_closed():
+    m = module()
+    c, state = fixtures(m)
+    add(state, "close1/new-financial-stage.json")
+    with pytest.raises(m.Stop, match="UNCLASSIFIED_STATE_FILE_STOP"):
+        m.plan(c, state)
+
 def test_main_accepts_metadata_offline_only(tmp_path, monkeypatch, capsys):
     m = module()
     c, s = fixtures(m)
