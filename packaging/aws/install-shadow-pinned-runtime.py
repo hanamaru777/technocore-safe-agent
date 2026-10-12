@@ -8,6 +8,7 @@ Only HTTPS GET of wheels listed in frozen uv.lock, private FLOP-only files.
 import datetime
 import grp
 import hashlib
+import json
 import os
 from pathlib import Path
 import pwd
@@ -170,12 +171,10 @@ def preflight():
 
 # Runs as isolated flop-shadow non-login account. Exact HTTPS public wheel GETs only.
 FETCH = r"""
-import hashlib, pathlib, os, sys, tomllib, urllib.request, urllib.parse
+import hashlib, json, pathlib, os, sys, urllib.request
 release, cache = map(pathlib.Path, sys.argv[1:3])
-code = r'''__PLAN_SOURCE__'''
-namespace = {}
-exec(code, namespace)
-plan = namespace['wheel_plan'](tomllib.loads((release / 'uv.lock').read_text()))
+plan = json.loads(sys.argv[3])
+assert len(plan) == 10 and all(len(row) == 6 for row in plan)
 assert cache.parent.is_dir() and cache.parent.name == 'flop-shadow'
 cache.mkdir(mode=0o700)
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -220,11 +219,13 @@ def main():
     isolated = ["runuser", "-u", "flop-shadow", "--", "env", "-i",
                 "HOME=/var/lib/flop-shadow", "PATH=/usr/bin:/bin",
                 "LANG=C", "PYTHONDONTWRITEBYTECODE=1"]
-    # Wheel selection logic reused with no access to other project paths.
-    plan_source = __import__("inspect").getsource(wheel_name) + "\n" + __import__("inspect").getsource(wheel_plan)
-    fetch = FETCH.replace("__PLAN_SOURCE__", plan_source)
-    cmd([*isolated, "/usr/bin/python3", "-I", "-c", fetch,
-         str(RELEASE), str(WHEELS)], timeout=200)
+    # Preflight generated this frozen, SHA256-pinned allowlist from uv.lock.
+    wheel_output = cmd([*isolated, "/usr/bin/python3", "-I", "-c", FETCH,
+                        str(RELEASE), str(WHEELS), json.dumps(plan)],
+                       timeout=200)
+    require("FLOP_SHADOW_PINNED_WHEELS_SHA256_PASS count=10" in wheel_output,
+            "WHEEL_SHA256_CONFIRMATION_STOP")
+    print("FLOP_SHADOW_PINNED_WHEELS_SHA256_PASS count=10", flush=True)
     require(len(list(WHEELS.glob("*.whl"))) == len(plan),
             "WHEELS_COUNT_DRIFT_STOP")
     headroom()
