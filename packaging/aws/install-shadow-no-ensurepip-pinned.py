@@ -65,10 +65,10 @@ def k137_snapshot(allow_active=False):
     return svc, timer
 
 def slot_now(now):
-    return 6 <= now.minute <= 44
+    return 6 <= now.minute <= 51
 
 def await_quiet():
-    deadline = time.monotonic() + 840
+    deadline = time.monotonic() + 900
     baseline_timer = None
     printed = False
     while True:
