@@ -53,12 +53,22 @@ def test_pressure_gate_stops_before_mutation(monkeypatch, mem, psi_mem, psi_io):
         m.gate()
 
 
-def test_readonly_k137_timer_off_is_mandatory(monkeypatch):
+@pytest.mark.parametrize("timer_state", [("inactive", "disabled"), ("active", "enabled")])
+def test_readonly_k137_off_or_armed_public_timer_is_accepted(monkeypatch, timer_state):
     m = load_carrier()
     monkeypatch.setattr(m.pathlib.Path, "exists", lambda p: True)
     monkeypatch.setattr(m.pwd, "getpwnam", lambda name: SimpleNamespace(pw_name=name))
-    monkeypatch.setattr(m, "status", lambda n: ("inactive", "enabled") if n.endswith(".timer") else ("inactive", "disabled"))
-    with pytest.raises(m.Stop, match="K137_TIMER_NOT_DISABLED_STOP"):
+    monkeypatch.setattr(m, "status", lambda n: timer_state if n.endswith(".timer") else ("inactive", "disabled"))
+    assert m.k137() == (("inactive", "disabled"), timer_state)
+
+
+@pytest.mark.parametrize("timer_state", [("inactive", "enabled"), ("active", "disabled"), ("failed", "enabled")])
+def test_readonly_k137_unexpected_timer_state_is_rejected(monkeypatch, timer_state):
+    m = load_carrier()
+    monkeypatch.setattr(m.pathlib.Path, "exists", lambda p: True)
+    monkeypatch.setattr(m.pwd, "getpwnam", lambda name: SimpleNamespace(pw_name=name))
+    monkeypatch.setattr(m, "status", lambda n: timer_state if n.endswith(".timer") else ("inactive", "disabled"))
+    with pytest.raises(m.Stop, match="K137_TIMER_UNEXPECTED_STATE_STOP"):
         m.k137()
 
 
