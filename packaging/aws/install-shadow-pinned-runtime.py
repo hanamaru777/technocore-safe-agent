@@ -163,6 +163,10 @@ def preflight():
     current = cmd([str(VENV / "bin" / "python3"), "-I", "-c",
                    "import sys;print(sys.version_info.major,sys.version_info.minor)"])
     require(current == "3 12", "VENV_PYTHON_VERSION_STOP")
+    # Fail before any download/write if Ubuntu's vendor ensurepip is absent.
+    bundled_pip = cmd([str(VENV / "bin" / "python3"), "-I",
+                       "-m", "ensurepip", "--version"])
+    require(bundled_pip.startswith("pip "), "ENSUREPIP_NOT_AVAILABLE_STOP")
     lock = tomllib.loads((RELEASE / "uv.lock").read_text())
     plan = wheel_plan(lock)
     require(not (VENV / "lib" / "python3.12" / "site-packages" / "pip").exists(),
