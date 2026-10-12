@@ -239,7 +239,8 @@ def main():
     archives = [str(WHEELS / x[2]) for x in plan]
     cmd([*isolated, str(VENV / "bin" / "python3"), "-I", "-m", "pip",
          "--isolated", "install", "--quiet", "--no-index", "--no-deps",
-         "--no-compile", "--no-input", "--only-binary=:all:", *archives],
+         "--no-cache-dir", "--no-compile", "--no-input", "--only-binary=:all:",
+         *archives],
         timeout=120)
     cmd([*isolated, str(VENV / "bin" / "python3"), "-I", "-B",
          "-c", SMOKE], timeout=30)
