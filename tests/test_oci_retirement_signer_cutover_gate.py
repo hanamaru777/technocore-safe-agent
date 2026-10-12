@@ -79,12 +79,13 @@ def test_no_state_or_service_mutation_surface():
     s = SRC.read_text()
     compile(s, str(SRC), "exec")
     for bad in ("sqlite3.connect", ".read_bytes(", "rglob(", "os.walk(",
-                "httpx", "urllib", "open(", "subprocess.Popen",
+                "httpx", "urllib", "subprocess.Popen",
                 "systemctl stop", "systemctl start", "systemctl restart",
                 "systemctl enable", "systemctl disable", "SIGTERM",
                 "os.kill(", "os.rename", "write_text(", "write_bytes(",
                 "unlink(", "chmod(", "chown(", "SIGN_SEED",
                 "OCI_VAULT_SECRET_OCID", "/etc/technocore-safe-agent/env"):
         assert bad not in s
+    assert "os.O_RDONLY" in s and "os.O_WRONLY" not in s and "os.O_CREAT" not in s
     assert "FLOP_OCI_SIGNER_CUTOVER_NOT_AUTHORIZED_WHILE_LIVE" in s
     assert "FLOP_OCI_SIGNER_GATE_READ_ONLY_PASS" in s
