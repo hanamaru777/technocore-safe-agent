@@ -28,6 +28,21 @@ REQUIRED = frozenset((
     "autopilot/autopilot-outbox.json", "autopilot/autopilot-audit.jsonl",
 ))
 ROTATED = "autopilot/autopilot-audit.jsonl."
+OPTIONAL = frozenset((
+    "observer/resident-control.json", "observer/resident-heartbeat.json",
+    "observer/close1-standalone-watch.json",
+    "close1/close1-own-account.json",
+    "close1/close1-autonomous-resident.json",
+    "close1/close1-autonomous-stage.json",
+    "close1/close1-autonomous-skips.json",
+    "close1/close1-autonomous-rehearsal.json",
+    "signer/close1-approved-trade.json",
+    "signer/close1-approved-batch.json",
+))
+# This is a transient flock pathname, NOT a recovery or epoch proof.
+TRANSIENT = frozenset(("signer/close1-approved-trade.lock",))
+ATTEMPT = re.compile(r"signer/close1-attempt-([a-f0-9]{64})\.json\Z")
+RECEIPT = re.compile(r"signer/close1-receipt-([a-f0-9]{64})\.json\Z")
 CAPTURE_SIDECARS = frozenset(
     name + ext for name, _, _ in DBS for ext in ("-wal", "-shm", "-journal")
 )
@@ -54,7 +69,9 @@ def safe_path(path):
     return path
 
 def allowed_state(path):
-    if path in REQUIRED:
+    if path in REQUIRED or path in OPTIONAL or path in TRANSIENT:
+        return True
+    if ATTEMPT.fullmatch(path) or RECEIPT.fullmatch(path):
         return True
     if path.startswith(ROTATED):
         return path[len(ROTATED):] in ("1", "2", "3", "4")
@@ -110,7 +127,7 @@ def state_plan(meta):
                 0 <= row["size"] <= MAX_FILE, "STATE_FILE_TYPE_OR_SIZE")
         total += row["size"]
         require(total <= MAX_STATE, "STATE_TOTAL_EXCEEDED")
-        if path in (x[0] for x in DBS) or path in CAPTURE_SIDECARS:
+        if path in (x[0] for x in DBS) or path in CAPTURE_SIDECARS or path in TRANSIENT:
             # Original database and its WAL/SHM are NOT copied as ordinary
             # state. Only the SQLite backup API images enter the final bundle.
             continue
@@ -119,11 +136,24 @@ def state_plan(meta):
         require(allowed_state(path), "UNCLASSIFIED_STATE_FILE_STOP")
         selected.append(("state/" + path, row["size"]))
     require(REQUIRED.issubset(seen), "REQUIRED_STATE_MISSING")
+    attempts = {m.group(1) for name in seen
+                if (m := ATTEMPT.fullmatch(name))}
+    receipts = {m.group(1) for name in seen
+                if (m := RECEIPT.fullmatch(name))}
+    require(receipts <= attempts, "FINANCE_RECEIPT_WITHOUT_ATTEMPT")
+    # A durable fence without a confirmed receipt may have reached the
+    # network already. Preserve it; never make automated replay eligible.
+    require(attempts == receipts, "FINANCE_AMBIGUOUS_ATTEMPT_STOP")
+    finance = {name for name in seen if name.startswith("close1/") or
+               name.startswith("signer/close1-")}
+    if finance - TRANSIENT:
+        require("close1/close1-own-account.json" in seen,
+                "FINANCE_ACCOUNT_LEDGER_MISSING")
     rotations = {int(p[len(ROTATED):]) for p in seen if p.startswith(ROTATED)}
     require(rotations == set(range(1, max(rotations, default=0) + 1)),
             "AUDIT_ROTATION_GAP")
     require(set(x[0] for x in selected) == {"state/" + p for p in
-            seen if p not in CAPTURE_SIDECARS and p not in
+            seen if p not in CAPTURE_SIDECARS and p not in TRANSIENT and p not in
             {d[0] for d in DBS}}, "SOURCE_MAP_INCOMPLETE")
     return tuple(sorted(selected))
 
