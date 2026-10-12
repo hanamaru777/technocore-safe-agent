@@ -99,3 +99,12 @@ def test_no_cross_project_or_unsafe_tools():
     assert "--no-deps" in data
     assert "FLOP_SHADOW_PINNED_RUNTIME_DEPS_STAGE_PASS" in data
     assert "FLOP_SHADOW_PINNED_WHEELS_SHA256_PASS" in data
+
+
+def test_preflight_never_runs_user_controlled_venv_interpreter_as_root():
+    data = SCRIPT.read_text()
+    assert 'preflight_user = ["runuser", "-u", "flop-shadow"' in data
+    assert 'current = cmd([*preflight_user, str(VENV / "bin" / "python3")' in data
+    assert 'bundled_pip = cmd([*preflight_user, str(VENV / "bin" / "python3")' in data
+    assert 'current = cmd([str(VENV / "bin" / "python3")' not in data
+    assert 'bundled_pip = cmd([str(VENV / "bin" / "python3")' not in data
