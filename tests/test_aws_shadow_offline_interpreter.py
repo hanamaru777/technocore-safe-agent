@@ -76,3 +76,85 @@ def test_no_network_or_application_execute_on_host():
     assert "env\", \"-i\"" in s
     assert "--without-pip" in s
     assert "FLOP_SHADOW_OFFLINE_INTERPRETER_STAGE_PASS" in s
+
+
+@pytest.mark.parametrize("minute,expected", [
+    (0, False), (1, False), (2, False), (3, False),
+    (5, False), (6, True), (9, True), (44, True),
+    (57, True), (58, False), (59, False),
+])
+def test_k137_quiet_slot_boundaries(minute, expected):
+    from datetime import datetime, timezone
+    m = load()
+    assert m.safe_slot(datetime(2026, 10, 12, 4, minute, tzinfo=timezone.utc)) is expected
+
+
+def test_k137_active_natural_service_waits_without_mutation(monkeypatch):
+    m = load()
+    from datetime import datetime, timezone
+    calls = []
+    service = [("active", "static"), ("inactive", "static")]
+    def fake_status(unit):
+        if unit.endswith(".timer"):
+            return ("active", "enabled")
+        calls.append(unit)
+        return service[min(len(calls) - 1, len(service) - 1)]
+    monkeypatch.setattr(m, "k137_status", fake_status)
+    monkeypatch.setattr(m, "snapshot",
+                        lambda: (("inactive", "static"), ("active", "enabled")))
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 10, 12, 4, 16, tzinfo=timezone.utc)
+    monkeypatch.setattr(m.datetime, "datetime", Clock)
+    monkeypatch.setattr(m.time, "sleep", lambda duration: None)
+    assert m.await_k137_idle(timeout_seconds=100, interval_seconds=1) == (
+        ("inactive", "static"), ("active", "enabled"))
+    assert len(calls) == 2
+
+
+def test_k137_timer_state_drift_during_wait_stops(monkeypatch):
+    m = load()
+    from datetime import datetime, timezone
+    timer_states = [("active", "enabled"), ("inactive", "disabled")]
+    reads = []
+    def fake_status(unit):
+        if unit.endswith(".service"):
+            return ("inactive", "disabled")
+        reads.append(unit)
+        return timer_states[min(len(reads) - 1, 1)]
+    monkeypatch.setattr(m, "k137_status", fake_status)
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 10, 12, 4, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr(m.datetime, "datetime", Clock)
+    monkeypatch.setattr(m.time, "sleep", lambda duration: None)
+    with pytest.raises(m.Stop, match="K137_TIMER_CHANGED_DURING_WAIT_STOP"):
+        m.await_k137_idle(timeout_seconds=100, interval_seconds=1)
+
+
+def test_k137_wait_timeout_stops_not_retries(monkeypatch):
+    m = load()
+    from datetime import datetime, timezone
+    monkeypatch.setattr(m, "k137_status",
+                        lambda unit: ("inactive", "disabled") if unit.endswith(".service") else ("active", "enabled"))
+    class Clock:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 10, 12, 4, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr(m.datetime, "datetime", Clock)
+    monotonic_values = iter([0, 1, 512])
+    monkeypatch.setattr(m.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(m.time, "sleep", lambda duration: None)
+    with pytest.raises(m.Stop, match="K137_WINDOW_WAIT_TIMEOUT_STOP"):
+        m.await_k137_idle(timeout_seconds=510)
+
+
+def test_real_timing_wait_is_bounded_and_nonpersistent():
+    s = SOURCE.read_text()
+    assert "timeout_seconds=510" in s
+    assert "time.sleep(min(interval_seconds, remaining))" in s
+    assert "systemctl start" not in s
+    assert "systemctl disable" not in s
+    assert "timer in ((\"active\", \"enabled\"), (\"inactive\", \"disabled\"))" in s
