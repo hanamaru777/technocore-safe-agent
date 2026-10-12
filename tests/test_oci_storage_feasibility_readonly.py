@@ -36,6 +36,7 @@ def test_unapproved_oci_cli_method_fails_without_subprocess(monkeypatch):
 
 def test_zero_root_buckets_is_only_partial_scope(monkeypatch, capsys):
     m = load()
+    monkeypatch.setattr(m.sys, "argv", ["objectstorage-readonly-feasibility.py"])
     monkeypatch.setattr(m, "tenancy_id", lambda: "ocid1.tenancy.oc1..fakebutnotprinted")
     monkeypatch.setattr(m.shutil, "which", lambda _: "/usr/local/bin/oci")
     hits = []
@@ -60,6 +61,7 @@ def test_zero_root_buckets_is_only_partial_scope(monkeypatch, capsys):
 
 def test_existing_bucket_size_aggregation_does_not_disclose_name(monkeypatch, capsys):
     m = load()
+    monkeypatch.setattr(m.sys, "argv", ["objectstorage-readonly-feasibility.py"])
     monkeypatch.setattr(m, "tenancy_id", lambda: "ocid1.tenancy.oc1..fakebutnotprinted")
     monkeypatch.setattr(m.shutil, "which", lambda _: "/usr/local/bin/oci")
     def fake(*parts):
@@ -84,6 +86,7 @@ def test_existing_bucket_size_aggregation_does_not_disclose_name(monkeypatch, ca
 
 def test_truncated_list_must_not_be_tenancy_total(monkeypatch, capsys):
     m = load()
+    monkeypatch.setattr(m.sys, "argv", ["objectstorage-readonly-feasibility.py"])
     monkeypatch.setattr(m, "tenancy_id", lambda: "ocid1.tenancy.oc1..fakebutnotprinted")
     monkeypatch.setattr(m.shutil, "which", lambda _: "/usr/local/bin/oci")
     def fake(*parts):
