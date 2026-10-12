@@ -7,7 +7,7 @@ Uses SQLite online-backup API in small batches, low IO/CPU priority and strict
 resource gates. Creates Flop-only PRELIMINARY archive, NOT offsite protection.
 Do not re-run after a STOP (partial staging may remain).
 """
-import datetime
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -24,8 +24,9 @@ from urllib.parse import quote
 ROOT = Path("/var/lib/technocore-safe-agent")
 SRC = Path("/opt/technocore-safe-agent")
 OLD_HEAD = "ec4bc4892d40cdd2a03e102faa44d72c89e01b99"
-DEST = ROOT / "retirement-capture-preliminary-v1"
-TEMP = ROOT / ".retirement-capture-preliminary-v1.partial"
+ARCHIVE_ROOT = Path("/var/lib/technocore-retirement-archive")
+DEST = ARCHIVE_ROOT / "capture-preliminary-v1"
+TEMP = ARCHIVE_ROOT / ".capture-preliminary-v1.partial"
 DATABASES = (
     "observer/lobby-capture.sqlite3",
     "observer/lobby-capture-service.sqlite3",
@@ -107,8 +108,12 @@ def preflight():
     head = command(["git","-C",str(SRC),"-c","safe.directory="+str(SRC),
                     "rev-parse","--verify","HEAD"], env=env)
     check(head == OLD_HEAD, "FLOP_OCI_HEAD_DRIFT_STOP")
-    check(not os.path.lexists(DEST) and not os.path.lexists(TEMP),
+    check(not os.path.lexists(ARCHIVE_ROOT) and
+          not os.path.lexists(DEST) and not os.path.lexists(TEMP),
           "ARCHIVE_PREEXISTS_DO_NOT_RERUN")
+    parent = ARCHIVE_ROOT.parent.lstat()
+    check(stat.S_ISDIR(parent.st_mode) and parent.st_uid == 0 and
+          not (parent.st_mode & 0o022), "ARCHIVE_PARENT_UNSAFE_STOP")
     before = units()
     inputs = [safe_input(name) for name in DATABASES]
     free = shutil.disk_usage(ROOT).free
@@ -129,14 +134,14 @@ def copy_db(src_path, dest_path, deadline):
     # Input mode=ro, no immutable=1 (which would ignore an important live WAL).
     uri = "file:" + quote(str(src_path), safe="/") + "?mode=ro"
     count = {"steps": 0}
-    with sqlite3.connect(uri, uri=True, timeout=1,
-                         cached_statements=0) as source:
+    with closing(sqlite3.connect(uri, uri=True, timeout=1,
+                                 cached_statements=0)) as source:
         source.execute("PRAGMA query_only=ON")
         source.execute("PRAGMA cache_size=-256")
         pages = source.execute("PRAGMA page_count").fetchone()[0]
         check(0 < pages <= MAX_PAGE_COUNT, "SQLITE_PAGE_COUNT_STOP")
-        with sqlite3.connect(str(dest_path), timeout=2,
-                             cached_statements=0) as out:
+        with closing(sqlite3.connect(str(dest_path), timeout=2,
+                                     cached_statements=0)) as out:
             out.execute("PRAGMA cache_size=-256")
             def progress(status, remaining, total):
                 count["steps"] += 1
@@ -157,6 +162,7 @@ def main():
     before, inputs = preflight()
     lower_priority()
     print("FLOP_OCI_CAPTURE_PRELIM_PREFLIGHT_PASS", flush=True)
+    ARCHIVE_ROOT.mkdir(mode=0o700)
     TEMP.mkdir(mode=0o700)
     entries = []
     for idx,(path,size) in enumerate(inputs):
