@@ -118,7 +118,7 @@ def validate():
             lock["requires-python"] == ">=3.12", "PYTHON_SPEC_STOP")
     names = {x["name"] for x in lock["package"]}
     require(len(names) >= 30 and
-            {"cryptography", "httpx", "discord.py", "oci", "pytest"} <= names,
+            {"cryptography", "httpx", "discord-py", "oci", "pytest"} <= names,
             "LOCK_PACKAGE_STOP")
     require(all(x.get("source", {}).get("registry", "") in
                 ("https://pypi.org/simple", "") for x in lock["package"]),
