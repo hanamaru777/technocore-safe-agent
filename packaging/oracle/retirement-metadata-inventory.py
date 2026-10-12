@@ -67,15 +67,14 @@ def safe_meta(base, relative):
             info = path.lstat()
         except FileNotFoundError:
             return "ABSENT"
-        if stat.S_ISLNK(info.st_mode):
-            return "SYMLINK_STOP"
-        if i < len(components)-1 and not stat.S_ISDIR(info.st_mode):
-            return "PARENT_NOT_DIRECTORY_STOP"
+        require(not stat.S_ISLNK(info.st_mode), "SYMLINK_PATH_STOP")
+        require(i == len(components)-1 or stat.S_ISDIR(info.st_mode),
+                "NONDIR_PARENT_PATH_STOP")
     if stat.S_ISREG(info.st_mode):
         return "FILE size=" + str(info.st_size) + " mtime_ns=" + str(info.st_mtime_ns)
     if stat.S_ISDIR(info.st_mode):
         return "DIRECTORY"
-    return "OTHER_TYPE_STOP"
+    raise Stop("UNEXPECTED_FILE_TYPE_STOP")
 
 def systemd(unit):
     process = subprocess.run(
