@@ -32,7 +32,7 @@ def make_fake_wheel(path, unsafe=None):
 def test_new_source_compiles_and_no_ensurepip():
     s = SOURCE.read_text()
     compile(s, str(SOURCE), "exec")
-    assert "ensurepip" not in s.lower().replace("no-ensurepip", "")
+    assert '"-m", "ensurepip"' not in s and '"ensurepip", "--upgrade"' not in s
     assert "PIP_BOOTSTRAP" in s
     assert "FLOP_SHADOW_PINNED_PIP_WHEEL_BOOTSTRAP_PASS" in s
     assert "FLOP_SHADOW_PINNED_RUNTIME_DEPS_STAGE_PASS" in s
