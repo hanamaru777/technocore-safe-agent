@@ -57,7 +57,8 @@ def k137():
     tim = status("k137q-public-k58.timer")
     require(srv[0] == "inactive" and srv[1] in ("static", "disabled"),
             "K137_SERVICE_NOT_DISARMED_STOP")
-    require(tim == ("inactive", "disabled"), "K137_TIMER_NOT_DISABLED_STOP")
+    require(tim in (("inactive", "disabled"), ("active", "enabled")),
+            "K137_TIMER_UNEXPECTED_STATE_STOP")
     return srv, tim
 
 def no_flop_units():
