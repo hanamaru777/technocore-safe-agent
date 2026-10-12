@@ -118,9 +118,9 @@ def test_k137_and_other_bot_paths_are_not_written():
 def test_k137_window_keeps_18m_until_next_scan():
     from datetime import datetime, timezone
     m = load()
-    for minute in (0, 2, 5, 45, 53, 59):
+    for minute in (0, 2, 5, 52, 53, 59):
         assert not m.slot_now(datetime(2026,10,12,4,minute,tzinfo=timezone.utc))
-    for minute in (6, 10, 38, 44):
+    for minute in (6, 10, 38, 44, 45, 51):
         assert m.slot_now(datetime(2026,10,12,4,minute,tzinfo=timezone.utc))
 
 
