@@ -116,7 +116,7 @@ def preflight():
           not (parent.st_mode & 0o022), "ARCHIVE_PARENT_UNSAFE_STOP")
     before = units()
     inputs = [safe_input(name) for name in DATABASES]
-    free = shutil.disk_usage(ROOT).free
+    free = shutil.disk_usage(ARCHIVE_ROOT.parent).free
     check(free > MIN_DISK_EXTRA + sum(s for _,s in inputs),
           "INSUFFICIENT_ARCHIVE_DISK_STOP")
     memory_and_pressure()
