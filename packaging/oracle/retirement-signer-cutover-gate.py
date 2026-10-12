@@ -43,7 +43,8 @@ def read_small(relative):
         require(stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode),
                 "INPUT_PARENT_INVALID_STOP")
     leaf = path / relative.split("/")[-1]
-    mode = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    mode = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
+            getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOATIME", 0))
     fd = os.open(str(leaf), mode)
     try:
         s = os.fstat(fd)
