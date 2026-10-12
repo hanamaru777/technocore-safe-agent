@@ -38,8 +38,23 @@ def command(args, timeout=12, env=None):
 
 def check_parent(p):
     st = pathlib.Path(p).lstat()
-    require(stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and not st.st_mode & 0o022,
-            "UNSAFE_PARENT_STOP")
+    mode = stat.S_IMODE(st.st_mode)
+    # Ubuntu may ship /var/log as root:syslog mode 0775. This trusted
+    # OS-specific exception applies to /var/log ONLY; never chmod it.
+    syslog_writable = (
+        p == "/var/log"
+        and mode == 0o775
+        and st.st_gid == grp.getgrnam("syslog").gr_gid
+    )
+    safe = (
+        stat.S_ISDIR(st.st_mode)
+        and st.st_uid == 0
+        and not (mode & 0o002)
+        and (not (mode & 0o020) or syslog_writable)
+    )
+    require(safe, "UNSAFE_PARENT_STOP_" + p.lstrip("/").replace("/", "_"))
+    print("FLOP_SHADOW_PARENT_CHECK_PASS path=" + p + " mode=" + oct(mode),
+          flush=True)
 
 def status(unit):
     lines = command(["systemctl", "show", unit, "--no-pager",
