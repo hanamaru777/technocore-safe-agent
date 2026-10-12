@@ -160,11 +160,16 @@ def preflight():
             "LOCK_BLOB_DRIFT_STOP")
     require((VENV / "bin" / "python3").is_file(),
             "VENV_PYTHON_MISSING_STOP")
-    current = cmd([str(VENV / "bin" / "python3"), "-I", "-c",
+    # NEVER execute a user-owned venv binary as root, even in read-only checks.
+    # A compromised flop-shadow user could replace its bin/python3 symlink.
+    preflight_user = ["runuser", "-u", "flop-shadow", "--", "env", "-i",
+                      "HOME=/var/lib/flop-shadow", "PATH=/usr/bin:/bin",
+                      "LANG=C", "PYTHONDONTWRITEBYTECODE=1"]
+    current = cmd([*preflight_user, str(VENV / "bin" / "python3"), "-I", "-c",
                    "import sys;print(sys.version_info.major,sys.version_info.minor)"])
     require(current == "3 12", "VENV_PYTHON_VERSION_STOP")
     # Fail before any download/write if Ubuntu's vendor ensurepip is absent.
-    bundled_pip = cmd([str(VENV / "bin" / "python3"), "-I",
+    bundled_pip = cmd([*preflight_user, str(VENV / "bin" / "python3"), "-I",
                        "-m", "ensurepip", "--version"])
     require(bundled_pip.startswith("pip "), "ENSUREPIP_NOT_AVAILABLE_STOP")
     lock = tomllib.loads((RELEASE / "uv.lock").read_text())
