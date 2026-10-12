@@ -107,9 +107,12 @@ def run():
                 bytes_seen += value
             else:
                 complete = False
-            # --fields approximateSize often omits visibility. Never assert
-            # bucket privacy from an unset value.
-            if info.get("public-access-type") != "NoPublicAccess":
+            # Size projection suppresses visibility, so independently GET
+            # default bucket representation (READ only) for private status.
+            visibility = cli("os", "bucket", "get", "--bucket-name", name)
+            raw = visibility.get("data")
+            check(isinstance(raw, dict), "BUCKET_VISIBILITY_UNAVAILABLE")
+            if raw.get("public-access-type") != "NoPublicAccess":
                 private = False
         print("FLOP_OFFVM_ROOT_APPROX_SIZE_KNOWN=" +
               str(complete).lower(), flush=True)
@@ -117,7 +120,8 @@ def run():
             print("FLOP_OFFVM_ROOT_APPROX_BYTES=" +
                   str(bytes_seen), flush=True)
         print("FLOP_OFFVM_ROOT_PRIVATE_STATUS=" +
-              ("VERIFIED" if private else "UNCONFIRMED"), flush=True)
+              ("NO_BUCKETS" if not buckets else
+               "VERIFIED" if private else "UNCONFIRMED"), flush=True)
     # Resource limits differ from Always Free inclusion and can be inaccessible.
     try:
         limits = cli("limits", "value", "list",
