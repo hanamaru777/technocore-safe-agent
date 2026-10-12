@@ -82,14 +82,20 @@ def await_k137_idle(timeout_seconds=510, interval_seconds=15):
     original = None
     waiting_printed = False
     while True:
-        st = snapshot()
+        # Read status without demanding the periodic service be inactive:
+        # it may be RUNNING naturally while we wait. No kill/restart.
+        svc = k137_status(SERVICE)
+        timer = k137_status(TIMER)
+        require(svc[0] in ("active", "inactive") and
+                svc[1] in ("static", "disabled") and
+                timer in (("active", "enabled"), ("inactive", "disabled")),
+                "K137_UNIT_UNEXPECTED_STATE_DURING_WAIT_STOP")
         if original is None:
-            original = st
-        # A timer state change is possible naturally; never "restore" it.
-        require(st[1] == original[1], "K137_TIMER_CHANGED_DURING_WAIT_STOP")
+            original = timer
+        require(timer == original, "K137_TIMER_CHANGED_DURING_WAIT_STOP")
         now = datetime.datetime.now(datetime.timezone.utc)
-        if safe_slot(now) and st[0] == "inactive":
-            return st
+        if safe_slot(now) and svc[0] == "inactive":
+            return snapshot()
         if not waiting_printed:
             print("FLOP_SHADOW_WAIT_K137_NATURAL_TIMER_WINDOW", flush=True)
             waiting_printed = True
