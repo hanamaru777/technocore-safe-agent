@@ -37,12 +37,19 @@ SMALL_JSON = (
     "state/signer/oracle-signer-receipts.json",
 )
 BUFFER = 128 * 1024
-MAX_MANIFEST = 100 * 1024
+MAX_MANIFEST = 256 * 1024
 MAX_SMALL_JSON = 1024 * 1024
-MAX_FILES = 128
+MAX_FILES = 512
 MAX_SINGLE_FILE = 3 * 1024**3
 MAX_TOTAL = 6 * 1024**3
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
+# Pinned to existing source-controlled E2E v1/v2. Never permit a user-
+# invented quarantine to suppress a real pending publication.
+CONTROLLED_QUARANTINE = {
+    hashlib.sha256(b"controlled-e2e-v1").hexdigest()[:20]: "submission_unknown",
+    hashlib.sha256(b"controlled-e2e-v2").hexdigest()[:20]:
+        "legacy_unhandled_http_ambiguity",
+}
 
 class Stop(Exception):
     pass
@@ -241,10 +248,11 @@ def verify_ledger(files):
             require(item.get("status") == "acknowledged",
                     "ACK_RECORD_IDS_MISMATCH")
         elif record.get("state") == "prepared" and item.get("status") == "quarantined":
-            require(item.get("category") == "controlled_e2e" and
-                    item.get("quarantine_reason") in (
-                        "submission_unknown", "legacy_unhandled_http_ambiguity",
-                    ) and isinstance(item.get("quarantined_at"), str) and
+            require(key in CONTROLLED_QUARANTINE and
+                    item.get("category") == "controlled_e2e" and
+                    item.get("room") == "lobby" and
+                    item.get("quarantine_reason") == CONTROLLED_QUARANTINE[key] and
+                    isinstance(item.get("quarantined_at"), str) and
                     bool(item["quarantined_at"]), "QUARANTINE_NOT_AUTHENTICATED")
             quarantined += 1
         else:
