@@ -47,7 +47,8 @@ def test_real_preliminary_names_map_exactly_to_offhost_canonical():
 
 def test_missing_outbox_nonce_audit_and_config_all_stop():
     m = module()
-    for missing in ("nonces.json", "autopilot/autopilot-audit.jsonl",
+    for missing in ("nonces.json", "observer-safety.json",
+                    "autopilot/autopilot-audit.jsonl",
                     "observer/observer-config.json", "signer/oracle-signer-receipts.json"):
         c, s = fixtures(m)
         s["files"] = [r for r in s["files"] if r["path"] != missing]

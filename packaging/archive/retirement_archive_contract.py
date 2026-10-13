@@ -20,6 +20,7 @@ DBS = (
 )
 REQUIRED = frozenset((
     "verified-did.json", "nonces.json", "activities.jsonl",
+    "observer-safety.json",  # original root-level safety evidence
     "observer/observer-state.json", "observer/resident-state.json",
     "observer/observer-config.json", "observer/resident-config.json",
     "observer/observer-heartbeat.json",
