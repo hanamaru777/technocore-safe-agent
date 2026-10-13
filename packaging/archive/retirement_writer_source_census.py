@@ -118,7 +118,7 @@ def listed(folder):
             if p.name.endswith((".service", ".timer"))}
 
 def git_blob_id(raw):
-    return sha1(b"blob " + str(len(raw)).encode("ascii") + b"\\0" + raw).hexdigest()
+    return sha1(b"blob " + str(len(raw)).encode("ascii") + bytes((0,)) + raw).hexdigest()
 
 def inventory(folder, *, enforce_pinned=True):
     actual = listed(folder)
