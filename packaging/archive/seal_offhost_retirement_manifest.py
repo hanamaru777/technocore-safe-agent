@@ -103,7 +103,10 @@ def enumerate_paths(root):
 
 
 def hash_stable(path, expected_size):
-    require(type(expected_size) is int and 0 < expected_size <= 3*1024**3,
+    # R861 permits zero-byte regular state files (e.g., an empty audit log).
+    # SHA256 of an empty file is meaningful; SQLite integrity is checked
+    # separately after restoration.
+    require(type(expected_size) is int and 0 <= expected_size <= 3*1024**3,
             "EXPECTED_SIZE_INVALID")
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
