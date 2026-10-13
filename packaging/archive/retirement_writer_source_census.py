@@ -93,7 +93,10 @@ def inventory(folder):
     for name in sorted(actual):
         file = folder / name
         need(file.is_file() and not file.is_symlink(), "UNIT_FILE_INVALID")
-        lines = properties(file.read_text(encoding="utf-8"))
+        raw = file.read_bytes()
+        need(0 < len(raw) < 20000, "UNIT_BYTE_LIMIT")
+        lines = properties(raw.decode("utf-8"))
+        source_sha = sha256(raw).hexdigest()
         service = name.endswith(".service")
         if service:
             command = lines.get(("Service", "ExecStart"), [])
@@ -105,8 +108,14 @@ def inventory(folder):
                  ("Timer", "OnCalendar") in lines or
                  ("Timer", "OnUnitInactiveSec") in lines,
                  "TIMER_SCHEDULE_UNREVIEWED")
-            # Do not infer installed target from filename: Unit= can differ,
-            # and a timer can activate a service from another unit directory.
+            # For source unit auditing only. This is NOT evidence of an
+            # installed, enabled or inactive real systemd timer.
+            explicit = lines.get(("Timer", "Unit"), [])
+            need(len(explicit) <= 1, "TIMER_MULTIPLE_TARGETS_STOP")
+            implicit = name[:-len(".timer")] + ".service"
+            target = explicit[0] if explicit else implicit
+            need(target in REVIEWED_UNITS and target.endswith(".service"),
+                 "TIMER_TARGET_UNREVIEWED_STOP")
         rw = lines.get(("Service", "ReadWritePaths"), [])
         may_write = service and (
             any(STATE_ROOT in s for s in rw) or
@@ -116,6 +125,8 @@ def inventory(folder):
             need(may_write, "PINNED_WRITER_CHANGED_STOP")
         report.append({
             "filename": name, "kind": "service" if service else "timer",
+            "unit_file_sha256": source_sha,
+            "timer_target": target if not service else None,
             "has_flop_state_reference": bool(may_write),
             "has_oneshot_or_template": (
                 "@" in name or "oneshot" in lines.get(("Service", "Type"), [])),
