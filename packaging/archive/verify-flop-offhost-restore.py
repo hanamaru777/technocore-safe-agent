@@ -213,7 +213,35 @@ def verify_files(root, entries):
             require(not os.path.lexists(str(observed[name]) + suffix),
                     "SQLITE_INCOMPLETE_SIDECAR_PRESENT")
     require_exact_restored_tree(root, set(observed))
+    verify_finance_fence_files(observed)
     return observed, total
+
+# Exact financial attempt/receipt pairing mirrors the R861/R864 archive
+# contract. This checks FILE PRESENCE ONLY, not whether a transaction settled.
+FINANCE_ATTEMPT = re.compile(r"^state/signer/close1-attempt-([a-f0-9]{64})[.]json$")
+FINANCE_RECEIPT = re.compile(r"^state/signer/close1-receipt-([a-f0-9]{64})[.]json$")
+
+
+def verify_finance_fence_files(observed):
+    attempts = set()
+    receipts = set()
+    finance = False
+    for name in observed:
+        if name.startswith("state/close1/") or name.startswith(
+                "state/signer/close1-"):
+            finance = True
+        if match := FINANCE_ATTEMPT.fullmatch(name):
+            attempts.add(match.group(1))
+        if match := FINANCE_RECEIPT.fullmatch(name):
+            receipts.add(match.group(1))
+    require(receipts <= attempts, "FINANCE_RECEIPT_WITHOUT_ATTEMPT_STOP")
+    require(attempts == receipts, "FINANCE_AMBIGUOUS_ATTEMPT_STOP")
+    require(not finance or
+            "state/close1/close1-own-account.json" in observed,
+            "FINANCE_ACCOUNT_LEDGER_MISSING_STOP")
+    require("state/signer/close1-approved-trade.lock" not in observed,
+            "TRANSIENT_FINANCE_LOCK_IN_ARCHIVE_STOP")
+
 
 def verify_sqlite(path):
     uri = "file:" + quote(str(path.resolve()), safe="/") + "?mode=ro&immutable=1"
@@ -282,6 +310,7 @@ def verify_ledger(files):
                 and hashes[0] == hashes[1] == hashes[2],
                 "ACK_RECEIPT_HASH_MISMATCH")
     quarantined = 0
+    seen_did_room_nonces = set()
     for key, record in sign.items():
         require(isinstance(key, str) and isinstance(record, dict),
                 "SIGNER_RECEIPT_SCHEMA_INVALID")
@@ -296,6 +325,12 @@ def verify_ledger(files):
         floor = nonces.get(identity + "|" + room)
         require(type(floor) is int and int(nonce) <= floor,
                 "NONCE_HIGH_WATER_BEHIND_RECEIPT")
+        # A high-water counter alone does not detect two independently
+        # prepared/published intents reusing the same signed room nonce.
+        nonce_tuple = (identity, room, nonce)
+        require(nonce_tuple not in seen_did_room_nonces,
+                "SIGNER_NONCE_REUSE_DETECTED")
+        seen_did_room_nonces.add(nonce_tuple)
         if record.get("state") == "acknowledged":
             require(item.get("status") == "acknowledged",
                     "ACK_RECORD_IDS_MISMATCH")
