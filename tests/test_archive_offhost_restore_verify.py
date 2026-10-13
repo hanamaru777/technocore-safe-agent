@@ -411,3 +411,72 @@ def test_r861_required_state_cannot_be_omitted_even_with_valid_pin_and_filler(
     assert result.returncode == 42
     assert "REQUIRED_ARTIFACT_MISSING" in result.stdout
 
+
+
+def archive_files(bundle, names):
+    for name in names:
+        path = bundle / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'{"synthetic":true}')
+    return manifest(bundle, extras=names)
+
+
+def test_close1_receipt_without_durable_attempt_is_rejected(tmp_path):
+    b = build(tmp_path)
+    receipt = "state/signer/close1-receipt-" + "a" * 64 + ".json"
+    account = "state/close1/close1-own-account.json"
+    p = verify(b, archive_files(b, (receipt, account)))
+    assert p.returncode == 42
+    assert "FINANCE_RECEIPT_WITHOUT_ATTEMPT_STOP" in p.stdout
+
+
+def test_close1_attempt_without_receipt_is_rejected_as_ambiguous(tmp_path):
+    b = build(tmp_path)
+    attempt = "state/signer/close1-attempt-" + "a" * 64 + ".json"
+    account = "state/close1/close1-own-account.json"
+    p = verify(b, archive_files(b, (attempt, account)))
+    assert p.returncode == 42
+    assert "FINANCE_AMBIGUOUS_ATTEMPT_STOP" in p.stdout
+
+
+def test_close1_paired_fence_without_account_ledger_is_rejected(tmp_path):
+    b = build(tmp_path)
+    attempt = "state/signer/close1-attempt-" + "a" * 64 + ".json"
+    receipt = "state/signer/close1-receipt-" + "a" * 64 + ".json"
+    p = verify(b, archive_files(b, (attempt, receipt)))
+    assert p.returncode == 42
+    assert "FINANCE_ACCOUNT_LEDGER_MISSING_STOP" in p.stdout
+
+
+def test_close1_matching_fences_and_account_allow_structural_restoration(tmp_path):
+    b = build(tmp_path)
+    attempt = "state/signer/close1-attempt-" + "a" * 64 + ".json"
+    receipt = "state/signer/close1-receipt-" + "a" * 64 + ".json"
+    account = "state/close1/close1-own-account.json"
+    p = verify(b, archive_files(b, (attempt, receipt, account)))
+    assert p.returncode == 0, p.stdout
+    # This is presence/hash validation only, not finance settlement proof.
+    assert "FLOP_OCI_DELETION_NOT_AUTHORIZED_BY_FILE_PROOF_ALONE" in p.stdout
+
+
+def test_close1_transient_lock_must_not_be_in_restored_manifest(tmp_path):
+    b = build(tmp_path)
+    lock = "state/signer/close1-approved-trade.lock"
+    account = "state/close1/close1-own-account.json"
+    p = verify(b, archive_files(b, (lock, account)))
+    assert p.returncode == 42
+    assert "TRANSIENT_FINANCE_LOCK_IN_ARCHIVE_STOP" in p.stdout
+
+
+def test_two_acknowledged_signer_intents_cannot_reuse_same_room_nonce(tmp_path):
+    b = build(tmp_path)
+    def clone_outbox(value):
+        value["outbox"]["b"] = dict(value["outbox"]["a"])
+        value["receipts"]["b"] = dict(value["receipts"]["a"])
+    rewrite(b, "state/autopilot/autopilot-outbox.json", clone_outbox)
+    def clone_signer(value):
+        value["receipts"]["b"] = dict(value["receipts"]["a"])
+    rewrite(b, "state/signer/oracle-signer-receipts.json", clone_signer)
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "SIGNER_NONCE_REUSE_DETECTED" in p.stdout
