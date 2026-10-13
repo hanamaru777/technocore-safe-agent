@@ -173,6 +173,22 @@ def test_close1_trade_attempt_receipt_and_account_are_preserved():
     assert "state/signer/close1-approved-trade.lock" not in names
 
 
+def test_completed_close1_registration_is_identity_history_not_a_trade():
+    m = module()
+    c, state = fixtures(m)
+    add(state, "signer/close1-registration.json",
+        "signer/close1-registration.lock")
+    _, archive = m.plan(c, state)
+    files = dict(archive)
+    assert "state/signer/close1-registration.json" in files
+    assert "state/signer/close1-registration.lock" not in files
+    assert "state/close1/close1-own-account.json" not in files
+    # Unrelated Close1 trading artifacts still require their own ledger.
+    add(state, "signer/close1-approved-batch.json")
+    with pytest.raises(m.Stop, match="FINANCE_ACCOUNT_LEDGER_MISSING"):
+        m.plan(c, state)
+
+
 def test_financial_attempt_without_receipt_is_never_a_clear_cutover():
     m = module()
     c, state = fixtures(m)

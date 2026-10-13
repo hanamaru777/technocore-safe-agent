@@ -38,9 +38,14 @@ OPTIONAL = frozenset((
     "close1/close1-autonomous-rehearsal.json",
     "signer/close1-approved-trade.json",
     "signer/close1-approved-batch.json",
+    "signer/close1-registration.json",
 ))
 # This is a transient flock pathname, NOT a recovery or epoch proof.
-TRANSIENT = frozenset(("signer/close1-approved-trade.lock",))
+TRANSIENT = frozenset(("signer/close1-approved-trade.lock",
+                       "signer/close1-registration.lock"))
+# The Sep 2026 one-shot registration is durable identity evidence, NOT a
+# finance trade. Its flock lock is transient and must never be archived.
+REGISTRATION = "signer/close1-registration.json"
 ATTEMPT = re.compile(r"signer/close1-attempt-([a-f0-9]{64})\.json\Z")
 RECEIPT = re.compile(r"signer/close1-receipt-([a-f0-9]{64})\.json\Z")
 CAPTURE_SIDECARS = frozenset(
@@ -146,7 +151,7 @@ def state_plan(meta):
     require(attempts == receipts, "FINANCE_AMBIGUOUS_ATTEMPT_STOP")
     finance = {name for name in seen if name.startswith("close1/") or
                name.startswith("signer/close1-")}
-    if finance - TRANSIENT:
+    if finance - TRANSIENT - {REGISTRATION}:
         require("close1/close1-own-account.json" in seen,
                 "FINANCE_ACCOUNT_LEDGER_MISSING")
     rotations = {int(p[len(ROTATED):]) for p in seen if p.startswith(ROTATED)}
