@@ -461,6 +461,71 @@ def archive_files(bundle, names):
     return manifest(bundle, extras=names)
 
 
+def add_synthetic_historic_registration(bundle, *, state="posted", nonce="123"):
+    did = SYNTHETIC_ORIGINAL_DID
+    text = json.dumps({"key": did, "season": "close-1", "t": "owner"},
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    receipt = {"from": did, "text": text, "nonce": nonce,
+               "seq": 1241872, "ts": "2026-09-26T03:40:55.463293Z",
+               "sig": "synthetic-only-no-real-key"}
+    name = "state/signer/close1-registration.json"
+    file = bundle / name
+    file.write_text(json.dumps({
+        "schema_version": 1, "room": "close1", "did": did,
+        "text": text, "state": state, "nonce": nonce,
+        "attempted_at": "2026-09-26T03:40:54Z",
+        "seq": receipt["seq"], "ts": receipt["ts"],
+        "posted_record": receipt,
+    }))
+    rewrite(bundle, "state/nonces.json",
+            lambda item: item.update({did + "|close1": 123}))
+    return name
+
+
+def test_completed_historic_registration_survives_without_trade_ledger(tmp_path):
+    bundle = build(tmp_path)
+    record = add_synthetic_historic_registration(bundle)
+    result = verify(bundle, manifest(bundle, extras=(record,)))
+    assert result.returncode == 0, result.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in result.stdout
+    assert SYNTHETIC_ORIGINAL_DID not in result.stdout
+
+
+def test_historic_registration_inflight_and_nonce_rollback_stop(tmp_path):
+    bundle = build(tmp_path)
+    record = add_synthetic_historic_registration(bundle, state="attempting")
+    result = verify(bundle, manifest(bundle, extras=(record,)))
+    assert result.returncode == 42
+    assert "CLOSE1_REGISTRATION_NOT_TERMINAL_STOP" in result.stdout
+    rewrite(bundle, record, lambda value: value.update(state="posted", nonce="124"))
+    result = verify(bundle, manifest(bundle, extras=(record,)))
+    assert result.returncode == 42
+    assert "CLOSE1_REGISTRATION_NONCE_ROLLBACK_STOP" in result.stdout
+
+
+def test_historic_registration_identity_and_receipt_mismatch_stop(tmp_path):
+    bundle = build(tmp_path)
+    record = add_synthetic_historic_registration(bundle)
+    rewrite(bundle, record, lambda value: value.update(did="did:key:zOTHER"))
+    result = verify(bundle, manifest(bundle, extras=(record,)))
+    assert result.returncode == 42
+    assert "CLOSE1_REGISTRATION_NOT_TERMINAL_STOP" in result.stdout
+    rewrite(bundle, record, lambda value: value.update(did=SYNTHETIC_ORIGINAL_DID))
+    rewrite(bundle, record,
+            lambda value: value["posted_record"].update(seq=1241873))
+    result = verify(bundle, manifest(bundle, extras=(record,)))
+    assert result.returncode == 42
+    assert "CLOSE1_REGISTRATION_RECEIPT_MISMATCH_STOP" in result.stdout
+
+
+def test_transient_historic_registration_lock_is_not_an_archive_file(tmp_path):
+    bundle = build(tmp_path)
+    lock = "state/signer/close1-registration.lock"
+    result = verify(bundle, archive_files(bundle, (lock,)))
+    assert result.returncode == 42
+    assert "TRANSIENT_FINANCE_LOCK_IN_ARCHIVE_STOP" in result.stdout
+
+
 def test_close1_receipt_without_durable_attempt_is_rejected(tmp_path):
     b = build(tmp_path)
     receipt = "state/signer/close1-receipt-" + "a" * 64 + ".json"

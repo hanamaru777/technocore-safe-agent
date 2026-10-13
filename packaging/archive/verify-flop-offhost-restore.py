@@ -52,6 +52,7 @@ OPTIONAL_STATE = frozenset((
     "close1/close1-autonomous-skips.json",
     "close1/close1-autonomous-rehearsal.json",
     "signer/close1-approved-trade.json", "signer/close1-approved-batch.json",
+    "signer/close1-registration.json",
 ))
 SOURCE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\Z")
 SOURCE_ATTEMPT = re.compile(r"signer/close1-attempt-[a-f0-9]{64}\.json\Z")
@@ -234,7 +235,8 @@ def verify_files(root, entries):
         name = entry["path"]
         require(isinstance(name, str) and name not in observed,
                 "DUPLICATE_OR_BAD_ENTRY")
-        require(name != "state/signer/close1-approved-trade.lock",
+        require(name not in ("state/signer/close1-approved-trade.lock",
+                             "state/signer/close1-registration.lock"),
                 "TRANSIENT_FINANCE_LOCK_IN_ARCHIVE_STOP")
         require(archive_path_allowed(name), "UNCLASSIFIED_ARCHIVE_PATH_STOP")
         expected = entry["sha256"]
@@ -269,8 +271,9 @@ def verify_finance_fence_files(observed):
     receipts = set()
     finance = False
     for name in observed:
-        if name.startswith("state/close1/") or name.startswith(
-                "state/signer/close1-"):
+        if name.startswith("state/close1/") or (name.startswith(
+                "state/signer/close1-") and
+                name != "state/signer/close1-registration.json"):
             finance = True
         if match := FINANCE_ATTEMPT.fullmatch(name):
             attempts.add(match.group(1))
@@ -283,6 +286,49 @@ def verify_finance_fence_files(observed):
             "FINANCE_ACCOUNT_LEDGER_MISSING_STOP")
     require("state/signer/close1-approved-trade.lock" not in observed,
             "TRANSIENT_FINANCE_LOCK_IN_ARCHIVE_STOP")
+
+
+def verify_historic_registration(files, identity, nonces):
+    """Validate one-shot 2026 Close1 registration without permitting a replay.
+
+    File provenance is pinned to the original DID plus the archive hash. This
+    structure-only check is NOT a cryptographic signature verification.
+    """
+    name = "state/signer/close1-registration.json"
+    if name not in files:
+        return False
+    value = read_small_json(files[name])
+    require(isinstance(value, dict) and set(value) == {
+        "schema_version", "room", "did", "text", "state", "nonce",
+        "attempted_at", "seq", "ts", "posted_record",
+    }, "CLOSE1_REGISTRATION_SCHEMA_STOP")
+    text = json.dumps({"key": identity, "season": "close-1", "t": "owner"},
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    nonce = value.get("nonce")
+    require(value.get("schema_version") == 1 and
+            value.get("room") == "close1" and
+            value.get("did") == identity and
+            value.get("state") == "posted" and
+            value.get("text") == text and
+            isinstance(nonce, str) and nonce.isascii() and
+            nonce.isdecimal() and 0 < len(nonce) <= 19 and int(nonce) > 0,
+            "CLOSE1_REGISTRATION_NOT_TERMINAL_STOP")
+    floor = nonces.get(identity + "|close1")
+    require(type(floor) is int and int(nonce) <= floor,
+            "CLOSE1_REGISTRATION_NONCE_ROLLBACK_STOP")
+    row = value.get("posted_record")
+    require(isinstance(row, dict) and row.get("from") == identity and
+            row.get("text") == text and str(row.get("nonce")) == nonce and
+            type(row.get("nonce")) in (str, int) and
+            type(row.get("seq")) is int and row["seq"] >= 0 and
+            row.get("seq") == value.get("seq") and
+            isinstance(row.get("ts"), str) and bool(row["ts"]) and
+            row.get("ts") == value.get("ts") and
+            isinstance(row.get("sig"), str) and bool(row["sig"]) and
+            isinstance(value.get("attempted_at"), str) and
+            bool(value["attempted_at"]),
+            "CLOSE1_REGISTRATION_RECEIPT_MISMATCH_STOP")
+    return True
 
 
 def verify_sqlite(path):
@@ -403,6 +449,7 @@ def verify_ledger(files, expected_did_sha256):
                     "ACK_RECORD_IDS_MISMATCH")
         if status == "expired":
             require(key not in sign, "EXPIRED_WITH_SIGNER_RECEIPT_STOP")
+    verify_historic_registration(files, identity, nonces)
     return len(ack), quarantined
 
 def main(argv=None):
