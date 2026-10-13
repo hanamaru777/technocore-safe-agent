@@ -326,8 +326,9 @@ def verify_historic_registration(files, identity, nonces):
             isinstance(row.get("ts"), str) and bool(row["ts"]) and
             row.get("ts") == value.get("ts") and
             isinstance(row.get("sig"), str) and bool(row["sig"]) and
-            isinstance(value.get("attempted_at"), str) and
-            bool(value["attempted_at"]),
+            (value.get("attempted_at") is None or
+             (isinstance(value["attempted_at"], str) and
+              bool(value["attempted_at"]))),
             "CLOSE1_REGISTRATION_RECEIPT_MISMATCH_STOP")
     return True
 

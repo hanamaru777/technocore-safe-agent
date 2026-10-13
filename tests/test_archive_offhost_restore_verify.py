@@ -494,6 +494,22 @@ def test_completed_historic_registration_survives_without_trade_ledger(tmp_path)
     assert SYNTHETIC_ORIGINAL_DID not in result.stdout
 
 
+def test_reconciled_existing_registration_allows_null_attempted_at(tmp_path):
+    # Original one-shot mark_posted(initial_state(), existing_valid_row)
+    # saves posted + verified record without ever attempting a new POST.
+    bundle = build(tmp_path)
+    record = add_synthetic_historic_registration(bundle)
+    rewrite(bundle, record, lambda value: value.update(attempted_at=None))
+    result = verify(bundle, manifest(bundle, extras=(record,)))
+    assert result.returncode == 0, result.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in result.stdout
+    # Inconsistent timestamps cannot masquerade as a valid reconciliation.
+    rewrite(bundle, record, lambda value: value.update(attempted_at=1234))
+    result = verify(bundle, manifest(bundle, extras=(record,)))
+    assert result.returncode == 42
+    assert "CLOSE1_REGISTRATION_RECEIPT_MISMATCH_STOP" in result.stdout
+
+
 def test_historic_registration_inflight_and_nonce_rollback_stop(tmp_path):
     bundle = build(tmp_path)
     record = add_synthetic_historic_registration(bundle, state="attempting")
