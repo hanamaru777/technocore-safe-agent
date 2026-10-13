@@ -52,11 +52,11 @@ OPTIONAL_STATE = frozenset((
     "close1/close1-autonomous-rehearsal.json",
     "signer/close1-approved-trade.json", "signer/close1-approved-batch.json",
 ))
-SOURCE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\\Z")
-SOURCE_ATTEMPT = re.compile(r"signer/close1-attempt-[a-f0-9]{64}\\.json\\Z")
-SOURCE_RECEIPT = re.compile(r"signer/close1-receipt-[a-f0-9]{64}\\.json\\Z")
-SOURCE_PROOF = re.compile(r"proof-plans/[a-f0-9]{16}\\.json\\Z")
-SOURCE_CURSOR = re.compile(r"cursor-[a-z0-9][a-z0-9_-]{0,47}\\.json\\Z")
+SOURCE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\Z")
+SOURCE_ATTEMPT = re.compile(r"signer/close1-attempt-[a-f0-9]{64}\.json\Z")
+SOURCE_RECEIPT = re.compile(r"signer/close1-receipt-[a-f0-9]{64}\.json\Z")
+SOURCE_PROOF = re.compile(r"proof-plans/[a-f0-9]{16}\.json\Z")
+SOURCE_CURSOR = re.compile(r"cursor-[a-z0-9][a-z0-9_-]{0,47}\.json\Z")
 
 
 def archive_path_allowed(path):
