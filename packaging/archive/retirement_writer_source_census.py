@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""R865 offline CODE-SOURCE census; never reports a live freeze or runs systemctl.
+"""R865 offline CODE-SOURCE census; never reports live service state and never controls services.
 
 Fail closed when a new Oracle service/timer appears without explicit review.
 Repo unit filenames != installed runtime unit identities. Manual invocations,
