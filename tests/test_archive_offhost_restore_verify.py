@@ -31,18 +31,20 @@ def build(tmp_path):
     did = "did:key:z" + "x" * 48
     values = {
         "state/verified-did.json": {"did": did},
-        "state/nonces.json": {"key-one": "opaque"},
+        "state/nonces.json": {did + "|public-room": 123},
         "state/observer/observer-state.json": {"completed": True},
         "state/observer/resident-state.json": {"idle": True},
         "state/autopilot/autopilot-outbox.json": {
             "schema_version": 1,
             "enabled": False, "paused": True,
-            "outbox": {"a": {"status": "acknowledged", "receipt_hash": digest}},
+            "outbox": {"a": {"status": "acknowledged", "room": "public-room",
+                              "receipt_hash": digest}},
             "receipts": {"a": {"receipt_hash": digest}},
         },
         "state/signer/oracle-signer-receipts.json": {
             "schema_version": 1, "receipts": {
-                "a": {"state": "acknowledged", "did": did, "receipt_hash": digest}
+                "a": {"state": "acknowledged", "did": did, "nonce": "123",
+                      "receipt_hash": digest}
             },
         },
     }
@@ -96,7 +98,7 @@ def test_frozen_complete_bundle_verifies_no_secret_values_leaked(tmp_path):
     assert "FLOP_OFFHOST_SQLITE_QUICK_CHECK_PASS count=2" in p.stdout
     assert "FLOP_OFFHOST_LEDGER_ACK_IDS_AND_HASHES_PASS count=1" in p.stdout
     assert "did:key:" not in p.stdout
-    assert "key-one" not in p.stdout
+    assert "public-room" not in p.stdout
 
 
 def test_tampered_capture_db_rejected_even_if_sqlite_still_valid(tmp_path):
@@ -163,6 +165,110 @@ def test_manifest_with_wrong_source_rejected_despite_matching_sha(tmp_path):
     assert p.returncode == 42
     assert "MANIFEST_IDENTITY" in p.stdout
 
+
+
+def rewrite(bundle, name, update):
+    file = bundle / name
+    value = json.loads(file.read_text())
+    update(value)
+    file.write_text(json.dumps(value))
+    return value
+
+
+def test_pending_queue_without_signer_receipt_blocks_restore(tmp_path):
+    b = build(tmp_path)
+    rewrite(b, "state/autopilot/autopilot-outbox.json",
+            lambda d: d["outbox"].update(
+                {"pending": {"status": "queued", "room": "public-room"}}))
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "OUTBOX_PENDING_OR_UNKNOWN_STOP" in p.stdout
+
+
+def test_signer_posted_receipt_is_not_terminal(tmp_path):
+    b = build(tmp_path)
+    rewrite(b, "state/signer/oracle-signer-receipts.json",
+            lambda d: d["receipts"]["a"].update(state="posted"))
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "SIGNER_UNRESOLVED_POST_STOP" in p.stdout
+
+
+def test_quarantined_controlled_history_is_preserved_without_retry(tmp_path):
+    b = build(tmp_path)
+    def set_quarantine(d):
+        d["outbox"]["a"].update(status="quarantined", category="controlled_e2e",
+            quarantine_reason="submission_unknown",
+            quarantined_at="2026-10-12T00:00:00+00:00")
+        d["outbox"]["a"].pop("receipt_hash")
+        d["receipts"].clear()
+    rewrite(b, "state/autopilot/autopilot-outbox.json", set_quarantine)
+    rewrite(b, "state/signer/oracle-signer-receipts.json",
+            lambda d: d["receipts"]["a"].update(state="prepared"))
+    p = verify(b, manifest(b))
+    assert p.returncode == 0, p.stdout
+    assert "FLOP_OFFHOST_QUARANTINED_HISTORY_PASS count=1" in p.stdout
+    assert "FLOP_OFFHOST_WRITER_EPOCH_NOT_PROVEN" in p.stdout
+
+
+def test_untrusted_quarantine_cannot_hide_replayable_prepared_receipt(tmp_path):
+    b = build(tmp_path)
+    def quarantine(d):
+        d["outbox"]["a"].update(status="quarantined", category="unknown",
+            quarantine_reason="submission_unknown",
+            quarantined_at="2026-10-12T00:00:00+00:00")
+        d["receipts"].clear()
+    rewrite(b, "state/autopilot/autopilot-outbox.json", quarantine)
+    rewrite(b, "state/signer/oracle-signer-receipts.json",
+            lambda d: d["receipts"]["a"].update(state="prepared"))
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "QUARANTINE_NOT_AUTHENTICATED" in p.stdout
+
+
+def test_nonce_rollback_is_rejected_even_when_manifest_hash_matches(tmp_path):
+    b = build(tmp_path)
+    rewrite(b, "state/nonces.json", lambda d: d.update(
+        {next(iter(d)): 122}))
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "NONCE_HIGH_WATER_BEHIND_RECEIPT" in p.stdout
+
+
+def test_invalid_nonce_type_is_rejected(tmp_path):
+    b = build(tmp_path)
+    rewrite(b, "state/nonces.json", lambda d: d.update(
+        {next(iter(d)): True}))
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "NONCE_HIGH_WATER_SCHEMA_INVALID" in p.stdout
+
+
+def test_signer_did_must_match_pinned_verified_did(tmp_path):
+    b = build(tmp_path)
+    rewrite(b, "state/signer/oracle-signer-receipts.json",
+            lambda d: d["receipts"]["a"].update(did="did:key:zOTHER"))
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "SIGNER_DID_MISMATCH" in p.stdout
+
+
+def test_missing_signer_nonce_binding_is_rejected(tmp_path):
+    b = build(tmp_path)
+    rewrite(b, "state/autopilot/autopilot-outbox.json",
+            lambda d: d["outbox"]["a"].update(room="different-room"))
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "NONCE_HIGH_WATER_BEHIND_RECEIPT" in p.stdout
+
+
+def test_expired_intent_without_receipt_is_terminal(tmp_path):
+    b = build(tmp_path)
+    rewrite(b, "state/autopilot/autopilot-outbox.json",
+            lambda d: d["outbox"].update(
+                {"expired": {"status": "expired", "room": "public-room"}}))
+    p = verify(b, manifest(b))
+    assert p.returncode == 0, p.stdout
 
 def test_source_never_contacts_network_or_updates_services():
     code=SCRIPT.read_text()
