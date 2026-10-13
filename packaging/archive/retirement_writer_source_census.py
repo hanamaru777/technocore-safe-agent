@@ -83,6 +83,12 @@ PINNED_SOURCE_BLOBS = {
     "technocore-safe-agent-tclk-work-watcher.service": "addc9e9205038008313ee170db28580bc18bb8d2",
     "technocore-safe-agent-tclk-work-watcher.timer": "10a8cf52ea288395bc5a3decab86f94aa56499af",
 }
+# Source aliases are verified from the tracked airdrop *.timer Unit= lines.
+# Source .service basename differs from installed unit name for these two.
+INSTALLED_ALIASES = {
+    "technocore-safe-agent-airdrop-monitor.service": "airdrop-monitor.service",
+    "technocore-safe-agent-airdrop-notifier.service": "airdrop-notifier.service",
+}
 STATE_ROOT = "/var/lib/technocore-safe-agent"
 VALID_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 
@@ -153,7 +159,9 @@ def inventory(folder, *, enforce_pinned=True):
             need(len(explicit) <= 1, "TIMER_MULTIPLE_TARGETS_STOP")
             implicit = name[:-len(".timer")] + ".service"
             target = explicit[0] if explicit else implicit
-            need(target in REVIEWED_UNITS and target.endswith(".service"),
+            reviewed_target = INSTALLED_ALIASES.get(target, target)
+            need(reviewed_target in REVIEWED_UNITS and
+                 reviewed_target.endswith(".service"),
                  "TIMER_TARGET_UNREVIEWED_STOP")
         rw = lines.get(("Service", "ReadWritePaths"), [])
         may_write = service and (
