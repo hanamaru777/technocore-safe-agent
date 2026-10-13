@@ -480,3 +480,12 @@ def test_two_acknowledged_signer_intents_cannot_reuse_same_room_nonce(tmp_path):
     p = verify(b, manifest(b))
     assert p.returncode == 42
     assert "SIGNER_NONCE_REUSE_DETECTED" in p.stdout
+
+
+def test_empty_audit_log_has_valid_stable_sha256_and_can_be_restored(tmp_path):
+    b = build(tmp_path)
+    (b / "state/autopilot/autopilot-audit.jsonl").write_bytes(b"")
+    digest = manifest(b)
+    p = verify(b, digest)
+    assert p.returncode == 0, p.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in p.stdout
