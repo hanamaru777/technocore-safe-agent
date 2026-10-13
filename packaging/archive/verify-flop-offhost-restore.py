@@ -27,8 +27,16 @@ REQUIRED = frozenset((
     "state/activities.jsonl",
     "state/observer/observer-state.json",
     "state/observer/resident-state.json",
+    # The R861/R864 source inventory+sealer requires each of these too.
+    # An independently pinned manifest for an incomplete restore MUST fail.
+    "state/observer/observer-config.json",
+    "state/observer/resident-config.json",
+    "state/observer/observer-heartbeat.json",
     "state/autopilot/autopilot-outbox.json",
+    "state/autopilot/autopilot-audit.jsonl",
     "state/signer/oracle-signer-receipts.json",
+    "state/signer/signer-health.json",
+    "state/signer/upstream-health.json",
 ))
 SQLITE_FILES = tuple(sorted(x for x in REQUIRED if x.endswith(".sqlite3")))
 SMALL_JSON = (
