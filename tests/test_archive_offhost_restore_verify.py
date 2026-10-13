@@ -19,8 +19,14 @@ REQUIRED = (
     "state/activities.jsonl",
     "state/observer/observer-state.json",
     "state/observer/resident-state.json",
+    "state/observer/observer-config.json",
+    "state/observer/resident-config.json",
+    "state/observer/observer-heartbeat.json",
     "state/autopilot/autopilot-outbox.json",
+    "state/autopilot/autopilot-audit.jsonl",
     "state/signer/oracle-signer-receipts.json",
+    "state/signer/signer-health.json",
+    "state/signer/upstream-health.json",
 )
 
 
@@ -34,6 +40,11 @@ def build(tmp_path):
         "state/nonces.json": {did + "|public-room": 123},
         "state/observer/observer-state.json": {"completed": True},
         "state/observer/resident-state.json": {"idle": True},
+        "state/observer/observer-config.json": {"synthetic": True},
+        "state/observer/resident-config.json": {"synthetic": True},
+        "state/observer/observer-heartbeat.json": {"synthetic": True},
+        "state/signer/signer-health.json": {"synthetic": True},
+        "state/signer/upstream-health.json": {"synthetic": True},
         "state/autopilot/autopilot-outbox.json": {
             "schema_version": 1,
             "enabled": False, "paused": True,
@@ -277,7 +288,7 @@ def test_manifest_over_previous_128_limit_is_supported_offhost(tmp_path):
         extra.append(name)
     p = verify(b, manifest(b, extras=extra))
     assert p.returncode == 0, p.stdout
-    assert "FLOP_OFFHOST_FILE_SHA256_PASS count=139" in p.stdout
+    assert "FLOP_OFFHOST_FILE_SHA256_PASS count=145" in p.stdout
 
 def test_nonce_rollback_is_rejected_even_when_manifest_hash_matches(tmp_path):
     b = build(tmp_path)
@@ -371,3 +382,32 @@ def test_unmanifested_root_level_file_rejected(tmp_path):
     result = verify(bundle, digest)
     assert result.returncode == 42
     assert "UNMANIFESTED_FILE_STOP" in result.stdout
+
+# R872: R861/R864 REQUIRE thirteen state artifacts, not just the seven
+# originally required by the independent offhost verifier.
+R861_ADDITIONAL_REQUIRED = (
+    "state/observer/observer-config.json",
+    "state/observer/resident-config.json",
+    "state/observer/observer-heartbeat.json",
+    "state/autopilot/autopilot-audit.jsonl",
+    "state/signer/signer-health.json",
+    "state/signer/upstream-health.json",
+)
+
+
+@pytest.mark.parametrize("missing", R861_ADDITIONAL_REQUIRED)
+def test_r861_required_state_cannot_be_omitted_even_with_valid_pin_and_filler(
+    tmp_path, missing
+):
+    bundle = build(tmp_path)
+    filler = "state/extra/counterfeit-replacement.txt"
+    fake = bundle / filler
+    fake.parent.mkdir(parents=True, exist_ok=True)
+    fake.write_bytes(b"not a required source artifact")
+    # Keep total file count valid: missing canonical state cannot be replaced
+    # by an arbitrary filler even if an externally pinned manifest hash matches.
+    digest = manifest(bundle, remove=(missing,), extras=(filler,))
+    result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert "REQUIRED_ARTIFACT_MISSING" in result.stdout
+
