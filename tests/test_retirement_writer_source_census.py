@@ -69,6 +69,61 @@ def test_pinned_financial_write_services_included():
     assert "technocore-safe-agent-signer.service" in m.REQUIRE_FENCING
     assert "resident.service" in m.REQUIRE_FENCING
 
+
+def make_fake_units(folder, m):
+    for name in m.REVIEWED_UNITS:
+        if name.endswith(".service"):
+            (folder / name).write_text(
+                "[Service]\nExecStart=/bin/true\n"
+                "Environment=FLOP_STATE_DIR=/var/lib/technocore-safe-agent\n")
+        else:
+            (folder / name).write_text("[Timer]\nOnBootSec=20\n")
+
+
+def test_different_execstart_while_writer_path_unchanged_changes_digest(tmp_path):
+    m = load()
+    make_fake_units(tmp_path, m)
+    original = m.inventory(tmp_path)["unit_registry_sha256"]
+    file = tmp_path / "technocore-safe-agent-signer.service"
+    file.write_text(file.read_text().replace("ExecStart=/bin/true",
+                                             "ExecStart=/bin/false"))
+    assert original != m.inventory(tmp_path)["unit_registry_sha256"]
+
+
+def test_changed_service_environment_only_changes_digest(tmp_path):
+    m = load()
+    make_fake_units(tmp_path, m)
+    original = m.inventory(tmp_path)["unit_registry_sha256"]
+    file = tmp_path / "resident.service"
+    file.write_text(file.read_text() +
+                    "Environment=TECHNOCORE_REVISION=unsafe-change\n")
+    assert original != m.inventory(tmp_path)["unit_registry_sha256"]
+
+
+def test_explicit_timer_target_binding_and_invalid_target_stop(tmp_path):
+    m = load()
+    make_fake_units(tmp_path, m)
+    before = m.inventory(tmp_path)["unit_registry_sha256"]
+    timer = tmp_path / "technocore-safe-agent-tclk-stager.timer"
+    timer.write_text("[Timer]\nOnBootSec=20\n"
+                     "Unit=technocore-safe-agent-tclk-preparer.service\n")
+    assert before != m.inventory(tmp_path)["unit_registry_sha256"]
+    timer.write_text("[Timer]\nOnBootSec=20\n"
+                     "Unit=unknown-finance-writer.service\n")
+    with pytest.raises(m.Stop, match="TIMER_TARGET_UNREVIEWED_STOP"):
+        m.inventory(tmp_path)
+
+
+def test_double_timer_target_rejected(tmp_path):
+    m = load()
+    make_fake_units(tmp_path, m)
+    timer = tmp_path / "technocore-safe-agent-tclk-stager.timer"
+    timer.write_text("[Timer]\nOnBootSec=20\n"
+                     "Unit=technocore-safe-agent-tclk-stager.service\n"
+                     "Unit=technocore-safe-agent-tclk-preparer.service\n")
+    with pytest.raises(m.Stop, match="TIMER_MULTIPLE_TARGETS_STOP"):
+        m.inventory(tmp_path)
+
 def test_no_environment_activity_or_cloud_runtime():
     data = SRC.read_text()
     compile(data, str(SRC), "exec")
