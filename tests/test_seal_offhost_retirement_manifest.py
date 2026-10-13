@@ -132,3 +132,23 @@ def test_does_not_read_from_live_app_or_perform_cloud_mutations():
                       "os.remove(", "unlink(", "os.system("):
         assert forbidden not in code
     assert "O_EXCL" in code and "os.fsync" in code
+
+
+def test_zero_length_audit_log_matches_r861_state_inventory(tmp_path):
+    m = module()
+    stage, capture, state = prepare(tmp_path, m)
+    audit = "autopilot/autopilot-audit.jsonl"
+    (stage / "state" / audit).write_bytes(b"")
+    for row in state["files"]:
+        if row["path"] == audit:
+            row["size"] = 0
+            break
+    else:
+        pytest.fail("canonical audit log fixture missing")
+    count, digest = m.seal(stage, capture, state)
+    assert count >= 9 and len(digest) == 64
+    doc = json.loads((stage / m.MANIFEST).read_text())
+    matches = [e for e in doc["files"] if e["path"] == "state/" + audit]
+    assert matches == [{"path": "state/" + audit,
+                        "size": 0,
+                        "sha256": hashlib.sha256(b"").hexdigest()}]
