@@ -1,0 +1,207 @@
+"""R867: fake state only, never connect to cloud or operate real systemd."""
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+SOURCE = (Path(__file__).resolve().parents[1] / "packaging" / "oracle"
+          / "r867_readonly_installed_writers.py")
+
+
+def module():
+    spec = importlib.util.spec_from_file_location("r867", SOURCE)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_known_27_source_unit_names_and_installed_aliases():
+    m = module()
+    assert len(m.SOURCE_UNITS) == 27
+    assert m.installed_name("resident.service") == "technocore-safe-agent-resident.service"
+    assert m.installed_name("airdrop-monitor.timer") == "technocore-safe-agent-airdrop-monitor.timer"
+    assert m.installed_name("technocore-safe-agent-signer.service") == "technocore-safe-agent-signer.service"
+
+
+def test_installed_active_failed_units_are_summarized_without_process_details():
+    m = module()
+    installed = m.unit_file_names(
+        "technocore-safe-agent-resident.service enabled enabled\n"
+        "technocore-safe-agent-signer.service enabled enabled\n"
+        "an-unrelated-bot.service enabled enabled\n")
+    assert len(installed) == 2
+    loaded = m.loaded_states(
+        "technocore-safe-agent-resident.service loaded active running live\n"
+        "● technocore-safe-agent-signer.service loaded failed failed broken\n"
+        "another.service loaded active running different\n")
+    assert loaded == {
+        "technocore-safe-agent-resident.service": "active",
+        "technocore-safe-agent-signer.service": "failed",
+    }
+    report = m.compare(installed, loaded)
+    assert report["source_units_expected"] == 27
+    assert report["loaded_active_count"] == 1
+    assert report["loaded_failed_count"] == 1
+    assert report["missing_count"] == 25
+    assert report["unknown_count"] == 0
+
+
+def test_template_instance_accepted_as_observation_but_not_a_writer_freeze():
+    m = module()
+    installed = {m.installed_name(x) for x in m.SOURCE_UNITS}
+    states = {n: "inactive" for n in installed}
+    states["technocore-safe-agent-tclk-accept@stage42.service"] = "active"
+    info = m.compare(installed, states)
+    assert info["template_instance_count"] == 1
+    assert info["loaded_active_count"] == 1
+    assert info["unknown_count"] == 0
+
+
+def test_unrecognized_service_stays_digested_not_printed():
+    m = module()
+    name = "technocore-safe-agent-unexpected-finance-writer.service"
+    info = m.compare(set(), {name: "active"})
+    assert info["unknown_count"] == 1
+    assert name not in json.dumps(info)
+    assert len(info["unknown_digests"][0]) == 16
+
+
+def test_malicious_template_instance_rejected():
+    m = module()
+    with pytest.raises(m.Stop, match="TEMPLATE_INSTANCE_INVALID"):
+        m.compare(set(), {"technocore-safe-agent-tclk-reveal@../evil.service":"active"})
+
+
+def test_output_limits_fail_closed():
+    m = module()
+    with pytest.raises(m.Stop, match="UNIT_FILE_LIST_INVALID"):
+        m.unit_file_names("x" * m.MAX_OUTPUT)
+
+
+def test_subprocess_is_strictly_read_only_no_shell_or_stderr(monkeypatch):
+    m = module()
+    class R:
+        returncode = 0
+        stdout = "sample\n"
+    calls = []
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return R()
+    monkeypatch.setattr(m.subprocess, "run", fake)
+    assert m.command(["systemctl", "list-unit-files"]).strip() == "sample"
+    assert calls[0][1]["timeout"] == 6
+    assert calls[0][1]["stderr"] == m.subprocess.DEVNULL
+    assert calls[0][0][0] == ["systemctl", "list-unit-files"]
+
+
+def test_timeout_is_not_retried(monkeypatch):
+    m = module()
+    called = []
+    def fail(*args, **kwargs):
+        called.append(1)
+        raise m.subprocess.TimeoutExpired("systemctl", 6)
+    monkeypatch.setattr(m.subprocess, "run", fail)
+    with pytest.raises(m.Stop, match="READONLY_COMMAND_UNAVAILABLE"):
+        m.command(["systemctl", "list-unit-files"])
+    assert len(called) == 1
+
+
+def test_source_cannot_mutate_services_secrets_or_cloud():
+    text = SOURCE.read_text()
+    compile(text, str(SOURCE), "exec")
+    for snippet in ("systemctl stop", "systemctl restart", "systemctl disable",
+                    "os.system(", "shell=True", "subprocess.Popen",
+                    "shutil.copy(", "delete-instance", "SIGN_SEED",
+                    ".environ", "write_bytes(", "write_text(",
+                    "httpx.", "requests.", "import oci"):
+        assert snippet not in text
+    assert '"safe_to_snapshot": False' in text
+    assert '"safe_to_delete_oracle": False' in text
+
+
+def test_process_count_only_boolean_match(monkeypatch, tmp_path):
+    m = module()
+    a = tmp_path / "201"; a.mkdir()
+    (a / "cmdline").write_bytes(b"python\0-m\0flop_agent.oracle_signer\0SENSITIVE\0")
+    b = tmp_path / "202"; b.mkdir()
+    (b / "cmdline").write_bytes(b"python\0-m\0unrelated\0")
+    monkeypatch.setattr(m, "Path", lambda value: tmp_path if value == "/proc" else Path(value))
+    assert m.process_count() == 1
+
+
+def test_timer_unit_file_state_counts_are_separate_from_runtime_activity():
+    m = module()
+    raw = (
+        "technocore-safe-agent-tclk-stager.timer enabled enabled\n"
+        "technocore-safe-agent-tclk-preparer.timer enabled-runtime enabled\n"
+        "technocore-safe-agent-tclk-lock-watcher.timer disabled disabled\n"
+        "technocore-safe-agent-precontest-supervisor.timer masked masked\n"
+        "technocore-safe-agent-extra.timer static -\n"
+        "technocore-safe-agent-resident.service enabled enabled\n"
+        "unrelated.timer enabled enabled\n"
+    )
+    assert m.timer_file_state_counts(raw) == {
+        "enabled": 2, "disabled": 1, "masked": 1, "other": 1,
+    }
+    assert m.compare(set(), {
+        "technocore-safe-agent-tclk-stager.timer": "active",
+        "technocore-safe-agent-tclk-preparer.timer": "inactive",
+    })["loaded_active_timer_count"] == 1
+
+
+def test_malformed_or_duplicate_timer_setting_fails_closed():
+    m = module()
+    with pytest.raises(m.Stop, match="TIMER_UNITFILE_STATE_MISSING"):
+        m.timer_file_state_counts("technocore-safe-agent-tclk-stager.timer\n")
+    with pytest.raises(m.Stop, match="DUPLICATE_TIMER_UNITFILE"):
+        m.timer_file_state_counts(
+            "technocore-safe-agent-tclk-stager.timer enabled enabled\n"
+            "technocore-safe-agent-tclk-stager.timer disabled disabled\n")
+
+
+def test_known_unit_masks_are_ordered_bounded_and_preserve_individual_writer_signal():
+    m = module()
+    installed = {m.installed_name(x) for x in m.SOURCE_UNITS}
+    signer = m.installed_name("technocore-safe-agent-signer.service")
+    approved = m.installed_name("technocore-safe-agent-close1-approved-trade.service")
+    tclk = m.installed_name("technocore-safe-agent-tclk-stager.timer")
+    loaded = {signer: "active", approved: "failed", tclk: "active"}
+    masks = m.known_unit_masks(installed, loaded, {tclk: "enabled"})
+    order = sorted(installed)
+    def masked(key):
+        return {name for i, name in enumerate(order)
+                if int(masks[key], 16) & (1 << i)}
+    assert len(masks["known_unit_order_sha256"]) == 64
+    assert len(masks["known_installed_mask_hex"]) == 7
+    assert masked("known_loaded_active_mask_hex") == {signer, tclk}
+    assert masked("known_loaded_failed_mask_hex") == {approved}
+    assert masked("known_timer_enabled_mask_hex") == {tclk}
+    assert set(masks) == {
+        "known_unit_order_sha256", "known_installed_mask_hex",
+        "known_loaded_active_mask_hex", "known_loaded_failed_mask_hex",
+        "known_timer_enabled_mask_hex", "known_timer_masked_mask_hex",
+    }
+
+
+def test_masks_are_not_inferred_from_enabled_as_active_or_unknown_template():
+    m = module()
+    installed = {m.installed_name(x) for x in m.SOURCE_UNITS}
+    tclk = m.installed_name("technocore-safe-agent-tclk-stager.timer")
+    masks = m.known_unit_masks(installed, {}, {tclk: "enabled"})
+    assert int(masks["known_timer_enabled_mask_hex"], 16) != 0
+    assert int(masks["known_loaded_active_mask_hex"], 16) == 0
+    with pytest.raises(m.Stop, match="TIMER_NOT_INSTALLED"):
+        m.known_unit_masks(set(), {}, {tclk: "enabled"})
+
+
+def test_unknown_template_active_is_counted_but_not_assumed_quiescent():
+    m = module()
+    installed = {m.installed_name(x) for x in m.SOURCE_UNITS}
+    states = {
+        "technocore-safe-agent-tclk-accept@stage42.service": "active",
+        "technocore-safe-agent-unreviewed-runtime.service": "active",
+    }
+    info = m.compare(installed, states)
+    assert info["template_instance_active_count"] == 1
+    assert info["unknown_loaded_active_count"] == 1
