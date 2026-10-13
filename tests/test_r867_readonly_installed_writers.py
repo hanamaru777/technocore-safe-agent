@@ -128,3 +128,33 @@ def test_process_count_only_boolean_match(monkeypatch, tmp_path):
     (b / "cmdline").write_bytes(b"python\0-m\0unrelated\0")
     monkeypatch.setattr(m, "Path", lambda value: tmp_path if value == "/proc" else Path(value))
     assert m.process_count() == 1
+
+
+def test_timer_unit_file_state_counts_are_separate_from_runtime_activity():
+    m = module()
+    raw = (
+        "technocore-safe-agent-tclk-stager.timer enabled enabled\n"
+        "technocore-safe-agent-tclk-preparer.timer enabled-runtime enabled\n"
+        "technocore-safe-agent-tclk-lock-watcher.timer disabled disabled\n"
+        "technocore-safe-agent-precontest-supervisor.timer masked masked\n"
+        "technocore-safe-agent-extra.timer static -\n"
+        "technocore-safe-agent-resident.service enabled enabled\n"
+        "unrelated.timer enabled enabled\n"
+    )
+    assert m.timer_file_state_counts(raw) == {
+        "enabled": 2, "disabled": 1, "masked": 1, "other": 1,
+    }
+    assert m.compare(set(), {
+        "technocore-safe-agent-tclk-stager.timer": "active",
+        "technocore-safe-agent-tclk-preparer.timer": "inactive",
+    })["loaded_active_timer_count"] == 1
+
+
+def test_malformed_or_duplicate_timer_setting_fails_closed():
+    m = module()
+    with pytest.raises(m.Stop, match="TIMER_UNITFILE_STATE_MISSING"):
+        m.timer_file_state_counts("technocore-safe-agent-tclk-stager.timer\n")
+    with pytest.raises(m.Stop, match="DUPLICATE_TIMER_UNITFILE"):
+        m.timer_file_state_counts(
+            "technocore-safe-agent-tclk-stager.timer enabled enabled\n"
+            "technocore-safe-agent-tclk-stager.timer disabled disabled\n")
