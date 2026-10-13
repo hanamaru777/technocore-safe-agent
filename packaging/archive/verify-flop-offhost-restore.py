@@ -92,7 +92,7 @@ def file_digest(path, max_size):
     try:
         before = os.fstat(fd)
         require(stat.S_ISREG(before.st_mode) and
-                0 < before.st_size <= max_size,
+                0 <= before.st_size <= max_size,
                 "FILE_TYPE_OR_SIZE_STOP")
         h = hashlib.sha256()
         seen = 0
@@ -197,7 +197,7 @@ def verify_files(root, entries):
                 "DUPLICATE_OR_BAD_ENTRY")
         expected = entry["sha256"]
         expected_size = entry["size"]
-        require(type(expected_size) is int and 0 < expected_size <=
+        require(type(expected_size) is int and 0 <= expected_size <=
                 MAX_SINGLE_FILE and isinstance(expected, str) and
                 HEX64.fullmatch(expected), "ENTRY_SIZE_OR_DIGEST")
         path = no_link_path(root, name)
