@@ -63,9 +63,9 @@ def build(tmp_path):
     return bundle
 
 
-def manifest(bundle, *, remove=(), tamper=False):
+def manifest(bundle, *, remove=(), tamper=False, extras=()):
     entries = []
-    for name in REQUIRED:
+    for name in REQUIRED + tuple(extras):
         if name in remove:
             continue
         raw = (bundle/name).read_bytes()
@@ -189,42 +189,94 @@ def test_signer_posted_receipt_is_not_terminal(tmp_path):
     b = build(tmp_path)
     rewrite(b, "state/signer/oracle-signer-receipts.json",
             lambda d: d["receipts"]["a"].update(state="posted"))
+    def set_unsettled(d):
+        d["outbox"]["a"]["status"] = "posted"
+        d["receipts"].clear()
+    rewrite(b, "state/autopilot/autopilot-outbox.json", set_unsettled)
     p = verify(b, manifest(b))
     assert p.returncode == 42
     assert "SIGNER_UNRESOLVED_POST_STOP" in p.stdout
 
 
-def test_quarantined_controlled_history_is_preserved_without_retry(tmp_path):
-    b = build(tmp_path)
-    def set_quarantine(d):
-        d["outbox"]["a"].update(status="quarantined", category="controlled_e2e",
-            quarantine_reason="submission_unknown",
-            quarantined_at="2026-10-12T00:00:00+00:00")
-        d["outbox"]["a"].pop("receipt_hash")
+def set_controlled_quarantine(bundle, version, category="controlled_e2e"):
+    key = hashlib.sha256(("controlled-e2e-" + version).encode()).hexdigest()[:20]
+    reason = ("submission_unknown" if version == "v1"
+              else "legacy_unhandled_http_ambiguity")
+    def set_outbox(d):
+        row = d["outbox"].pop("a")
+        row.update(status="quarantined", room="lobby", category=category,
+            quarantine_reason=reason, quarantined_at="2026-10-12T00:00:00+00:00")
+        row.pop("receipt_hash")
+        d["outbox"][key] = row
         d["receipts"].clear()
-    rewrite(b, "state/autopilot/autopilot-outbox.json", set_quarantine)
-    rewrite(b, "state/signer/oracle-signer-receipts.json",
-            lambda d: d["receipts"]["a"].update(state="prepared"))
-    p = verify(b, manifest(b))
-    assert p.returncode == 0, p.stdout
-    assert "FLOP_OFFHOST_QUARANTINED_HISTORY_PASS count=1" in p.stdout
-    assert "FLOP_OFFHOST_WRITER_EPOCH_NOT_PROVEN" in p.stdout
+    rewrite(bundle, "state/autopilot/autopilot-outbox.json", set_outbox)
+    def set_signer(d):
+        row = d["receipts"].pop("a")
+        row["state"] = "prepared"
+        d["receipts"][key] = row
+    rewrite(bundle, "state/signer/oracle-signer-receipts.json", set_signer)
+    def set_nonce(d):
+        original = next(iter(d))
+        identity = original.split("|", 1)[0]
+        d[identity + "|lobby"] = 123
+    rewrite(bundle, "state/nonces.json", set_nonce)
+
+
+def test_quarantined_controlled_history_is_preserved_without_retry(tmp_path):
+    for version in ("v1", "v2"):
+        b = build(tmp_path / version)
+        set_controlled_quarantine(b, version)
+        p = verify(b, manifest(b))
+        assert p.returncode == 0, p.stdout
+        assert "FLOP_OFFHOST_QUARANTINED_HISTORY_PASS count=1" in p.stdout
+        assert "FLOP_OFFHOST_WRITER_EPOCH_NOT_PROVEN" in p.stdout
 
 
 def test_untrusted_quarantine_cannot_hide_replayable_prepared_receipt(tmp_path):
     b = build(tmp_path)
-    def quarantine(d):
-        d["outbox"]["a"].update(status="quarantined", category="unknown",
-            quarantine_reason="submission_unknown",
-            quarantined_at="2026-10-12T00:00:00+00:00")
-        d["receipts"].clear()
-    rewrite(b, "state/autopilot/autopilot-outbox.json", quarantine)
-    rewrite(b, "state/signer/oracle-signer-receipts.json",
-            lambda d: d["receipts"]["a"].update(state="prepared"))
+    set_controlled_quarantine(b, "v1", category="unknown")
     p = verify(b, manifest(b))
     assert p.returncode == 42
     assert "QUARANTINE_NOT_AUTHENTICATED" in p.stdout
 
+
+def test_noncontrolled_fake_quarantine_id_rejected(tmp_path):
+    b = build(tmp_path)
+    key = "f" * 20
+    def fake_outbox(d):
+        row = d["outbox"].pop("a")
+        row.update(status="quarantined", room="lobby", category="controlled_e2e",
+            quarantine_reason="submission_unknown",
+            quarantined_at="2026-10-12T00:00:00+00:00")
+        d["outbox"][key] = row
+        d["receipts"].clear()
+    rewrite(b, "state/autopilot/autopilot-outbox.json", fake_outbox)
+    def fake_signer(d):
+        row = d["receipts"].pop("a")
+        row["state"] = "prepared"
+        d["receipts"][key] = row
+    rewrite(b, "state/signer/oracle-signer-receipts.json", fake_signer)
+    def fake_nonce(d):
+        identity = next(iter(d)).split("|", 1)[0]
+        d[identity + "|lobby"] = 123
+    rewrite(b, "state/nonces.json", fake_nonce)
+    p = verify(b, manifest(b))
+    assert p.returncode == 42
+    assert "QUARANTINE_NOT_AUTHENTICATED" in p.stdout
+
+
+def test_manifest_over_previous_128_limit_is_supported_offhost(tmp_path):
+    b = build(tmp_path)
+    extra = []
+    for n in range(130):
+        name = "state/extra/file-" + str(n).zfill(3) + ".txt"
+        path = b / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"bounded content")
+        extra.append(name)
+    p = verify(b, manifest(b, extras=extra))
+    assert p.returncode == 0, p.stdout
+    assert "FLOP_OFFHOST_FILE_SHA256_PASS count=139" in p.stdout
 
 def test_nonce_rollback_is_rejected_even_when_manifest_hash_matches(tmp_path):
     b = build(tmp_path)
