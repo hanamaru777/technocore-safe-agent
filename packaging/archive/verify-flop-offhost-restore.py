@@ -153,8 +153,8 @@ def require_exact_restored_tree(root, files):
                 name = entry.name
                 require(name and len(name) <= 200 and
                         name not in (".", "..") and
-                        "/" not in name and "\\\\" not in name and
-                        "\\x00" not in name, "RESTORED_TREE_NAME_STOP")
+                        "/" not in name and chr(92) not in name and
+                        chr(0) not in name, "RESTORED_TREE_NAME_STOP")
                 rel = relative + "/" + name if relative else name
                 require(len(rel) < 250, "RESTORED_TREE_PATH_STOP")
                 info = entry.stat(follow_symlinks=False)
