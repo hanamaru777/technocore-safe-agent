@@ -158,3 +158,50 @@ def test_malformed_or_duplicate_timer_setting_fails_closed():
         m.timer_file_state_counts(
             "technocore-safe-agent-tclk-stager.timer enabled enabled\n"
             "technocore-safe-agent-tclk-stager.timer disabled disabled\n")
+
+
+def test_known_unit_masks_are_ordered_bounded_and_preserve_individual_writer_signal():
+    m = module()
+    installed = {m.installed_name(x) for x in m.SOURCE_UNITS}
+    signer = m.installed_name("technocore-safe-agent-signer.service")
+    approved = m.installed_name("technocore-safe-agent-close1-approved-trade.service")
+    tclk = m.installed_name("technocore-safe-agent-tclk-stager.timer")
+    loaded = {signer: "active", approved: "failed", tclk: "active"}
+    masks = m.known_unit_masks(installed, loaded, {tclk: "enabled"})
+    order = sorted(installed)
+    def masked(key):
+        return {name for i, name in enumerate(order)
+                if int(masks[key], 16) & (1 << i)}
+    assert len(masks["known_unit_order_sha256"]) == 64
+    assert len(masks["known_installed_mask_hex"]) == 7
+    assert masked("known_loaded_active_mask_hex") == {signer, tclk}
+    assert masked("known_loaded_failed_mask_hex") == {approved}
+    assert masked("known_timer_enabled_mask_hex") == {tclk}
+    assert set(masks) == {
+        "known_unit_order_sha256", "known_installed_mask_hex",
+        "known_loaded_active_mask_hex", "known_loaded_failed_mask_hex",
+        "known_timer_enabled_mask_hex", "known_timer_masked_mask_hex",
+    }
+
+
+def test_masks_are_not_inferred_from_enabled_as_active_or_unknown_template():
+    m = module()
+    installed = {m.installed_name(x) for x in m.SOURCE_UNITS}
+    tclk = m.installed_name("technocore-safe-agent-tclk-stager.timer")
+    masks = m.known_unit_masks(installed, {}, {tclk: "enabled"})
+    assert int(masks["known_timer_enabled_mask_hex"], 16) != 0
+    assert int(masks["known_loaded_active_mask_hex"], 16) == 0
+    with pytest.raises(m.Stop, match="TIMER_NOT_INSTALLED"):
+        m.known_unit_masks(set(), {}, {tclk: "enabled"})
+
+
+def test_unknown_template_active_is_counted_but_not_assumed_quiescent():
+    m = module()
+    installed = {m.installed_name(x) for x in m.SOURCE_UNITS}
+    states = {
+        "technocore-safe-agent-tclk-accept@stage42.service": "active",
+        "technocore-safe-agent-unreviewed-runtime.service": "active",
+    }
+    info = m.compare(installed, states)
+    assert info["template_instance_active_count"] == 1
+    assert info["unknown_loaded_active_count"] == 1
