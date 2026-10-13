@@ -5,7 +5,7 @@ Fail closed when a new Oracle service/timer appears without explicit review.
 Repo unit filenames != installed runtime unit identities. Manual invocations,
 cron, root processes, and systemd transient/templated instances remain UNKNOWN.
 """
-from hashlib import sha256
+from hashlib import sha1, sha256
 import json
 from pathlib import Path
 import re
@@ -52,6 +52,37 @@ REQUIRE_FENCING = frozenset((
     "technocore-safe-agent-tclk-stager.service",
     "technocore-safe-agent-tclk-preparer.service",
 ))
+# Verified directly from canonical GitHub main tree at the frozen source SHA.
+# A changed unit is NOT reviewed until a new independent audit approves it.
+PINNED_SOURCE_BLOBS = {
+    "airdrop-monitor.service": "5c0575c39b73c73f9df05626f43a095dba0b01c0",
+    "airdrop-monitor.timer": "3224743f49b34df34acf044d42322c072f2ed641",
+    "airdrop-notifier.service": "5c842d0f5fd413609fe9a09c2e79d89138bf38a5",
+    "airdrop-notifier.timer": "bdb91e3c14748646dbe4f21a62acfb22dd5af991",
+    "discord.service": "085b1a105e18b1f48ebcd62f74202cb16341f821",
+    "lobby-capture.service": "bdf71c805d179bda50dde0df4db7930f5308099d",
+    "resident.service": "67c173c328f13fc0f8ed2ec24ecec4190df35a53",
+    "technocore-safe-agent-close1-approved-trade.service": "03d6ac863051637aa9b644eb55d6204421d8f081",
+    "technocore-safe-agent-close1-auto-resident.service": "cd17a98f32775cdc7088943a370417df3ab3b44b",
+    "technocore-safe-agent-close1-batch-trade.service": "cb2b86dcfcf23379fe29f7d629aa18bda4c25261",
+    "technocore-safe-agent-close1-standalone-watch.service": "859fe465180ac26e81d09b0f0e824e151232ed21",
+    "technocore-safe-agent-metadata-block.service": "4053ee9b13d82327e06c7abfdb6f8d5f41d94653",
+    "technocore-safe-agent-precontest-supervisor.service": "335d0b6aaa8a49e2d8ca3bd01bed9132eb92d335",
+    "technocore-safe-agent-precontest-supervisor.timer": "faeac611812f5918e22d81cb8d0a7be8a996062e",
+    "technocore-safe-agent-signer.service": "d78015ce4af0d53e8f8a386e7cc4b3a0755736f6",
+    "technocore-safe-agent-tclk-accept@.service": "852cd1267374bfe0d632eb901f61f73f1a9c375c",
+    "technocore-safe-agent-tclk-lock-watcher.service": "13b33e269ef269b77fa8aff2ac5e09b917870c16",
+    "technocore-safe-agent-tclk-lock-watcher.timer": "4cc0d709ba62b715d92d86aab9c611ed547db8b9",
+    "technocore-safe-agent-tclk-preparer.service": "4e294030846e6b2cd4c7d55ac665a2073eb05293",
+    "technocore-safe-agent-tclk-preparer.timer": "b014c6bbcc3df5a96bae46887a8bb7095eb5354f",
+    "technocore-safe-agent-tclk-reveal-preparer.service": "ca92e84099db0ecbc6d49082ea9a6155032c5637",
+    "technocore-safe-agent-tclk-reveal-preparer.timer": "df6d29fc3f860f629475e44603cfe0e4a9b360fd",
+    "technocore-safe-agent-tclk-reveal@.service": "c188b89177be04982c39290f0777fdddb84cd27b",
+    "technocore-safe-agent-tclk-stager.service": "6a6c452a38d7aeeacd4adb90a949ae5a74cbb6cf",
+    "technocore-safe-agent-tclk-stager.timer": "0b4508bd172b830e6191aa3dedae82cc030dfd6c",
+    "technocore-safe-agent-tclk-work-watcher.service": "addc9e9205038008313ee170db28580bc18bb8d2",
+    "technocore-safe-agent-tclk-work-watcher.timer": "10a8cf52ea288395bc5a3decab86f94aa56499af",
+}
 STATE_ROOT = "/var/lib/technocore-safe-agent"
 VALID_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 
@@ -86,9 +117,14 @@ def listed(folder):
     return {p.name for p in folder.iterdir()
             if p.name.endswith((".service", ".timer"))}
 
-def inventory(folder):
+def git_blob_id(raw):
+    return sha1(b"blob " + str(len(raw)).encode("ascii") + b"\\0" + raw).hexdigest()
+
+def inventory(folder, *, enforce_pinned=True):
     actual = listed(folder)
     need(actual == REVIEWED_UNITS, "UNREVIEWED_SERVICE_OR_TIMER_STOP")
+    need(set(PINNED_SOURCE_BLOBS) == REVIEWED_UNITS,
+         "PINNED_UNIT_REGISTRY_INCOMPLETE")
     report = []
     for name in sorted(actual):
         file = folder / name
@@ -97,6 +133,9 @@ def inventory(folder):
         need(0 < len(raw) < 20000, "UNIT_BYTE_LIMIT")
         lines = properties(raw.decode("utf-8"))
         source_sha = sha256(raw).hexdigest()
+        if enforce_pinned:
+            need(git_blob_id(raw) == PINNED_SOURCE_BLOBS[name],
+                 "PINNED_SOURCE_UNIT_DRIFT_STOP")
         service = name.endswith(".service")
         if service:
             command = lines.get(("Service", "ExecStart"), [])
