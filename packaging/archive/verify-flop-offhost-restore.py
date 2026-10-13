@@ -2,7 +2,8 @@
 """Verify downloaded FLOP retirement bundle on a SEPARATE, OFF-OCI/OFF-K137 host.
 
 No network, secrets, services, writes, signing, or full-file RAM loads.
-Requires an out-of-band pinned SHA256 of the manifest (not read from bundle).
+Requires separate out-of-band SHA256 pins for the manifest AND original DID.
+Never derive either original-identity pin from the untrusted restore bundle.
 Checks all manifest files with 128-KiB buffered reads, and both standalone
 SQLite databases with read-only quick_check. This NEVER authorizes OCI removal.
 """
@@ -310,7 +311,7 @@ def read_small_json(path):
         os.close(fd)
     return json.loads(content.decode("utf-8"))
 
-def verify_ledger(files):
+def verify_ledger(files, expected_did_sha256):
     """No replayable or unclassified signer/outbox entries in the restored files.
 
     Retain already quarantined controlled E2E test receipts verbatim. Passing
@@ -325,6 +326,9 @@ def verify_ledger(files):
     identity = did.get("did")
     require(isinstance(identity, str) and identity.startswith("did:key:z"),
             "LEDGER_DID_INVALID")
+    # Original DID continuity requires a separate trusted pre-migration pin.
+    require(hashlib.sha256(identity.encode("utf-8")).hexdigest() ==
+            expected_did_sha256, "EXTERNAL_ORIGINAL_DID_MISMATCH")
     require(receipt.get("schema_version") == 1 and
             outbox.get("schema_version") == 1 and
             isinstance(receipt.get("receipts"), dict) and
@@ -405,9 +409,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--bundle", required=True)
     parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--expected-did-sha256", required=True)
     args = parser.parse_args(argv)
     require(HEX64.fullmatch(args.manifest_sha256 or "") is not None,
             "EXTERNAL_DIGEST_REQUIRED")
+    require(HEX64.fullmatch(args.expected_did_sha256 or "") is not None,
+            "EXTERNAL_ORIGINAL_DID_SHA256_REQUIRED")
     bundle = Path(args.bundle)
     require(bundle.exists() and bundle.is_dir() and not bundle.is_symlink(),
             "BAD_BUNDLE_DIRECTORY")
@@ -418,10 +425,11 @@ def main(argv=None):
     entries = read_manifest(bundle, args.manifest_sha256)
     files, total = verify_files(bundle, entries)
     sqlite_pages = [verify_sqlite(files[name]) for name in SQLITE_FILES]
-    ack, quarantined = verify_ledger(files)
+    ack, quarantined = verify_ledger(files, args.expected_did_sha256)
     print("FLOP_OFFHOST_MANIFEST_PINNED_SHA256_PASS", flush=True)
     print("FLOP_OFFHOST_FILE_SHA256_PASS count=" + str(len(files)), flush=True)
     print("FLOP_OFFHOST_SQLITE_QUICK_CHECK_PASS count=" + str(len(sqlite_pages)), flush=True)
+    print("FLOP_OFFHOST_EXTERNAL_ORIGINAL_DID_PIN_PASS", flush=True)
     print("FLOP_OFFHOST_LEDGER_ACK_IDS_AND_HASHES_PASS count=" + str(ack), flush=True)
     print("FLOP_OFFHOST_QUARANTINED_HISTORY_PASS count=" + str(quarantined), flush=True)
     print("FLOP_OFFHOST_TERMINAL_OUTBOX_AND_NONCE_PASS", flush=True)

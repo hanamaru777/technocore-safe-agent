@@ -11,6 +11,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "packaging/archive/verify-flop-offhost-restore.py"
 SOURCE_HEAD = "ec4bc4892d40cdd2a03e102faa44d72c89e01b99"
+# Independent synthetic pin: never obtained from the restore bundle.
+SYNTHETIC_ORIGINAL_DID = "did:key:z" + "x" * 48
+SYNTHETIC_ORIGINAL_DID_SHA256 = hashlib.sha256(
+    SYNTHETIC_ORIGINAL_DID.encode("utf-8")).hexdigest()
 REQUIRED = (
     "capture/lobby-capture.sqlite3",
     "capture/lobby-capture-service.sqlite3",
@@ -34,7 +38,7 @@ def build(tmp_path):
     bundle = tmp_path / "offhost"
     bundle.mkdir()
     digest = hashlib.sha256(b"receipt").hexdigest()
-    did = "did:key:z" + "x" * 48
+    did = SYNTHETIC_ORIGINAL_DID
     values = {
         "state/verified-did.json": {"did": did},
         "state/nonces.json": {did + "|public-room": 123},
@@ -91,10 +95,10 @@ def manifest(bundle, *, remove=(), tamper=False, extras=()):
     return hashlib.sha256(raw).hexdigest()
 
 
-def verify(bundle,sha):
+def verify(bundle,sha, *, did_pin=SYNTHETIC_ORIGINAL_DID_SHA256):
     return subprocess.run(
         [sys.executable, "-I", str(SCRIPT), "--bundle",str(bundle),
-         "--manifest-sha256",sha],
+         "--manifest-sha256",sha, "--expected-did-sha256",did_pin],
         capture_output=True, text=True, timeout=20
     )
 
@@ -105,6 +109,7 @@ def test_frozen_complete_bundle_verifies_no_secret_values_leaked(tmp_path):
     p = verify(b,sha)
     assert p.returncode == 0, p.stderr + p.stdout
     assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in p.stdout
+    assert "FLOP_OFFHOST_EXTERNAL_ORIGINAL_DID_PIN_PASS" in p.stdout
     assert "FLOP_OCI_DELETION_NOT_AUTHORIZED_BY_FILE_PROOF_ALONE" in p.stdout
     assert "FLOP_OFFHOST_SQLITE_QUICK_CHECK_PASS count=2" in p.stdout
     assert "FLOP_OFFHOST_LEDGER_ACK_IDS_AND_HASHES_PASS count=1" in p.stdout
@@ -184,6 +189,41 @@ def rewrite(bundle, name, update):
     update(value)
     file.write_text(json.dumps(value))
     return value
+
+
+def test_self_consistent_wrong_did_rejected_even_with_new_manifest_pin(tmp_path):
+    bundle = build(tmp_path)
+    replacement = "did:key:z" + "y" * 48
+    rewrite(bundle, "state/verified-did.json",
+            lambda value: value.update(did=replacement))
+    def rekey(value):
+        old_key = next(iter(value))
+        prior_nonce = value.pop(old_key)
+        value[replacement + "|public-room"] = prior_nonce
+    rewrite(bundle, "state/nonces.json", rekey)
+    rewrite(bundle, "state/signer/oracle-signer-receipts.json",
+            lambda value: value["receipts"]["a"].update(did=replacement))
+    pinned_manifest = manifest(bundle)
+    forged_pin = hashlib.sha256(replacement.encode("utf-8")).hexdigest()
+    assert verify(bundle, pinned_manifest, did_pin=forged_pin).returncode == 0
+    result = verify(bundle, pinned_manifest)
+    assert result.returncode == 42
+    assert "EXTERNAL_ORIGINAL_DID_MISMATCH" in result.stdout
+    assert replacement not in result.stdout
+
+
+def test_invalid_or_missing_original_did_anchor_fails_closed(tmp_path):
+    bundle = build(tmp_path)
+    pinned_manifest = manifest(bundle)
+    result = verify(bundle, pinned_manifest, did_pin="bad")
+    assert result.returncode == 42
+    assert "EXTERNAL_ORIGINAL_DID_SHA256_REQUIRED" in result.stdout
+    missing = subprocess.run(
+        [sys.executable, "-I", str(SCRIPT), "--bundle", str(bundle),
+         "--manifest-sha256", pinned_manifest],
+        capture_output=True, text=True, timeout=20)
+    assert missing.returncode != 0
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" not in missing.stdout
 
 
 def test_pending_queue_without_signer_receipt_blocks_restore(tmp_path):
