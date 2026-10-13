@@ -146,6 +146,30 @@ def test_tampering_with_one_source_unit_fails_even_if_writer_reference_same(tmp_
         m.inventory(tmp_path)
 
 
+
+def test_exact_two_reviewed_source_to_installed_aliases():
+    m = load()
+    assert m.INSTALLED_ALIASES == {
+        "technocore-safe-agent-airdrop-monitor.service": "airdrop-monitor.service",
+        "technocore-safe-agent-airdrop-notifier.service": "airdrop-notifier.service",
+    }
+    root = SRC.parents[2] / "packaging" / "oracle"
+    for installed, source in m.INSTALLED_ALIASES.items():
+        path = root / source.replace(".service", ".timer")
+        lines = m.properties(path.read_text())
+        assert lines[("Timer", "Unit")] == [installed]
+
+
+def test_third_party_installed_timer_target_cannot_pass_alias_check(tmp_path):
+    m = load()
+    make_fake_units(tmp_path, m)
+    timer = tmp_path / "airdrop-monitor.timer"
+    timer.write_text("[Timer]\nOnBootSec=30\n"
+                     "Unit=technocore-safe-agent-unaudited-signer.service\n")
+    with pytest.raises(m.Stop, match="TIMER_TARGET_UNREVIEWED_STOP"):
+        m.inventory(tmp_path, enforce_pinned=False)
+
+
 def test_no_environment_activity_or_cloud_runtime():
     data = SRC.read_text()
     compile(data, str(SRC), "exec")
