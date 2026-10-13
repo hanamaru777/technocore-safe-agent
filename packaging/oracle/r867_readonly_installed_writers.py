@@ -72,6 +72,29 @@ def unit_file_names(raw):
     return names
 
 
+def timer_file_state_counts(raw):
+    """Aggregate the installed UNIT FILE setting, not scheduling or writer quiescence."""
+    unit_file_names(raw)
+    counts = {"enabled": 0, "disabled": 0, "masked": 0, "other": 0}
+    seen = set()
+    for line in raw.splitlines():
+        fields = line.split()
+        if fields and fields[0].startswith(PREFIX) and fields[0].endswith(".timer"):
+            require(len(fields) >= 2, "TIMER_UNITFILE_STATE_MISSING")
+            require(fields[0] not in seen, "DUPLICATE_TIMER_UNITFILE")
+            seen.add(fields[0])
+            setting = fields[1]
+            if setting in ("enabled", "enabled-runtime"):
+                counts["enabled"] += 1
+            elif setting in ("disabled", "disabled-runtime"):
+                counts["disabled"] += 1
+            elif setting in ("masked", "masked-runtime"):
+                counts["masked"] += 1
+            else:
+                counts["other"] += 1
+    return counts
+
+
 def loaded_states(raw):
     require(isinstance(raw, str) and len(raw) < MAX_OUTPUT,
             "LOADED_UNIT_LIST_INVALID")
@@ -106,6 +129,9 @@ def compare(installed, states):
         "loaded_count": len(states),
         "loaded_active_count": sum(s == "active" for s in states.values()),
         "loaded_failed_count": sum(s == "failed" for s in states.values()),
+        "loaded_active_timer_count": sum(
+            name.endswith(".timer") and state == "active"
+            for name, state in states.items()),
         "missing_count": len(missing),
         "unknown_count": len(unknown),
         "template_instance_count": len(instances),
@@ -164,20 +190,24 @@ def host_gate():
 def main():
     host_gate()
     print("FLOP_R867_STAGE_IDENTITY_PASS", flush=True)
-    installed = unit_file_names(command([
+    unit_files_raw = command([
         "systemctl", "list-unit-files", "--no-pager", "--no-legend",
-        "--plain", "--type=service", "--type=timer"]))
+        "--plain", "--type=service", "--type=timer"])
+    installed = unit_file_names(unit_files_raw)
+    timer_states = timer_file_state_counts(unit_files_raw)
     states = loaded_states(command([
         "systemctl", "list-units", "--all", "--no-pager", "--no-legend",
         "--plain", "--type=service", "--type=timer"]))
     print("FLOP_R867_STAGE_SYSTEMD_OBSERVED", flush=True)
     info = compare(installed, states)
+    info["timer_unit_file_state_counts"] = timer_states
     info["matched_flop_process_count"] = process_count()
     print("FLOP_R867_STAGE_PROC_OBSERVED", flush=True)
     info.update({
         "schema": 1, "source_commit": EXPECTED_SOURCE_HEAD,
         "installed_dropins_verified": False, "cron_verified": False,
         "manual_invocations_fenced": False, "writer_epoch_verified": False,
+        "timer_schedules_fenced": False, "process_count_exhaustive": False,
         "safe_to_snapshot": False, "safe_to_delete_oracle": False,
     })
     print("FLOP_R867_READONLY_OBSERVATION=" +
