@@ -335,3 +335,39 @@ def test_source_never_contacts_network_or_updates_services():
                       "write_text(", "os.unlink", "os.remove", "OCI_VAULT_SECRET_OCID",
                       "SIGN_SEED"):
         assert forbidden not in code
+
+
+def test_unmanifested_extra_file_is_never_silently_accepted(tmp_path):
+    bundle = build(tmp_path)
+    digest = manifest(bundle)
+    (bundle / "state" / "unexpected.json").write_text("unreviewed", encoding="utf-8")
+    result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert "UNMANIFESTED_FILE_STOP" in result.stdout
+
+
+def test_unmanifested_empty_directory_is_rejected(tmp_path):
+    bundle = build(tmp_path)
+    digest = manifest(bundle)
+    (bundle / "state" / "untracked").mkdir()
+    result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert "UNMANIFESTED_DIRECTORY_STOP" in result.stdout
+
+
+def test_unmanifested_symlink_dir_rejected_without_following(tmp_path):
+    bundle = build(tmp_path)
+    digest = manifest(bundle)
+    (bundle / "unexpected").symlink_to(tmp_path, target_is_directory=True)
+    result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert "RESTORED_TREE_SYMLINK_STOP" in result.stdout
+
+
+def test_unmanifested_root_level_file_rejected(tmp_path):
+    bundle = build(tmp_path)
+    digest = manifest(bundle)
+    (bundle / "hidden-extra").write_bytes(b"unexpected")
+    result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert "UNMANIFESTED_FILE_STOP" in result.stdout
