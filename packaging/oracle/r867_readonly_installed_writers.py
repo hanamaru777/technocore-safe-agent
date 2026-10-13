@@ -72,27 +72,36 @@ def unit_file_names(raw):
     return names
 
 
-def timer_file_state_counts(raw):
-    """Aggregate the installed UNIT FILE setting, not scheduling or writer quiescence."""
+def timer_file_states(raw):
+    """One read-only systemctl response; retain exact known timer identities privately."""
     unit_file_names(raw)
-    counts = {"enabled": 0, "disabled": 0, "masked": 0, "other": 0}
-    seen = set()
+    result = {}
     for line in raw.splitlines():
         fields = line.split()
         if fields and fields[0].startswith(PREFIX) and fields[0].endswith(".timer"):
             require(len(fields) >= 2, "TIMER_UNITFILE_STATE_MISSING")
-            require(fields[0] not in seen, "DUPLICATE_TIMER_UNITFILE")
-            seen.add(fields[0])
-            setting = fields[1]
-            if setting in ("enabled", "enabled-runtime"):
-                counts["enabled"] += 1
-            elif setting in ("disabled", "disabled-runtime"):
-                counts["disabled"] += 1
-            elif setting in ("masked", "masked-runtime"):
-                counts["masked"] += 1
-            else:
-                counts["other"] += 1
+            require(fields[0] not in result, "DUPLICATE_TIMER_UNITFILE")
+            result[fields[0]] = fields[1]
+    return result
+
+
+def timer_state_counts(states):
+    counts = {"enabled": 0, "disabled": 0, "masked": 0, "other": 0}
+    for setting in states.values():
+        if setting in ("enabled", "enabled-runtime"):
+            counts["enabled"] += 1
+        elif setting in ("disabled", "disabled-runtime"):
+            counts["disabled"] += 1
+        elif setting in ("masked", "masked-runtime"):
+            counts["masked"] += 1
+        else:
+            counts["other"] += 1
     return counts
+
+
+def timer_file_state_counts(raw):
+    """Aggregate unit-file settings, not current scheduling or writer quiescence."""
+    return timer_state_counts(timer_file_states(raw))
 
 
 def loaded_states(raw):
@@ -134,11 +143,36 @@ def compare(installed, states):
             for name, state in states.items()),
         "missing_count": len(missing),
         "unknown_count": len(unknown),
+        "unknown_loaded_active_count": sum(states.get(n) == "active" for n in unknown),
         "template_instance_count": len(instances),
+        "template_instance_active_count": sum(states.get(n) == "active" for n in instances),
         "unknown_digests": [hashlib.sha256(n.encode()).hexdigest()[:16]
                             for n in unknown],
         "missing_digests": [hashlib.sha256(n.encode()).hexdigest()[:16]
                             for n in missing],
+    }
+
+
+def known_unit_masks(installed, loaded, timer_states):
+    """Fixed sorted source registry; bit i denotes its i-th item, never a unit name."""
+    ordered = sorted(installed_name(name) for name in SOURCE_UNITS)
+    require(len(ordered) == len(set(ordered)) == 27, "SOURCE_UNIT_ORDER_INVALID")
+    require(set(timer_states) <= installed, "TIMER_NOT_INSTALLED")
+    def bits(predicate):
+        value = sum(1 << i for i, name in enumerate(ordered) if predicate(name))
+        return format(value, "0" + str((len(ordered) + 3) // 4) + "x")
+    return {
+        "known_unit_order_sha256": hashlib.sha256(
+            "\\n".join(ordered).encode("utf-8")).hexdigest(),
+        "known_installed_mask_hex": bits(lambda name: name in installed),
+        "known_loaded_active_mask_hex": bits(
+            lambda name: loaded.get(name) == "active"),
+        "known_loaded_failed_mask_hex": bits(
+            lambda name: loaded.get(name) == "failed"),
+        "known_timer_enabled_mask_hex": bits(
+            lambda name: timer_states.get(name) in ("enabled", "enabled-runtime")),
+        "known_timer_masked_mask_hex": bits(
+            lambda name: timer_states.get(name) in ("masked", "masked-runtime")),
     }
 
 
@@ -194,17 +228,18 @@ def main():
         "systemctl", "list-unit-files", "--no-pager", "--no-legend",
         "--plain", "--type=service", "--type=timer"])
     installed = unit_file_names(unit_files_raw)
-    timer_states = timer_file_state_counts(unit_files_raw)
+    timer_states = timer_file_states(unit_files_raw)
     states = loaded_states(command([
         "systemctl", "list-units", "--all", "--no-pager", "--no-legend",
         "--plain", "--type=service", "--type=timer"]))
     print("FLOP_R867_STAGE_SYSTEMD_OBSERVED", flush=True)
     info = compare(installed, states)
-    info["timer_unit_file_state_counts"] = timer_states
+    info["timer_unit_file_state_counts"] = timer_state_counts(timer_states)
+    info.update(known_unit_masks(installed, states, timer_states))
     info["matched_flop_process_count"] = process_count()
     print("FLOP_R867_STAGE_PROC_OBSERVED", flush=True)
     info.update({
-        "schema": 1, "source_commit": EXPECTED_SOURCE_HEAD,
+        "schema": 2, "source_commit": EXPECTED_SOURCE_HEAD,
         "installed_dropins_verified": False, "cron_verified": False,
         "manual_invocations_fenced": False, "writer_epoch_verified": False,
         "timer_schedules_fenced": False, "process_count_exhaustive": False,
