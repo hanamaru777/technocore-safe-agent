@@ -39,6 +39,44 @@ REQUIRED = frozenset((
     "state/signer/upstream-health.json",
 ))
 SQLITE_FILES = tuple(sorted(x for x in REQUIRED if x.endswith(".sqlite3")))
+# Independently enforce the R861 producer's closed file vocabulary. A
+# correctly SHA-pinned manifest MUST NOT be able to include a secret, stale
+# sidecar, arbitrary OCI file, or an invented source-state pathname.
+OPTIONAL_STATE = frozenset((
+    "observer/resident-control.json", "observer/resident-heartbeat.json",
+    "observer/close1-standalone-watch.json",
+    "close1/close1-own-account.json",
+    "close1/close1-autonomous-resident.json",
+    "close1/close1-autonomous-stage.json",
+    "close1/close1-autonomous-skips.json",
+    "close1/close1-autonomous-rehearsal.json",
+    "signer/close1-approved-trade.json", "signer/close1-approved-batch.json",
+))
+SOURCE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\\Z")
+SOURCE_ATTEMPT = re.compile(r"signer/close1-attempt-[a-f0-9]{64}\\.json\\Z")
+SOURCE_RECEIPT = re.compile(r"signer/close1-receipt-[a-f0-9]{64}\\.json\\Z")
+SOURCE_PROOF = re.compile(r"proof-plans/[a-f0-9]{16}\\.json\\Z")
+SOURCE_CURSOR = re.compile(r"cursor-[a-z0-9][a-z0-9_-]{0,47}\\.json\\Z")
+
+
+def archive_path_allowed(path):
+    if path in REQUIRED:
+        return True
+    if not isinstance(path, str) or not path.startswith("state/"):
+        return False
+    name = path[6:]
+    parts = name.split("/")
+    if (not 0 < len(name) <= 200 or len(parts) > 4 or
+            not all(SOURCE_PATH_COMPONENT.fullmatch(part) and
+                    part not in (".", "..") for part in parts)):
+        return False
+    if name in OPTIONAL_STATE or SOURCE_ATTEMPT.fullmatch(name) or (
+            SOURCE_RECEIPT.fullmatch(name)):
+        return True
+    if name.startswith("autopilot/autopilot-audit.jsonl."):
+        return name[-1:] in ("1", "2", "3", "4") and name == (
+            "autopilot/autopilot-audit.jsonl." + name[-1])
+    return bool(SOURCE_PROOF.fullmatch(name) or SOURCE_CURSOR.fullmatch(name))
 SMALL_JSON = (
     "state/verified-did.json", "state/nonces.json",
     "state/autopilot/autopilot-outbox.json",
@@ -195,6 +233,9 @@ def verify_files(root, entries):
         name = entry["path"]
         require(isinstance(name, str) and name not in observed,
                 "DUPLICATE_OR_BAD_ENTRY")
+        require(name != "state/signer/close1-approved-trade.lock",
+                "TRANSIENT_FINANCE_LOCK_IN_ARCHIVE_STOP")
+        require(archive_path_allowed(name), "UNCLASSIFIED_ARCHIVE_PATH_STOP")
         expected = entry["sha256"]
         expected_size = entry["size"]
         require(type(expected_size) is int and 0 <= expected_size <=
