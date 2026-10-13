@@ -135,6 +135,49 @@ def read_manifest(root, expected):
             len(REQUIRED) <= len(entries) <= MAX_FILES, "MANIFEST_FILE_COUNT")
     return entries
 
+def require_exact_restored_tree(root, files):
+    """Only the authenticated manifest and its exact files/ancestor dirs may exist."""
+    required_files = set(files) | {"RETIREMENT-MANIFEST.json"}
+    required_dirs = set()
+    for relative in required_files:
+        bits = relative.split("/")
+        for i in range(1, len(bits)):
+            required_dirs.add("/".join(bits[:i]))
+    present_files = set()
+    present_dirs = set()
+
+    def visit(folder, relative, depth):
+        require(depth <= 8, "RESTORED_TREE_DEPTH_STOP")
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                name = entry.name
+                require(name and len(name) <= 200 and
+                        name not in (".", "..") and
+                        "/" not in name and "\\\\" not in name and
+                        "\\x00" not in name, "RESTORED_TREE_NAME_STOP")
+                rel = relative + "/" + name if relative else name
+                require(len(rel) < 250, "RESTORED_TREE_PATH_STOP")
+                info = entry.stat(follow_symlinks=False)
+                require(not stat.S_ISLNK(info.st_mode),
+                        "RESTORED_TREE_SYMLINK_STOP")
+                if stat.S_ISDIR(info.st_mode):
+                    require(rel in required_dirs, "UNMANIFESTED_DIRECTORY_STOP")
+                    present_dirs.add(rel)
+                    require(len(present_dirs) <= MAX_FILES,
+                            "RESTORED_TREE_DIRECTORY_COUNT_STOP")
+                    visit(folder / name, rel, depth + 1)
+                else:
+                    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+                            "RESTORED_TREE_NONREGULAR_STOP")
+                    require(rel in required_files, "UNMANIFESTED_FILE_STOP")
+                    present_files.add(rel)
+                    require(len(present_files) <= MAX_FILES + 1,
+                            "RESTORED_TREE_FILE_COUNT_STOP")
+    visit(root, "", 0)
+    require(present_files == required_files and
+            present_dirs == required_dirs, "RESTORED_TREE_MISSING_STOP")
+
+
 def verify_files(root, entries):
     observed = {}
     total = 0
@@ -161,6 +204,7 @@ def verify_files(root, entries):
         for suffix in ("-wal", "-shm", "-journal"):
             require(not os.path.lexists(str(observed[name]) + suffix),
                     "SQLITE_INCOMPLETE_SIDECAR_PRESENT")
+    require_exact_restored_tree(root, set(observed))
     return observed, total
 
 def verify_sqlite(path):
