@@ -281,7 +281,7 @@ def test_manifest_over_previous_128_limit_is_supported_offhost(tmp_path):
     b = build(tmp_path)
     extra = []
     for n in range(130):
-        name = "state/extra/file-" + str(n).zfill(3) + ".txt"
+        name = "state/proof-plans/" + format(n, "016x") + ".json"
         path = b / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"bounded content")
@@ -400,7 +400,7 @@ def test_r861_required_state_cannot_be_omitted_even_with_valid_pin_and_filler(
     tmp_path, missing
 ):
     bundle = build(tmp_path)
-    filler = "state/extra/counterfeit-replacement.txt"
+    filler = "state/proof-plans/ffffffffffffffff.json"
     fake = bundle / filler
     fake.parent.mkdir(parents=True, exist_ok=True)
     fake.write_bytes(b"not a required source artifact")
@@ -487,5 +487,37 @@ def test_empty_audit_log_has_valid_stable_sha256_and_can_be_restored(tmp_path):
     (b / "state/autopilot/autopilot-audit.jsonl").write_bytes(b"")
     digest = manifest(b)
     p = verify(b, digest)
+    assert p.returncode == 0, p.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in p.stdout
+
+
+@pytest.mark.parametrize("rogue", (
+    "state/signer/private-seed.json",
+    "state/observer/lobby-capture.sqlite3-wal",
+    "state/extra/unreviewed.json",
+    "capture/unsigned-third-database.sqlite3",
+    "state/autopilot/autopilot-audit.jsonl.5",
+))
+def test_manifest_cannot_authorize_unclassified_source_file_even_with_valid_external_pin(
+    tmp_path, rogue
+):
+    b = build(tmp_path)
+    path = b / rogue
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"nonempty-secret-like-test-fixture")
+    result = verify(b, manifest(b, extras=(rogue,)))
+    assert result.returncode == 42
+    assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in result.stdout
+
+
+def test_r861_valid_optional_source_paths_remain_supported(tmp_path):
+    b = build(tmp_path)
+    extras = (
+        "state/autopilot/autopilot-audit.jsonl.1",
+        "state/proof-plans/1111111111111111.json",
+        "state/cursor-lobby.json",
+        "state/observer/resident-control.json",
+    )
+    p = verify(b, archive_files(b, extras))
     assert p.returncode == 0, p.stdout
     assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in p.stdout
