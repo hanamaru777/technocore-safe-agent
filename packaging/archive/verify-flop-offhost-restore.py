@@ -183,13 +183,19 @@ def read_small_json(path):
     return json.loads(content.decode("utf-8"))
 
 def verify_ledger(files):
+    """No replayable or unclassified signer/outbox entries in the restored files.
+
+    Retain already quarantined controlled E2E test receipts verbatim. Passing
+    does not prove source writer quiescence or grant Oracle retirement.
+    """
     did = read_small_json(files["state/verified-did.json"])
     nonces = read_small_json(files["state/nonces.json"])
     receipt = read_small_json(files["state/signer/oracle-signer-receipts.json"])
     outbox = read_small_json(files["state/autopilot/autopilot-outbox.json"])
     require(all(isinstance(x, dict) for x in (did, nonces, receipt, outbox)),
             "LEDGER_TYPE_MISMATCH")
-    require(isinstance(did.get("did"), str) and did["did"].startswith("did:key:z"),
+    identity = did.get("did")
+    require(isinstance(identity, str) and identity.startswith("did:key:z"),
             "LEDGER_DID_INVALID")
     require(receipt.get("schema_version") == 1 and
             outbox.get("schema_version") == 1 and
@@ -197,21 +203,67 @@ def verify_ledger(files):
             isinstance(outbox.get("outbox"), dict) and
             isinstance(outbox.get("receipts"), dict),
             "LEDGER_SCHEMA_MISMATCH")
+    for key, number in nonces.items():
+        require(isinstance(key, str) and "|" in key and
+                type(number) is int and 0 < number <= 9999999999999999999,
+                "NONCE_HIGH_WATER_SCHEMA_INVALID")
     sign = receipt["receipts"]
     queue = outbox["outbox"]
-    r_ack = {k for k,v in sign.items()
-             if isinstance(v,dict) and v.get("state") == "acknowledged"}
-    q_ack = {k for k,v in queue.items()
-             if isinstance(v,dict) and v.get("status") == "acknowledged"}
-    require(r_ack == q_ack == set(outbox["receipts"]),
-            "ACK_RECORD_IDS_MISMATCH")
-    for key in r_ack:
-        vals = (sign[key].get("receipt_hash"),
-                queue[key].get("receipt_hash"),
-                outbox["receipts"][key].get("receipt_hash"))
-        require(all(isinstance(v,str) and HEX64.fullmatch(v) for v in vals) and
-                vals[0] == vals[1] == vals[2], "ACK_RECEIPT_HASH_MISMATCH")
-    return len(r_ack)
+    ack = {key for key, item in sign.items()
+           if isinstance(item, dict) and item.get("state") == "acknowledged"}
+    qack = {key for key, item in queue.items()
+            if isinstance(item, dict) and item.get("status") == "acknowledged"}
+    require(ack == qack == set(outbox["receipts"]), "ACK_RECORD_IDS_MISMATCH")
+    for key in ack:
+        value = outbox["receipts"][key]
+        require(isinstance(value, dict), "ACK_RECORD_SCHEMA_MISMATCH")
+        hashes = (sign[key].get("receipt_hash"), queue[key].get("receipt_hash"),
+                  value.get("receipt_hash"))
+        require(all(isinstance(v, str) and HEX64.fullmatch(v) for v in hashes)
+                and hashes[0] == hashes[1] == hashes[2],
+                "ACK_RECEIPT_HASH_MISMATCH")
+    quarantined = 0
+    for key, record in sign.items():
+        require(isinstance(key, str) and isinstance(record, dict),
+                "SIGNER_RECEIPT_SCHEMA_INVALID")
+        item = queue.get(key)
+        require(isinstance(item, dict), "SIGNER_OUTBOX_LINK_MISSING")
+        require(record.get("did") == identity, "SIGNER_DID_MISMATCH")
+        nonce, room = record.get("nonce"), item.get("room")
+        require(isinstance(nonce, str) and nonce.isascii() and
+                nonce.isdecimal() and 0 < len(nonce) <= 19 and
+                isinstance(room, str) and 0 < len(room) <= 48,
+                "RECEIPT_NONCE_OR_ROOM_INVALID")
+        floor = nonces.get(identity + "|" + room)
+        require(type(floor) is int and int(nonce) <= floor,
+                "NONCE_HIGH_WATER_BEHIND_RECEIPT")
+        if record.get("state") == "acknowledged":
+            require(item.get("status") == "acknowledged",
+                    "ACK_RECORD_IDS_MISMATCH")
+        elif record.get("state") == "prepared" and item.get("status") == "quarantined":
+            require(item.get("category") == "controlled_e2e" and
+                    item.get("quarantine_reason") in (
+                        "submission_unknown", "legacy_unhandled_http_ambiguity",
+                    ) and isinstance(item.get("quarantined_at"), str) and
+                    bool(item["quarantined_at"]), "QUARANTINE_NOT_AUTHENTICATED")
+            quarantined += 1
+        else:
+            raise Stop("SIGNER_UNRESOLVED_POST_STOP")
+    for key, item in queue.items():
+        require(isinstance(key, str) and isinstance(item, dict),
+                "OUTBOX_RECORD_SCHEMA_INVALID")
+        status = item.get("status")
+        require(status in ("acknowledged", "quarantined", "expired"),
+                "OUTBOX_PENDING_OR_UNKNOWN_STOP")
+        if status == "quarantined":
+            require(key in sign and sign[key].get("state") == "prepared",
+                    "QUARANTINED_RECORD_LINK_MISSING")
+        if status == "acknowledged":
+            require(key in sign and sign[key].get("state") == "acknowledged",
+                    "ACK_RECORD_IDS_MISMATCH")
+        if status == "expired":
+            require(key not in sign, "EXPIRED_WITH_SIGNER_RECEIPT_STOP")
+    return len(ack), quarantined
 
 def main(argv=None):
     parser = argparse.ArgumentParser(add_help=True)
@@ -230,11 +282,14 @@ def main(argv=None):
     entries = read_manifest(bundle, args.manifest_sha256)
     files, total = verify_files(bundle, entries)
     sqlite_pages = [verify_sqlite(files[name]) for name in SQLITE_FILES]
-    ack = verify_ledger(files)
+    ack, quarantined = verify_ledger(files)
     print("FLOP_OFFHOST_MANIFEST_PINNED_SHA256_PASS", flush=True)
     print("FLOP_OFFHOST_FILE_SHA256_PASS count=" + str(len(files)), flush=True)
     print("FLOP_OFFHOST_SQLITE_QUICK_CHECK_PASS count=" + str(len(sqlite_pages)), flush=True)
     print("FLOP_OFFHOST_LEDGER_ACK_IDS_AND_HASHES_PASS count=" + str(ack), flush=True)
+    print("FLOP_OFFHOST_QUARANTINED_HISTORY_PASS count=" + str(quarantined), flush=True)
+    print("FLOP_OFFHOST_TERMINAL_OUTBOX_AND_NONCE_PASS", flush=True)
+    print("FLOP_OFFHOST_WRITER_EPOCH_NOT_PROVEN", flush=True)
     print("FLOP_OFFHOST_BYTES_VERIFIED=" + str(total), flush=True)
     print("FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS", flush=True)
     print("FLOP_OCI_DELETION_NOT_AUTHORIZED_BY_FILE_PROOF_ALONE", flush=True)
