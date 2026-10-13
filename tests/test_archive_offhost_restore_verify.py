@@ -224,6 +224,7 @@ def set_controlled_quarantine(bundle, version, category="controlled_e2e"):
 
 def test_quarantined_controlled_history_is_preserved_without_retry(tmp_path):
     for version in ("v1", "v2"):
+        (tmp_path / version).mkdir()
         b = build(tmp_path / version)
         set_controlled_quarantine(b, version)
         p = verify(b, manifest(b))
