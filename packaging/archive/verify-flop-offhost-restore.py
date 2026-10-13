@@ -24,6 +24,7 @@ REQUIRED = frozenset((
     "capture/lobby-capture.sqlite3",
     "capture/lobby-capture-service.sqlite3",
     "state/verified-did.json",
+    "state/observer-safety.json",  # root-level protected observer safety
     "state/nonces.json",
     "state/activities.jsonl",
     "state/observer/observer-state.json",

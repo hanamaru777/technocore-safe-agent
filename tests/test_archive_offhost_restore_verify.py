@@ -19,6 +19,7 @@ REQUIRED = (
     "capture/lobby-capture.sqlite3",
     "capture/lobby-capture-service.sqlite3",
     "state/verified-did.json",
+    "state/observer-safety.json",
     "state/nonces.json",
     "state/activities.jsonl",
     "state/observer/observer-state.json",
@@ -41,6 +42,7 @@ def build(tmp_path):
     did = SYNTHETIC_ORIGINAL_DID
     values = {
         "state/verified-did.json": {"did": did},
+        "state/observer-safety.json": {"schema_version": 1, "health": "degraded"},
         "state/nonces.json": {did + "|public-room": 123},
         "state/observer/observer-state.json": {"completed": True},
         "state/observer/resident-state.json": {"idle": True},
@@ -328,7 +330,7 @@ def test_manifest_over_previous_128_limit_is_supported_offhost(tmp_path):
         extra.append(name)
     p = verify(b, manifest(b, extras=extra))
     assert p.returncode == 0, p.stdout
-    assert "FLOP_OFFHOST_FILE_SHA256_PASS count=145" in p.stdout
+    assert "FLOP_OFFHOST_FILE_SHA256_PASS count=146" in p.stdout
 
 def test_nonce_rollback_is_rejected_even_when_manifest_hash_matches(tmp_path):
     b = build(tmp_path)
@@ -426,6 +428,7 @@ def test_unmanifested_root_level_file_rejected(tmp_path):
 # R872: R861/R864 REQUIRE thirteen state artifacts, not just the seven
 # originally required by the independent offhost verifier.
 R861_ADDITIONAL_REQUIRED = (
+    "state/observer-safety.json",
     "state/observer/observer-config.json",
     "state/observer/resident-config.json",
     "state/observer/observer-heartbeat.json",
