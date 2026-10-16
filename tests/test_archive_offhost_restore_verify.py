@@ -727,12 +727,16 @@ def test_r946_source_radar_challenge_and_public_proof_paths_verify(tmp_path):
         "state/airdrop-radar/precontest-candidates.json",
         "state/airdrop-radar/challenges/contest_2026/spec.json",
         "state/airdrop-radar/challenges/contest_2026/progress.json",
+        "state/airdrop-radar/challenges/contest_2026/artifacts.json",
         "state/airdrop-radar/challenges/contest_2026/precontest-readiness-sources.json",
         "state/airdrop-radar/challenges/contest_2026/precontest-control-path-proof.json",
         "state/airdrop-radar/challenge-candidate-reviews/challenge_repo.json",
         "state/public-proofs/proof-" + "b" * 16 + "-20261017T080200Z.json",
     )
-    outcome = verify(bundle, archive_files(bundle, additions))
+    archive_files(bundle, additions)
+    index = bundle / "state/airdrop-radar/challenges/contest_2026/artifacts.json"
+    index.write_text(json.dumps({"schema_version": 1, "artifacts": {}}))
+    outcome = verify(bundle, manifest(bundle, extras=additions))
     assert outcome.returncode == 0, outcome.stdout
     assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in outcome.stdout
     assert "challenge_repo" not in outcome.stdout
@@ -755,10 +759,92 @@ def test_r946_unclassified_radar_proofs_stay_fail_closed(tmp_path, rogue):
     assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in outcome.stdout
 
 
-def test_r946_nested_unclassified_payload_rejected_even_when_hash_pinned(tmp_path):
+def test_r946_nested_unindexed_payload_rejected_even_when_hash_pinned(tmp_path):
     bundle = build(tmp_path)
     rogue = "state/airdrop-radar/challenges/contest/artifacts/secret.bin"
     digest = archive_files(bundle, (rogue,))
     result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert "CHALLENGE_ARTIFACT_INDEX_MISSING" in result.stdout
+
+
+def test_r949_indexed_challenge_artifact_hash_and_bytes_verified(tmp_path):
+    bundle = build(tmp_path)
+    prefix = "state/airdrop-radar/challenges/challenge_1/"
+    index_path = prefix + "artifacts.json"
+    payload_path = prefix + "artifacts/rules/v1.pdf"
+    archive_files(bundle, (index_path, payload_path))
+    payload = b"synthetic PDF-like bytes - no secrets"
+    (bundle / payload_path).write_bytes(payload)
+    record = {
+        "name": "rules/v1.pdf",
+        "source_url": "https://raw.githubusercontent.com/flop-labs/example/ref/rules/v1.pdf",
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "bytes": len(payload),
+        "pinned_at": "2026-10-17T00:00:00+00:00",
+        "relative_path": "artifacts/rules/v1.pdf",
+    }
+    index = bundle / index_path
+    index.write_text(json.dumps({"schema_version": 1, "artifacts": {
+        record["name"]: record
+    }}), encoding="utf-8")
+    names = (index_path, payload_path)
+    good = verify(bundle, manifest(bundle, extras=names))
+    assert good.returncode == 0, good.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in good.stdout
+    assert "rules/v1.pdf" not in good.stdout
+    record["sha256"] = "0" * 64
+    index.write_text(json.dumps({"schema_version": 1, "artifacts": {
+        record["name"]: record
+    }}), encoding="utf-8")
+    bad = verify(bundle, manifest(bundle, extras=names))
+    assert bad.returncode == 42
+    assert "CHALLENGE_ARTIFACT_INDEX_HASH_MISMATCH" in bad.stdout
+
+
+def test_r949_empty_index_rejects_orphan_artifact(tmp_path):
+    bundle = build(tmp_path)
+    prefix = "state/airdrop-radar/challenges/challenge_2/"
+    index_path = prefix + "artifacts.json"
+    file_path = prefix + "artifacts/data.txt"
+    archive_files(bundle, (index_path, file_path))
+    (bundle / index_path).write_text(json.dumps({
+        "schema_version": 1, "artifacts": {}
+    }))
+    result = verify(bundle, manifest(bundle, extras=(index_path, file_path)))
+    assert result.returncode == 42
+    assert "CHALLENGE_ARTIFACT_ORPHAN_STOP" in result.stdout
+
+
+def test_r949_index_referencing_missing_payload_fails_closed(tmp_path):
+    bundle = build(tmp_path)
+    index_path = "state/airdrop-radar/challenges/c/artifacts.json"
+    archive_files(bundle, (index_path,))
+    name = "lost.bin"
+    (bundle / index_path).write_text(json.dumps({
+        "schema_version": 1, "artifacts": {
+            name: {"name": name, "source_url": "https://flop.finance/x",
+                   "sha256": "a" * 64, "bytes": 7,
+                   "pinned_at": "2026-10-17T00:00:00+00:00",
+                   "relative_path": "artifacts/" + name}
+        }
+    }))
+    result = verify(bundle, manifest(bundle, extras=(index_path,)))
+    assert result.returncode == 42
+    assert "CHALLENGE_ARTIFACT_MISSING" in result.stdout
+
+
+def test_r949_spec_without_artifact_index_cannot_claim_coherent_bundle(tmp_path):
+    bundle = build(tmp_path)
+    spec = "state/airdrop-radar/challenges/c/spec.json"
+    result = verify(bundle, archive_files(bundle, (spec,)))
+    assert result.returncode == 42
+    assert "CHALLENGE_ARTIFACT_INDEX_MISSING" in result.stdout
+
+
+def test_r949_unsafe_artifact_name_not_accepted_even_when_manifest_pinned(tmp_path):
+    bundle = build(tmp_path)
+    illegal = "state/airdrop-radar/challenges/c/artifacts/.secret"
+    result = verify(bundle, archive_files(bundle, (illegal,)))
     assert result.returncode == 42
     assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in result.stdout

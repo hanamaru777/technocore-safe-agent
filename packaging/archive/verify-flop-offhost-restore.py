@@ -91,6 +91,14 @@ RADAR_CANDIDATE_REVIEW = re.compile(
 PUBLIC_PROOF_EXPORT = re.compile(
     r"public-proofs/proof-[a-f0-9]{16}-[0-9]{8}T[0-9]{6}Z\.json\Z"
 )
+# R949 mirrors R948 source producer. Challenge artifact bytes are individually
+# bound to their own local artifacts.json index, not an arbitrary tree.
+RADAR_ARTIFACT = re.compile(
+    r"airdrop-radar/challenges/([a-z0-9][a-z0-9_-]{0,63})/artifacts/"
+    r"([A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\Z"
+)
+MAX_CHALLENGE_ARTIFACT = 10 * 1024**2
+MAX_CHALLENGE_INDEX = 1024**2
 SOURCE_PATH_COMPONENT = re.compile(r"[A-Za-z0-9._-]+\Z")
 SOURCE_ATTEMPT = re.compile(r"signer/close1-attempt-[a-f0-9]{64}\.json\Z")
 SOURCE_RECEIPT = re.compile(r"signer/close1-receipt-[a-f0-9]{64}\.json\Z")
@@ -117,9 +125,13 @@ def archive_path_allowed(path):
         return False
     name = path[6:]
     parts = name.split("/")
-    if (not 0 < len(name) <= 200 or len(parts) > 4 or
-            not all(SOURCE_PATH_COMPONENT.fullmatch(part) and
-                    part not in (".", "..") for part in parts)):
+    if not all(SOURCE_PATH_COMPONENT.fullmatch(part) and
+               part not in (".", "..") for part in parts):
+        return False
+    if RADAR_ARTIFACT.fullmatch(name):
+        return (0 < len(name) <= 238 and len(parts) <= 7 and
+                len(name.rsplit("/artifacts/", 1)[-1]) <= 200)
+    if not 0 < len(name) <= 200 or len(parts) > 4:
         return False
     if name in RADAR_FIXED or RADAR_CHALLENGE.fullmatch(name) or (
             RADAR_CANDIDATE_REVIEW.fullmatch(name)) or (
@@ -303,6 +315,74 @@ def verify_tclk_custody(observed):
             required_secrets.add(stage)
     require(required_secrets <= secret_stages, "TCLK_SECRET_CUSTODY_MISSING")
 
+
+def verify_challenge_artifacts(files):
+    """Independent index-to-bytes binding; never echo filenames or file data."""
+    base = "state/airdrop-radar/challenges/"
+    indices = {}
+    artifacts = {}
+    spec_ids = set()
+    for path in files:
+        if not path.startswith(base):
+            continue
+        relative = path[len(base):]
+        if "/" not in relative:
+            continue
+        cid, suffix = relative.split("/", 1)
+        if suffix == "spec.json":
+            spec_ids.add(cid)
+        if suffix == "artifacts.json":
+            indices[cid] = path
+        match = RADAR_ARTIFACT.fullmatch(path[6:])
+        if match:
+            artifacts.setdefault(match.group(1), set()).add(path)
+    for cid in spec_ids | set(artifacts):
+        require(cid in indices, "CHALLENGE_ARTIFACT_INDEX_MISSING")
+
+    for cid, index_path in indices.items():
+        index_file = files[index_path]
+        require(index_file.stat().st_size <= MAX_CHALLENGE_INDEX,
+                "CHALLENGE_ARTIFACT_INDEX_TOO_LARGE")
+        raw = index_file.read_bytes()
+        require(0 < len(raw) <= MAX_CHALLENGE_INDEX,
+                "CHALLENGE_ARTIFACT_INDEX_TOO_LARGE")
+        index = json.loads(raw.decode("utf-8"))
+        require(isinstance(index, dict) and
+                set(index) == {"schema_version", "artifacts"} and
+                type(index["schema_version"]) is int and
+                index["schema_version"] == 1 and
+                isinstance(index["artifacts"], dict),
+                "CHALLENGE_ARTIFACT_INDEX_SCHEMA")
+        declared_paths = set()
+        for name, row in index["artifacts"].items():
+            require(isinstance(name, str) and isinstance(row, dict) and
+                    set(row) == {"name", "source_url", "sha256", "bytes",
+                                 "pinned_at", "relative_path"},
+                    "CHALLENGE_ARTIFACT_INDEX_SCHEMA")
+            path = base + cid + "/artifacts/" + name
+            matched = RADAR_ARTIFACT.fullmatch(path[6:])
+            require(matched is not None and matched.group(1) == cid and
+                    archive_path_allowed(path) and
+                    row["name"] == name and
+                    row["relative_path"] == "artifacts/" + name and
+                    isinstance(row["source_url"], str) and
+                    row["source_url"].startswith("https://") and
+                    isinstance(row["pinned_at"], str) and
+                    bool(row["pinned_at"]) and
+                    isinstance(row["sha256"], str) and
+                    HEX64.fullmatch(row["sha256"]) and
+                    type(row["bytes"]) is int and
+                    0 <= row["bytes"] <= MAX_CHALLENGE_ARTIFACT,
+                    "CHALLENGE_ARTIFACT_INDEX_SCHEMA")
+            require(path in files, "CHALLENGE_ARTIFACT_MISSING")
+            size, digest = file_digest(files[path], MAX_CHALLENGE_ARTIFACT)
+            require(size == row["bytes"] and digest == row["sha256"],
+                    "CHALLENGE_ARTIFACT_INDEX_HASH_MISMATCH")
+            declared_paths.add(path)
+        require(declared_paths == artifacts.get(cid, set()),
+                "CHALLENGE_ARTIFACT_ORPHAN_STOP")
+
+
 def verify_files(root, entries):
     observed = {}
     total = 0
@@ -342,6 +422,7 @@ def verify_files(root, entries):
                     "SQLITE_INCOMPLETE_SIDECAR_PRESENT")
     require_exact_restored_tree(root, set(observed))
     verify_finance_fence_files(observed)
+    verify_challenge_artifacts(observed)
     return observed, total
 
 # Exact financial attempt/receipt pairing mirrors the R861/R864 archive
