@@ -106,7 +106,8 @@ def profile(root=ROOT, *, monotonic=time.monotonic):
         "symlinks": 0, "special": 0, "hardlinks": 0,
         "unknown_roots": [], "symlink_classes": dict(),
         "radar": {}, "reason": "none",
-        "complete": False,
+        "metadata_walk_complete": False,
+        "archive_complete": False, "writer_epoch_proven": False,
     }
     kinds = defaultdict(lambda: {"files": 0, "bytes": 0})
     link_types = Counter()
@@ -211,7 +212,7 @@ def profile(root=ROOT, *, monotonic=time.monotonic):
     result["symlink_classes"] = dict(sorted(link_types.items()))
     # Unknown roots by definition are not exhausted even after their
     # first-level metadata read. Links also remain uninterpreted.
-    result["complete"] = (
+    result["metadata_walk_complete"] = (
         result["reason"] == "none" and not result["unknown_roots"] and
         not result["symlinks"] and not result["hardlinks"] and
         not result["special"])
