@@ -94,3 +94,65 @@ def test_source_guard_rejects_unprivileged_user(monkeypatch):
     monkeypatch.setattr(m.os, "geteuid", lambda: 1000)
     with pytest.raises(m.Stop, match="SOURCE_ROOT_REQUIRED"):
         m.original_source_gate()
+
+
+def test_r938_atomic_observer_candidates_are_narrowly_named():
+    m = mod()
+    assert m.classify("observer/.observer-state.json.abcd.tmp") == (
+        "observer", "observer_atomic_tmp_candidate")
+    assert m.classify("observer/.resident-state.json.abcd.tmp") == (
+        "observer", "observer_atomic_tmp_candidate")
+    assert m.classify("observer/.compact-estimate.abcd.tmp") == (
+        "observer", "observer_compaction_tmp_candidate")
+    assert m.classify("observer/other.tmp") == (
+        "observer", "observer_other_tmp_unclassified")
+    assert m.classify("observer/history/subfolder/.observer-state.json.abcd.tmp") == (
+        "observer", "observer_other_tmp_unclassified")
+
+
+def test_r938_disk_block_allocations_and_age_buckets(tmp_path):
+    import time
+    m = mod()
+    ob = tmp_path / "observer"
+    ob.mkdir()
+    name = ob / ".observer-state.json.unique.tmp"
+    name.write_bytes(b"test" * 3)
+    os.utime(name, (time.time() - 700_000, time.time() - 700_000))
+    result = m.profile(tmp_path)
+    key = "observer_atomic_tmp_candidate"
+    assert result["classes"][key]["bytes"] == 12
+    assert result["classes"][key]["allocated_bytes"] >= 0
+    assert result["stats"]["allocated_bytes"] >= 0
+    age = key + ":older_than_week"
+    assert result["age_bands"][age]["files"] == 1
+    assert result["largest"][0]["age_band"] == "older_than_week"
+    assert result["largest"][0]["kind"] == "tmp"
+
+
+def test_r938_age_buckets_exact_semantics():
+    m = mod()
+    assert m.age_bucket(-1) == "future_or_clock_skew"
+    assert m.age_bucket(0) == "lt_1hour"
+    assert m.age_bucket(3600) == "hour_to_day"
+    assert m.age_bucket(86400) == "day_to_week"
+    assert m.age_bucket(7 * 86400) == "older_than_week"
+
+
+def test_r938_unclassified_huge_autopilot_file_is_not_false_archive():
+    m = mod()
+    assert m.classify("autopilot/unknown.largeblob") == (
+        "autopilot", "autopilot_other_unclassified")
+    assert m.classify("autopilot/autopilot-audit.jsonl") == (
+        "autopilot", "autopilot_audit")
+    assert m.classify("autopilot/autopilot-outbox.json") == (
+        "autopilot", "autopilot_current_outbox")
+
+
+def test_r938_no_data_reads_deletes_or_chmod():
+    text = SCRIPT.read_text(encoding="utf-8")
+    for forbidden in (
+        "read_bytes(", "read_text(", "unlink(", "rmtree(", "chmod(",
+        "os.remove(", "shutil.copy", "open('wb'", 'open("wb"',
+        "os.kill(", "systemctl stop", "systemctl start",
+    ):
+        assert forbidden not in text
