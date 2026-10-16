@@ -16,6 +16,7 @@ import re
 import sqlite3
 import stat
 import sys
+from datetime import datetime
 from urllib.parse import quote
 
 SOURCE_HEAD = "ec4bc4892d40cdd2a03e102faa44d72c89e01b99"
@@ -440,6 +441,98 @@ def verify_challenge_request_journals(files):
                         "CHALLENGE_ACCEPTED_RECEIPT_MISSING")
 
 
+
+# R954: cross-check Radar's own material event hash-chain against its index.
+# The archive manifest SHA alone cannot establish historical source integrity.
+# Stream bounded lines, never print original event content or identifiers.
+MAX_RADAR_LEDGER_BYTES = 32 * 1024**2
+MAX_RADAR_INDEX_BYTES = 16 * 1024**2
+MAX_RADAR_EVENTS = 50000
+
+def _radar_hash(value, *, ascii_only=False):
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=ascii_only).encode("utf-8")).hexdigest()
+
+
+def verify_radar_ledger(files):
+    base = "state/airdrop-radar/"
+    ledger_path = base + "events.jsonl"
+    index_path = base + "event-index.json"
+    if ledger_path not in files and index_path not in files:
+        return
+    require(index_path in files, "RADAR_LEDGER_INDEX_MISSING")
+    index_file = files[index_path]
+    require(0 < index_file.stat().st_size <= MAX_RADAR_INDEX_BYTES,
+            "RADAR_INDEX_SIZE_STOP")
+    index = json.loads(index_file.read_bytes().decode("utf-8"))
+    require(isinstance(index, dict) and
+            index.get("schema_version") == 1 and
+            type(index.get("ledger_count")) is int and
+            0 <= index["ledger_count"] <= MAX_RADAR_EVENTS and
+            isinstance(index.get("ledger_tip_hash"), str) and
+            isinstance(index.get("events"), dict),
+            "RADAR_INDEX_SCHEMA")
+    previous = ""
+    count = 0
+    latest = {}
+    if ledger_path in files:
+        ledger_file = files[ledger_path]
+        require(0 <= ledger_file.stat().st_size <= MAX_RADAR_LEDGER_BYTES,
+                "RADAR_LEDGER_SIZE_STOP")
+        with ledger_file.open("r", encoding="utf-8", newline="") as stream:
+            for line in stream:
+                count += 1
+                require(count <= MAX_RADAR_EVENTS, "RADAR_LEDGER_COUNT_STOP")
+                require(0 < len(line) <= MAX_RADAR_LEDGER_BYTES and line.strip(),
+                        "RADAR_LEDGER_LINE_INVALID")
+                row = json.loads(line)
+                require(isinstance(row, dict) and
+                        type(row.get("schema_version")) is int and
+                        row["schema_version"] == 1 and
+                        type(row.get("sequence")) is int and
+                        row["sequence"] == count and
+                        row.get("record_type") == "material_event" and
+                        row.get("previous_hash") == previous and
+                        isinstance(row.get("source_evidence"), list),
+                        "RADAR_LEDGER_LINK_OR_SCHEMA_INVALID")
+                event = row.get("event")
+                require(isinstance(event, dict) and
+                        isinstance(row.get("event_id"), str) and
+                        isinstance(row.get("hash"), str) and
+                        HEX64.fullmatch(row["hash"]),
+                        "RADAR_LEDGER_EVENT_SCHEMA")
+                computed_id = _radar_hash({
+                    "type": event.get("type"), "key": event.get("key"),
+                    "before": event.get("before"), "after": event.get("after"),
+                }, ascii_only=True)[:24]
+                require(row["event_id"] == event.get("event_id") == computed_id,
+                        "RADAR_EVENT_ID_MISMATCH")
+                for field in ("first_seen", "last_seen", "observed_at"):
+                    timestamp = row.get(field)
+                    require(isinstance(timestamp, str),
+                            "RADAR_TIMESTAMP_INVALID")
+                    value = datetime.fromisoformat(
+                        timestamp.replace("Z", "+00:00"))
+                    require(value.tzinfo is not None, "RADAR_TIMESTAMP_INVALID")
+                unsigned = dict(row)
+                unsigned.pop("hash")
+                require(_radar_hash(unsigned) == row["hash"],
+                        "RADAR_CHAIN_HASH_MISMATCH")
+                previous = row["hash"]
+                latest[row["event_id"]] = (count, previous)
+    require(index["ledger_count"] == count and
+            index["ledger_tip_hash"] == previous,
+            "RADAR_INDEX_TIP_MISMATCH")
+    indexed = index["events"]
+    for event_id, (seq, hash_value) in latest.items():
+        row = indexed.get(event_id)
+        require(isinstance(row, dict) and
+                row.get("event_id") == event_id and
+                row.get("ledger_sequence") == seq and
+                row.get("ledger_hash") == hash_value,
+                "RADAR_INDEX_EVENT_MISMATCH")
+
 def verify_files(root, entries):
     observed = {}
     total = 0
@@ -481,6 +574,7 @@ def verify_files(root, entries):
     verify_finance_fence_files(observed)
     verify_challenge_artifacts(observed)
     verify_challenge_request_journals(observed)
+    verify_radar_ledger(observed)
     return observed, total
 
 # Exact financial attempt/receipt pairing mirrors the R861/R864 archive
