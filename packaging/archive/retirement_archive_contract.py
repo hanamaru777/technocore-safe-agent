@@ -91,6 +91,14 @@ RADAR_CANDIDATE_REVIEW = re.compile(
 PUBLIC_PROOF_EXPORT = re.compile(
     r"public-proofs/proof-[a-f0-9]{16}-[0-9]{8}T[0-9]{6}Z\.json\Z"
 )
+# R948: canonical 10MiB challenge artifacts live under indexed challenge
+# directories. These are immutable bytes in source semantics, not cache.
+# Bound the path to the companion offhost 250-character and 8-depth fence.
+RADAR_ARTIFACT = re.compile(
+    r"airdrop-radar/challenges/([a-z0-9][a-z0-9_-]{0,63})/artifacts/"
+    r"([A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*){0,2})\Z"
+)
+MAX_ARTIFACT = 10 * 1024**2
 # TCLK hash-lock preimages and reveal payloads are PRIVATE durable state.
 # Exact 32-hex stage IDs and fixed known prefixes only; no open-ended tree.
 TCLK_PUBLIC = re.compile(
@@ -116,11 +124,17 @@ def require(condition, reason):
         raise Stop(reason)
 
 def safe_path(path):
-    require(isinstance(path, str) and 0 < len(path) <= 200, "PATH_INVALID")
+    require(isinstance(path, str) and 0 < len(path) <= 238, "PATH_INVALID")
     bits = path.split("/")
-    require(len(bits) <= 4 and all(re.fullmatch(r"[A-Za-z0-9._-]+", b)
-                                   and b not in (".", "..") for b in bits),
-            "PATH_UNSAFE")
+    require(all(re.fullmatch(r"[A-Za-z0-9._-]+", b)
+                and b not in (".", "..") for b in bits), "PATH_UNSAFE")
+    if RADAR_ARTIFACT.fullmatch(path):
+        # The original challenge name may be nested. Refuse unbounded
+        # depth/long paths rather than widening the whole archive grammar.
+        require(len(bits) <= 7, "PATH_UNSAFE")
+        require(len(path.rsplit("/artifacts/", 1)[-1]) <= 200, "PATH_UNSAFE")
+    else:
+        require(len(bits) <= 4 and len(path) <= 200, "PATH_UNSAFE")
     return path
 
 def allowed_state(path):
@@ -134,7 +148,7 @@ def allowed_state(path):
         return True
     if path in RADAR_FIXED or RADAR_CHALLENGE.fullmatch(path) or (
             RADAR_CANDIDATE_REVIEW.fullmatch(path)) or (
-            PUBLIC_PROOF_EXPORT.fullmatch(path)):
+            PUBLIC_PROOF_EXPORT.fullmatch(path)) or RADAR_ARTIFACT.fullmatch(path):
         return True
     if TCLK_PUBLIC.fullmatch(path) or TCLK_PRIVATE.fullmatch(path):
         return True
@@ -216,8 +230,15 @@ def state_plan(meta):
         require(allowed_state(path), "UNCLASSIFIED_STATE_FILE_STOP")
         if TCLK_PUBLIC.fullmatch(path) or TCLK_PRIVATE.fullmatch(path):
             require(row["size"] > 0, "TCLK_EMPTY_STATE_STOP")
+        if RADAR_ARTIFACT.fullmatch(path):
+            require(row["size"] <= MAX_ARTIFACT, "CHALLENGE_ARTIFACT_TOO_LARGE")
         selected.append(("state/" + path, row["size"]))
     require(REQUIRED.issubset(seen), "REQUIRED_STATE_MISSING")
+    for name in seen:
+        if (match := RADAR_ARTIFACT.fullmatch(name)):
+            index_name = ("airdrop-radar/challenges/" +
+                          match.group(1) + "/artifacts.json")
+            require(index_name in seen, "CHALLENGE_ARTIFACT_INDEX_MISSING")
     require_tclk_custody(seen)
     attempts = {m.group(1) for name in seen
                 if (m := ATTEMPT.fullmatch(name))}
