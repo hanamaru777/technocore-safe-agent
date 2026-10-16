@@ -716,3 +716,49 @@ def test_r924_tclk_unknown_secret_prefix_is_rejected(tmp_path):
     result = verify(bundle, archive_files(bundle, (name,)))
     assert result.returncode == 42
     assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in result.stdout
+
+
+def test_r946_source_radar_challenge_and_public_proof_paths_verify(tmp_path):
+    """Mirrored R945 allowlist must retain evidence without revealing values."""
+    bundle = build(tmp_path)
+    additions = (
+        "state/airdrop-radar/state.json",
+        "state/airdrop-radar/events.jsonl",
+        "state/airdrop-radar/precontest-candidates.json",
+        "state/airdrop-radar/challenges/contest_2026/spec.json",
+        "state/airdrop-radar/challenges/contest_2026/progress.json",
+        "state/airdrop-radar/challenges/contest_2026/precontest-readiness-sources.json",
+        "state/airdrop-radar/challenges/contest_2026/precontest-control-path-proof.json",
+        "state/airdrop-radar/challenge-candidate-reviews/challenge_repo.json",
+        "state/public-proofs/proof-" + "b" * 16 + "-20261017T080200Z.json",
+    )
+    outcome = verify(bundle, archive_files(bundle, additions))
+    assert outcome.returncode == 0, outcome.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in outcome.stdout
+    assert "challenge_repo" not in outcome.stdout
+
+
+@pytest.mark.parametrize("rogue", (
+    "state/airdrop-radar/challenges/Contest/spec.json",
+    "state/airdrop-radar/challenges/contest/unknown.json",
+    "state/airdrop-radar/challenge-candidate-reviews/unknown.bin",
+    "state/airdrop-radar/challenges/contest/extra.json",
+    "state/airdrop-radar/uv-cache/unsafe.txt",
+    "state/public-proofs/private-seed.json",
+    "state/public-proofs/proof-wrong-20261017T080200Z.json",
+))
+def test_r946_unclassified_radar_proofs_stay_fail_closed(tmp_path, rogue):
+    bundle = build(tmp_path)
+    digest = archive_files(bundle, (rogue,))
+    outcome = verify(bundle, digest)
+    assert outcome.returncode == 42
+    assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in outcome.stdout
+
+
+def test_r946_nested_unclassified_payload_rejected_even_when_hash_pinned(tmp_path):
+    bundle = build(tmp_path)
+    rogue = "state/airdrop-radar/challenges/contest/artifacts/secret.bin"
+    digest = archive_files(bundle, (rogue,))
+    result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in result.stdout
