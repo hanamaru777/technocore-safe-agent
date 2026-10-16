@@ -237,3 +237,81 @@ def test_main_accepts_metadata_offline_only(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "FLOP_R861_OFFLINE_METADATA_PLAN_PASS" in output
     assert "FLOP_R861_NO_ARCHIVE_NO_UPLOAD_NO_WRITER_EPOCH_PROOF" in output
+
+
+def test_tclk_private_hashlock_and_reveal_files_are_retained_offline():
+    m = module()
+    c, state = fixtures(m)
+    stage = "a" * 32
+    add(state,
+        "autopilot/tclk-pilot/stages/" + stage + ".json",
+        "autopilot/tclk-pilot/previews/" + stage + ".json",
+        "autopilot/tclk-pilot/locks/" + stage + ".json",
+        "autopilot/tclk-pilot/work/" + stage + ".json",
+        "autopilot/tclk-pilot/reveal-previews/" + stage + ".json",
+        "autopilot/tclk-pilot/terminal/" + stage + ".json",
+        "signer/tclk-pilot-secrets/" + stage + ".json",
+        "signer/tclk-pilot-approvals/" + stage + ".json",
+        "signer/tclk-pilot-accepts/" + stage + ".json",
+        "signer/tclk-pilot-reveals/" + stage + ".json",
+        "signer/tclk-pilot-reveal-approvals/" + stage + ".json",
+        "signer/tclk-pilot-reveal-publishes/" + stage + ".json")
+    _, retained = m.plan(c, state)
+    names = dict(retained)
+    assert "state/signer/tclk-pilot-secrets/" + stage + ".json" in names
+    assert "state/signer/tclk-pilot-reveals/" + stage + ".json" in names
+    assert "state/autopilot/tclk-pilot/stages/" + stage + ".json" in names
+    assert len(retained) == len(m.REQUIRED) + 12
+
+
+def test_tclk_public_accept_without_private_preimage_fails_closed():
+    m = module()
+    c, state = fixtures(m)
+    stage = "b" * 32
+    add(state, "autopilot/tclk-pilot/stages/" + stage + ".json",
+        "autopilot/tclk-pilot/previews/" + stage + ".json")
+    with pytest.raises(m.Stop, match="TCLK_SECRET_CUSTODY_MISSING"):
+        m.plan(c, state)
+
+
+def test_tclk_unpaired_private_secret_and_reveal_fail_closed():
+    m = module()
+    for private_path in (
+        "signer/tclk-pilot-secrets/",
+        "signer/tclk-pilot-reveals/",
+    ):
+        c, state = fixtures(m)
+        add(state, private_path + "c" * 32 + ".json")
+        with pytest.raises(m.Stop, match="TCLK_STAGE_CUSTODY_MISSING"):
+            m.plan(c, state)
+
+
+def test_tclk_empty_private_secret_and_unexpected_name_fail_closed():
+    m = module()
+    stage = "d" * 32
+    c, state = fixtures(m)
+    add(state, "autopilot/tclk-pilot/stages/" + stage + ".json",
+        "signer/tclk-pilot-secrets/" + stage + ".json")
+    for row in state["files"]:
+        if row["path"].startswith("signer/tclk-pilot-secrets/"):
+            row["size"] = 0
+    with pytest.raises(m.Stop, match="TCLK_EMPTY_STATE_STOP"):
+        m.plan(c, state)
+    c, state = fixtures(m)
+    add(state, "signer/tclk-pilot-secrets/unchecked.json")
+    with pytest.raises(m.Stop, match="UNCLASSIFIED_STATE_FILE_STOP"):
+        m.plan(c, state)
+    c, state = fixtures(m)
+    add(state, "signer/tclk-pilot-unknown/" + stage + ".json")
+    with pytest.raises(m.Stop, match="UNCLASSIFIED_STATE_FILE_STOP"):
+        m.plan(c, state)
+
+
+def test_tclk_stage_only_does_not_invent_a_private_preimage():
+    m = module()
+    c, state = fixtures(m)
+    stage = "e" * 32
+    add(state, "autopilot/tclk-pilot/stages/" + stage + ".json")
+    _, retained = m.plan(c, state)
+    assert "state/autopilot/tclk-pilot/stages/" + stage + ".json" in dict(retained)
+    assert "state/signer/tclk-pilot-secrets/" + stage + ".json" not in dict(retained)
