@@ -724,6 +724,7 @@ def test_r946_source_radar_challenge_and_public_proof_paths_verify(tmp_path):
     additions = (
         "state/airdrop-radar/state.json",
         "state/airdrop-radar/events.jsonl",
+        "state/airdrop-radar/event-index.json",
         "state/airdrop-radar/precontest-candidates.json",
         "state/airdrop-radar/challenges/contest_2026/spec.json",
         "state/airdrop-radar/challenges/contest_2026/progress.json",
@@ -736,6 +737,11 @@ def test_r946_source_radar_challenge_and_public_proof_paths_verify(tmp_path):
     archive_files(bundle, additions)
     index = bundle / "state/airdrop-radar/challenges/contest_2026/artifacts.json"
     index.write_text(json.dumps({"schema_version": 1, "artifacts": {}}))
+    (bundle / "state/airdrop-radar/events.jsonl").write_bytes(b"")
+    (bundle / "state/airdrop-radar/event-index.json").write_text(json.dumps({
+        "schema_version": 1, "ledger_count": 0,
+        "ledger_tip_hash": "", "events": {}
+    }))
     outcome = verify(bundle, manifest(bundle, extras=additions))
     assert outcome.returncode == 0, outcome.stdout
     assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in outcome.stdout
@@ -893,3 +899,84 @@ def test_r950_accepted_without_verifiable_receipt_rejected(tmp_path):
     result = verify(bundle, _r950_journal(bundle, status="accepted"))
     assert result.returncode == 42
     assert "CHALLENGE_ACCEPTED_RECEIPT_MISSING" in result.stdout
+
+
+def _r954_ledger(bundle, *, tamper=None):
+    base = "state/airdrop-radar/"
+    events = base + "events.jsonl"
+    index = base + "event-index.json"
+    from datetime import datetime
+    _ = datetime(2026, 10, 17)
+    event = {
+        "type": "CHANGED", "key": "synthetic_metric",
+        "before": None, "after": "ok",
+    }
+    canon = lambda value, ascii_only=False: json.dumps(
+        value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=ascii_only,
+    ).encode("utf-8")
+    event["event_id"] = hashlib.sha256(canon({
+        "type": event["type"], "key": event["key"],
+        "before": event["before"], "after": event["after"],
+    }, True)).hexdigest()[:24]
+    stamp = "2026-10-17T00:00:00+00:00"
+    row = {
+        "schema_version": 1, "sequence": 1,
+        "record_type": "material_event",
+        "event_id": event["event_id"], "first_seen": stamp,
+        "last_seen": stamp, "observed_at": stamp,
+        "previous_hash": "", "event": event, "source_evidence": [],
+    }
+    row["hash"] = hashlib.sha256(canon(row)).hexdigest()
+    doc = {
+        "schema_version": 1, "ledger_count": 1,
+        "ledger_tip_hash": row["hash"],
+        "events": {
+            row["event_id"]: {
+                "event_id": row["event_id"],
+                "ledger_sequence": 1,
+                "ledger_hash": row["hash"],
+            }
+        },
+    }
+    archive_files(bundle, (events, index))
+    if tamper == "hash":
+        row["hash"] = "0" * 64
+    if tamper == "prev":
+        row["previous_hash"] = "b" * 64
+    if tamper == "index":
+        doc["ledger_tip_hash"] = "c" * 64
+    (bundle / events).write_text(json.dumps(row, ensure_ascii=False) + "\n")
+    (bundle / index).write_text(json.dumps(doc))
+    return manifest(bundle, extras=(events, index))
+
+
+def test_r954_pinned_radar_chain_and_index_verify_without_echo(tmp_path):
+    bundle = build(tmp_path)
+    result = verify(bundle, _r954_ledger(bundle))
+    assert result.returncode == 0, result.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in result.stdout
+    assert "synthetic_metric" not in result.stdout
+
+
+@pytest.mark.parametrize("tamper,reason", (
+    ("hash", "RADAR_CHAIN_HASH_MISMATCH"),
+    ("prev", "RADAR_LEDGER_LINK_OR_SCHEMA_INVALID"),
+    ("index", "RADAR_INDEX_TIP_MISMATCH"),
+))
+def test_r954_sha_pinned_but_internal_radar_history_corrupted_stops(
+    tmp_path, tamper, reason
+):
+    bundle = build(tmp_path)
+    result = verify(bundle, _r954_ledger(bundle, tamper=tamper))
+    assert result.returncode == 42
+    assert reason in result.stdout
+    assert "synthetic_metric" not in result.stdout
+
+
+def test_r954_radar_events_without_index_stop(tmp_path):
+    bundle = build(tmp_path)
+    path = "state/airdrop-radar/events.jsonl"
+    result = verify(bundle, archive_files(bundle, (path,)))
+    assert result.returncode == 42
+    assert "RADAR_LEDGER_INDEX_MISSING" in result.stdout
