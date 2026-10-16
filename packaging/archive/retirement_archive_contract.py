@@ -54,6 +54,43 @@ CAPTURE_SIDECARS = frozenset(
 )
 PROOF_PLAN = re.compile(r"proof-plans/[0-9a-f]{16}\.json\Z")
 CURSOR = re.compile(r"cursor-[a-z0-9][a-z0-9_-]{0,47}\.json\Z")
+# R945: original pinned PROD source also writes durable challenge/radar proof
+# histories. Whitelist exact known source-origin forms, never whole directories.
+# This is an OFFLINE filename predicate, NOT proof the OCI inventory is complete.
+RADAR_FIXED = frozenset((
+    "airdrop-radar/state.json",
+    "airdrop-radar/current-snapshot.json",
+    "airdrop-radar/last-success.json",
+    "airdrop-radar/event-index.json",
+    "airdrop-radar/events.jsonl",
+    "airdrop-radar/precontest-supervisor.json",
+    "airdrop-radar/precontest-candidates.json",
+))
+RADAR_CHALLENGE_LEAVES = frozenset((
+    "spec.json", "progress.json", "requests.json", "artifacts.json",
+    "precontest-readiness.json", "precontest-readiness-sources.json",
+    "precontest-runtime-profile.json", "precontest-runtime-compatibility.json",
+    "precontest-plumbing-receipt.json",
+    "precontest-active-learning-proof.json",
+    "precontest-batch-rehearsal-proof.json",
+    "precontest-control-path-receipts.json",
+    "precontest-control-path-proof.json",
+    "precontest-deadline-proof.json",
+    "precontest-human-independence-receipt.json",
+    "precontest-human-independence-proof.json",
+    "precontest-reconciliation-proof.json",
+))
+RADAR_CHALLENGE = re.compile(
+    r"airdrop-radar/challenges/[a-z0-9][a-z0-9_-]{0,63}/(?:"
+    + "|".join(re.escape(name) for name in sorted(RADAR_CHALLENGE_LEAVES))
+    + r")\Z"
+)
+RADAR_CANDIDATE_REVIEW = re.compile(
+    r"airdrop-radar/challenge-candidate-reviews/[A-Za-z0-9_.-]{1,100}\.json\Z"
+)
+PUBLIC_PROOF_EXPORT = re.compile(
+    r"public-proofs/proof-[a-f0-9]{16}-[0-9]{8}T[0-9]{6}Z\.json\Z"
+)
 # TCLK hash-lock preimages and reveal payloads are PRIVATE durable state.
 # Exact 32-hex stage IDs and fixed known prefixes only; no open-ended tree.
 TCLK_PUBLIC = re.compile(
@@ -94,6 +131,10 @@ def allowed_state(path):
     if path.startswith(ROTATED):
         return path[len(ROTATED):] in ("1", "2", "3", "4")
     if CURSOR.fullmatch(path) or PROOF_PLAN.fullmatch(path):
+        return True
+    if path in RADAR_FIXED or RADAR_CHALLENGE.fullmatch(path) or (
+            RADAR_CANDIDATE_REVIEW.fullmatch(path)) or (
+            PUBLIC_PROOF_EXPORT.fullmatch(path)):
         return True
     if TCLK_PUBLIC.fullmatch(path) or TCLK_PRIVATE.fullmatch(path):
         return True
