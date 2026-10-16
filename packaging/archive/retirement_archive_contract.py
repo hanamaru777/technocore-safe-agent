@@ -65,6 +65,15 @@ RADAR_FIXED = frozenset((
     "airdrop-radar/events.jsonl",
     "airdrop-radar/precontest-supervisor.json",
     "airdrop-radar/precontest-candidates.json",
+    # R956: source-pinned monotone notification/approval/action-state records.
+    # Never widen to all airdrop-radar files or accept flock/tmp/secret.
+    "airdrop-radar/monitor-config.json",
+    "airdrop-radar/monitor-heartbeat.json",
+    "airdrop-radar/alert-outbox.json",
+    "airdrop-radar/discord-notifier-state.json",
+    "airdrop-radar/action-candidates.json",
+    "airdrop-radar/action-inbox.json",
+    "airdrop-radar/action-executions.json",
 ))
 RADAR_CHALLENGE_LEAVES = frozenset((
     "spec.json", "progress.json", "requests.json", "artifacts.json",

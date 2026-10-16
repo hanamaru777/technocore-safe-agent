@@ -460,3 +460,31 @@ def test_r948_original_ten_mib_artifact_limit_remains_fail_closed():
     s["files"][-1]["size"] = m.MAX_ARTIFACT + 1
     with pytest.raises(m.Stop, match="CHALLENGE_ARTIFACT_TOO_LARGE"):
         m.plan(c, s)
+
+
+@pytest.mark.parametrize("name", (
+    "monitor-config.json", "monitor-heartbeat.json", "alert-outbox.json",
+    "discord-notifier-state.json", "action-candidates.json",
+    "action-inbox.json", "action-executions.json",
+))
+def test_r956_exact_original_operational_state_retained(name):
+    m = module()
+    cap, inv = fixtures(m)
+    path = "airdrop-radar/" + name
+    add(inv, path)
+    _, selected = m.plan(cap, inv)
+    assert dict(selected)["state/" + path] == 1
+    assert m.MAX_PATHS == 512 and m.MAX_STATE == 6 * 1024**3
+
+
+@pytest.mark.parametrize("name", (
+    "alert-outbox.lock", "action-inbox.lock", "action-executions.lock",
+    "action-candidates.lock", "discord-notifier-state.json.tmp",
+    "action-inbox.json.backup", "secret-cache.json",
+))
+def test_r956_transient_or_unknown_operational_names_still_stop(name):
+    m = module()
+    cap, inv = fixtures(m)
+    add(inv, "airdrop-radar/" + name)
+    with pytest.raises(m.Stop, match="UNCLASSIFIED_STATE_FILE_STOP"):
+        m.plan(cap, inv)
