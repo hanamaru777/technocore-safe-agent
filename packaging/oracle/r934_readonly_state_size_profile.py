@@ -52,8 +52,15 @@ def classify(relative):
             category = "current_observer_state"
         elif name.startswith("observer-state.json.backup-"):
             category = "observer_compaction_backup"
+        elif (len(pieces) == 2 and name.endswith(".tmp") and
+              name.startswith((".observer-state.json.", ".resident-state.json.",
+                               ".observer-heartbeat.json.", ".observer-config.json."))):
+            category = "observer_atomic_tmp_candidate"
+        elif (len(pieces) == 2 and name.endswith(".tmp") and
+              name.startswith(".compact-estimate.")):
+            category = "observer_compaction_tmp_candidate"
         elif name.endswith(".tmp") or name.startswith(".compact-"):
-            category = "temporary_state"
+            category = "observer_other_tmp_unclassified"
         elif name.endswith((".log", ".jsonl", ".gz", ".zst")):
             category = "observer_logs"
         elif "backup" in name or "snapshot" in name or "archive" in name:
@@ -82,13 +89,45 @@ def classify(relative):
         category = group + "_unclassified"
     return group, category
 
+def age_bucket(seconds):
+    """Time bounds only; old-looking file != safe-to-delete file."""
+    if seconds < 0:
+        return "future_or_clock_skew"
+    if seconds < 3600:
+        return "lt_1hour"
+    if seconds < 86400:
+        return "hour_to_day"
+    if seconds < 7 * 86400:
+        return "day_to_week"
+    return "older_than_week"
+
+
+def file_kind(name):
+    """Suffix classification without echoing any basename."""
+    if name.endswith(".tmp"):
+        return "tmp"
+    if name.endswith((".sqlite3", ".db")):
+        return "database"
+    if name.endswith((".log", ".jsonl", ".jsonl.1")):
+        return "log"
+    if name.endswith(".json"):
+        return "json"
+    if name.endswith((".gz", ".zst", ".zip")):
+        return "compressed"
+    return "other"
+
+
 def profile(root=ROOT, *, start=None):
     if start is None:
         start = time.monotonic()
     groups = defaultdict(lambda: {"files": 0, "bytes": 0})
-    categories = defaultdict(lambda: {"files": 0, "bytes": 0})
+    categories = defaultdict(lambda: {"files": 0, "bytes": 0,
+                                       "allocated_bytes": 0})
+    ages = defaultdict(lambda: {"files": 0, "bytes": 0,
+                                "allocated_bytes": 0})
     top = []
-    stats = {"files": 0, "dirs": 0, "bytes": 0,
+    wall_clock = time.time()
+    stats = {"files": 0, "dirs": 0, "bytes": 0, "allocated_bytes": 0,
              "unknown_root_dirs": 0, "symlinks": 0, "hardlinks": 0,
              "special": 0, "incomplete": False, "reason": "none"}
     seen = set()
@@ -134,13 +173,26 @@ def profile(root=ROOT, *, start=None):
                 stats["files"] += 1
                 require(stats["files"] <= MAX_FILES, "FILE_COUNT_LIMIT")
                 stats["bytes"] += info.st_size
+                alloc = info.st_blocks * 512
+                stats["allocated_bytes"] += alloc
                 group, category = classify(rel)
                 groups[group]["files"] += 1
                 groups[group]["bytes"] += info.st_size
                 categories[category]["files"] += 1
                 categories[category]["bytes"] += info.st_size
+                categories[category]["allocated_bytes"] += alloc
+                band = age_bucket(wall_clock - info.st_mtime)
+                if category in ("observer_atomic_tmp_candidate",
+                                "observer_compaction_tmp_candidate",
+                                "observer_other_tmp_unclassified",
+                                "autopilot_other_unclassified"):
+                    key_age = category + ":" + band
+                    ages[key_age]["files"] += 1
+                    ages[key_age]["bytes"] += info.st_size
+                    ages[key_age]["allocated_bytes"] += alloc
                 top.append({"group": group, "class": category,
-                            "bytes": info.st_size,
+                            "bytes": info.st_size, "allocated_bytes": alloc,
+                            "age_band": band, "kind": file_kind(name),
                             "id_hash12": hashlib.sha256(
                                 rel.encode("utf-8")).hexdigest()[:12]})
                 if len(top) > MAX_TOP:
@@ -161,6 +213,7 @@ def profile(root=ROOT, *, start=None):
             stats["reason"] = "UNCLASSIFIED_PATHS"
     return {"stats": stats, "groups": dict(sorted(groups.items())),
             "classes": dict(sorted(categories.items())),
+            "age_bands": dict(sorted(ages.items())),
             "largest": sorted(top, key=lambda o: o["bytes"], reverse=True)}
 
 def original_source_gate():
@@ -204,6 +257,13 @@ def main():
     original_source_gate()
     print("R934_SOURCE_PIN=PASS", flush=True)
     report = profile()
+    disk = os.statvfs(ROOT)
+    print("R938_FILESYSTEM=" + json.dumps({
+        "filesystem_bytes": disk.f_blocks * disk.f_frsize,
+        "available_bytes": disk.f_bavail * disk.f_frsize,
+        "free_blocks_bytes": disk.f_bfree * disk.f_frsize,
+        "state_sizes_are_metadata_only": True,
+    }, sort_keys=True, separators=(",", ":")), flush=True)
     print("R934_METADATA=" + json.dumps(
         report, sort_keys=True, separators=(",", ":")), flush=True)
     # Even incomplete metadata is useful; unit check is independent and bounded.
