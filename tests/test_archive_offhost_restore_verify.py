@@ -848,3 +848,48 @@ def test_r949_unsafe_artifact_name_not_accepted_even_when_manifest_pinned(tmp_pa
     result = verify(bundle, archive_files(bundle, (illegal,)))
     assert result.returncode == 42
     assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in result.stdout
+
+
+def _r950_journal(bundle, *, status, receipt_hash=None):
+    journal = "state/airdrop-radar/challenges/contest/requests.json"
+    row = {
+        "request_id": "request-one", "action": "submit",
+        "payload_sha256": "a" * 64, "status": status,
+        "planned_at": "2026-10-17T00:00:00+00:00",
+        "updated_at": "2026-10-17T00:00:00+00:00",
+        "receipt_hash": receipt_hash,
+    }
+    archive_files(bundle, (journal,))
+    (bundle / journal).write_text(json.dumps({
+        "schema_version": 1, "requests": {"request-one": row}
+    }), encoding="utf-8")
+    return manifest(bundle, extras=(journal,))
+
+
+@pytest.mark.parametrize("status", ("planned", "sent", "ambiguous"))
+def test_r950_pending_or_ambiguous_challenge_journal_blocks_cutover(tmp_path, status):
+    bundle = build(tmp_path)
+    result = verify(bundle, _r950_journal(bundle, status=status))
+    assert result.returncode == 42
+    assert "CHALLENGE_REQUEST_NONTERMINAL_STOP" in result.stdout
+    assert "request-one" not in result.stdout
+
+
+@pytest.mark.parametrize("status,receipt", (
+    ("accepted", "a" * 64),
+    ("rejected", None),
+    ("reconciled_accepted", "b" * 64),
+    ("reconciled_not_found", None),
+))
+def test_r950_only_terminal_challenge_journals_verify(tmp_path, status, receipt):
+    bundle = build(tmp_path)
+    result = verify(bundle, _r950_journal(bundle, status=status, receipt_hash=receipt))
+    assert result.returncode == 0, result.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in result.stdout
+
+
+def test_r950_accepted_without_verifiable_receipt_rejected(tmp_path):
+    bundle = build(tmp_path)
+    result = verify(bundle, _r950_journal(bundle, status="accepted"))
+    assert result.returncode == 42
+    assert "CHALLENGE_ACCEPTED_RECEIPT_MISSING" in result.stdout
