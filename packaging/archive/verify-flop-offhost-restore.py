@@ -60,6 +60,18 @@ SOURCE_ATTEMPT = re.compile(r"signer/close1-attempt-[a-f0-9]{64}\.json\Z")
 SOURCE_RECEIPT = re.compile(r"signer/close1-receipt-[a-f0-9]{64}\.json\Z")
 SOURCE_PROOF = re.compile(r"proof-plans/[a-f0-9]{16}\.json\Z")
 SOURCE_CURSOR = re.compile(r"cursor-[a-z0-9][a-z0-9_-]{0,47}\.json\Z")
+# Match R922 offline producer: fixed source stage names only, never an
+# unrestricted subtree that could include unrelated private key material.
+TCLK_PUBLIC = re.compile(
+    r"autopilot/tclk-pilot/(?:stages|previews|locks|work|terminal|reveal-previews)/"
+    r"([a-f0-9]{32})\.json\Z"
+)
+TCLK_PRIVATE = re.compile(
+    r"signer/tclk-pilot-(?:secrets|approvals|accepts|reveals|"
+    r"reveal-approvals|reveal-publishes)/([a-f0-9]{32})\.json\Z"
+)
+TCLK_STAGE_PREFIX = "state/autopilot/tclk-pilot/stages/"
+TCLK_SECRET_PREFIX = "state/signer/tclk-pilot-secrets/"
 
 
 def archive_path_allowed(path):
@@ -79,7 +91,8 @@ def archive_path_allowed(path):
     if name.startswith("autopilot/autopilot-audit.jsonl."):
         return name[-1:] in ("1", "2", "3", "4") and name == (
             "autopilot/autopilot-audit.jsonl." + name[-1])
-    return bool(SOURCE_PROOF.fullmatch(name) or SOURCE_CURSOR.fullmatch(name))
+    return bool(SOURCE_PROOF.fullmatch(name) or SOURCE_CURSOR.fullmatch(name)
+                or TCLK_PUBLIC.fullmatch(name) or TCLK_PRIVATE.fullmatch(name))
 SMALL_JSON = (
     "state/verified-did.json", "state/nonces.json",
     "state/autopilot/autopilot-outbox.json",
@@ -227,6 +240,29 @@ def require_exact_restored_tree(root, files):
             present_dirs == required_dirs, "RESTORED_TREE_MISSING_STOP")
 
 
+def verify_tclk_custody(observed):
+    """Check complete structural pairing; never decode or print preimages."""
+    names = set(observed)
+    secret_stages = set()
+    required_secrets = set()
+    for name in names:
+        if not name.startswith("state/"):
+            continue
+        relative = name[6:]
+        public = TCLK_PUBLIC.fullmatch(relative)
+        private = TCLK_PRIVATE.fullmatch(relative)
+        if public is None and private is None:
+            continue
+        stage = (public or private).group(1)
+        stage_file = TCLK_STAGE_PREFIX + stage + ".json"
+        if name != stage_file:
+            require(stage_file in names, "TCLK_STAGE_CUSTODY_MISSING")
+        if name.startswith(TCLK_SECRET_PREFIX):
+            secret_stages.add(stage)
+        elif name != stage_file:
+            required_secrets.add(stage)
+    require(required_secrets <= secret_stages, "TCLK_SECRET_CUSTODY_MISSING")
+
 def verify_files(root, entries):
     observed = {}
     total = 0
@@ -246,6 +282,12 @@ def verify_files(root, entries):
                 MAX_SINGLE_FILE and isinstance(expected, str) and
                 HEX64.fullmatch(expected), "ENTRY_SIZE_OR_DIGEST")
         path = no_link_path(root, name)
+        if name.startswith("state/") and TCLK_PRIVATE.fullmatch(name[6:]):
+            require((path.stat().st_mode & 0o077) == 0,
+                    "TCLK_PRIVATE_MODE_EXPOSED")
+            require(expected_size > 0, "TCLK_EMPTY_STATE_STOP")
+        elif name.startswith("state/") and TCLK_PUBLIC.fullmatch(name[6:]):
+            require(expected_size > 0, "TCLK_EMPTY_STATE_STOP")
         size, actual = file_digest(path, MAX_SINGLE_FILE)
         require(size == expected_size and actual == expected,
                 "ARTIFACT_SHA256_OR_SIZE_MISMATCH")
@@ -253,6 +295,7 @@ def verify_files(root, entries):
         total += size
         require(total <= MAX_TOTAL, "BUNDLE_TOO_LARGE")
     require(REQUIRED <= set(observed), "REQUIRED_ARTIFACT_MISSING")
+    verify_tclk_custody(observed)
     for name in SQLITE_FILES:
         for suffix in ("-wal", "-shm", "-journal"):
             require(not os.path.lexists(str(observed[name]) + suffix),
