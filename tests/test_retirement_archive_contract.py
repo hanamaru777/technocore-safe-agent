@@ -403,7 +403,7 @@ def test_r945_pinned_original_radar_challenge_and_public_proof_files_retained():
 @pytest.mark.parametrize("bad,why", (
     ("airdrop-radar/challenges/Contest/spec.json", "UNCLASSIFIED_STATE_FILE_STOP"),
     ("airdrop-radar/challenges/contest/unknown.json", "UNCLASSIFIED_STATE_FILE_STOP"),
-    ("airdrop-radar/challenges/contest/artifacts/payload.bin", "PATH_UNSAFE"),
+    ("airdrop-radar/challenges/contest/artifacts/payload.bin", "CHALLENGE_ARTIFACT_INDEX_MISSING"),
     ("airdrop-radar/challenge-candidate-reviews/unknown.bin", "UNCLASSIFIED_STATE_FILE_STOP"),
     ("airdrop-radar/uv-cache/unknown.json", "UNCLASSIFIED_STATE_FILE_STOP"),
     ("public-proofs/private-seed.json", "UNCLASSIFIED_STATE_FILE_STOP"),
@@ -423,4 +423,40 @@ def test_r945_known_radar_evidence_still_subject_to_size_limits():
     add(s, "airdrop-radar/events.jsonl")
     s["files"][-1]["size"] = 3 * 1024**3 + 1
     with pytest.raises(m.Stop, match="STATE_FILE_TYPE_OR_SIZE"):
+        m.plan(c, s)
+
+
+def test_r948_indexed_challenge_artifact_bytes_retained_in_state_plan():
+    m = module()
+    c, s = fixtures(m)
+    index = "airdrop-radar/challenges/contest_2026/artifacts.json"
+    nested = "airdrop-radar/challenges/contest_2026/artifacts/rules/v1.pdf"
+    add(s, index, nested)
+    _, chosen = m.plan(c, s)
+    assert dict(chosen)["state/" + nested] == 1
+    assert m.MAX_ARTIFACT == 10 * 1024**2
+
+
+@pytest.mark.parametrize("path,expected", (
+    ("airdrop-radar/challenges/contest/artifacts/rules.pdf",
+     "CHALLENGE_ARTIFACT_INDEX_MISSING"),
+    ("airdrop-radar/challenges/contest/artifacts/../../seed.txt", "PATH_UNSAFE"),
+    ("airdrop-radar/challenges/contest/artifacts/.ssh/key", "PATH_UNSAFE"),
+    ("airdrop-radar/challenges/contest/artifacts/a/b/c/d/e", "PATH_UNSAFE"),
+))
+def test_r948_missing_artifact_index_and_unsafe_nested_names_stop(path, expected):
+    m = module()
+    c, s = fixtures(m)
+    add(s, path)
+    with pytest.raises(m.Stop, match=expected):
+        m.plan(c, s)
+
+
+def test_r948_original_ten_mib_artifact_limit_remains_fail_closed():
+    m = module()
+    c, s = fixtures(m)
+    add(s, "airdrop-radar/challenges/c/artifacts.json",
+        "airdrop-radar/challenges/c/artifacts/payload.pdf")
+    s["files"][-1]["size"] = m.MAX_ARTIFACT + 1
+    with pytest.raises(m.Stop, match="CHALLENGE_ARTIFACT_TOO_LARGE"):
         m.plan(c, s)
