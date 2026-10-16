@@ -441,7 +441,7 @@ def test_r948_indexed_challenge_artifact_bytes_retained_in_state_plan():
     ("airdrop-radar/challenges/contest/artifacts/rules.pdf",
      "CHALLENGE_ARTIFACT_INDEX_MISSING"),
     ("airdrop-radar/challenges/contest/artifacts/../../seed.txt", "PATH_UNSAFE"),
-    ("airdrop-radar/challenges/contest/artifacts/.ssh/key", "UNCLASSIFIED_STATE_FILE_STOP"),
+    ("airdrop-radar/challenges/contest/artifacts/.ssh/key", "PATH_UNSAFE"),
     ("airdrop-radar/challenges/contest/artifacts/a/b/c/d/e", "PATH_UNSAFE"),
 ))
 def test_r948_missing_artifact_index_and_unsafe_nested_names_stop(path, expected):
