@@ -315,3 +315,57 @@ def test_tclk_stage_only_does_not_invent_a_private_preimage():
     _, retained = m.plan(c, state)
     assert "state/autopilot/tclk-pilot/stages/" + stage + ".json" in dict(retained)
     assert "state/signer/tclk-pilot-secrets/" + stage + ".json" not in dict(retained)
+
+
+def test_r942_real_host_scale_would_stop_without_verified_reduction():
+    """R938 measured 3,017 files; never silently increase 512-record cap."""
+    m = module()
+    capture, state = fixtures(m)
+    assert m.MAX_PATHS == 512
+    for index in range(513):
+        state["files"].append(
+            {"path": f"cursor-r942{index:05d}.json",
+             "type": "regular", "size": 1})
+    with pytest.raises(m.Stop, match="STATE_INVENTORY_COUNT"):
+        m.plan(capture, state)
+
+
+def test_r942_no_allowing_real_unknown_giant_log_by_lifting_max_file():
+    """The unknown 5.16GB log is NOT normal bounded autopilot audit."""
+    m = module()
+    capture, state = fixtures(m)
+    assert m.MAX_FILE == 3 * 1024**3
+    target = next(row for row in state["files"]
+                  if row["path"] == "autopilot/autopilot-audit.jsonl")
+    target["size"] = 5166537629
+    with pytest.raises(m.Stop, match="STATE_FILE_TYPE_OR_SIZE"):
+        m.plan(capture, state)
+
+
+def test_r942_total_capacity_limit_still_blocks_large_mixed_state():
+    """A selected, enumerated state total >6GiB is not certified minimum."""
+    m = module()
+    capture, state = fixtures(m)
+    assert m.MAX_STATE == 6 * 1024**3
+    for path in ("nonces.json", "observer/observer-state.json",
+                 "autopilot/autopilot-audit.jsonl"):
+        row = next(row for row in state["files"] if row["path"] == path)
+        row["size"] = (5 * 1024**3) // 2
+    with pytest.raises(m.Stop, match="STATE_TOTAL_EXCEEDED"):
+        m.plan(capture, state)
+
+
+def test_r942_tmp_cache_and_unknown_autopilot_log_not_implicitly_skipped():
+    """Rebuildable-looking is not equivalent to proven safe-to-exclude."""
+    m = module()
+    unknown_paths = (
+        "observer/.observer-state.json.r942.tmp",
+        "observer/any-unreviewed.tmp",
+        "signer/uv-cache/potential-runtime-dependency.bin",
+        "autopilot/unreviewed-large.log",
+    )
+    for path in unknown_paths:
+        capture, state = fixtures(m)
+        state["files"].append({"path": path, "type": "regular", "size": 2})
+        with pytest.raises(m.Stop, match="UNCLASSIFIED_STATE_FILE_STOP"):
+            m.plan(capture, state)
