@@ -383,6 +383,63 @@ def verify_challenge_artifacts(files):
                 "CHALLENGE_ARTIFACT_ORPHAN_STOP")
 
 
+
+# R950: original airdrop_challenge.plan_request/mark_request saves a durable
+# request journal. A source-dormant cutover must NEVER silently replay an
+# ambiguous or still-in-progress send. No network or signer side effects.
+CHALLENGE_REQUEST_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+CHALLENGE_TERMINAL_REQUESTS = frozenset((
+    "accepted", "rejected", "reconciled_accepted", "reconciled_not_found",
+))
+
+def verify_challenge_request_journals(files):
+    suffix = "/requests.json"
+    prefix = "state/airdrop-radar/challenges/"
+    for path in files:
+        if not path.startswith(prefix) or not path.endswith(suffix):
+            continue
+        source = files[path]
+        require(0 < source.stat().st_size <= MAX_CHALLENGE_INDEX,
+                "CHALLENGE_REQUEST_JOURNAL_SIZE_STOP")
+        value = json.loads(source.read_bytes().decode("utf-8"))
+        require(isinstance(value, dict) and
+                set(value) == {"schema_version", "requests"} and
+                type(value["schema_version"]) is int and
+                value["schema_version"] == 1 and
+                isinstance(value["requests"], dict) and
+                len(value["requests"]) <= MAX_FILES,
+                "CHALLENGE_REQUEST_JOURNAL_SCHEMA")
+        for request_id, record in value["requests"].items():
+            require(isinstance(request_id, str) and
+                    CHALLENGE_REQUEST_ID.fullmatch(request_id) and
+                    isinstance(record, dict) and
+                    set(record) == {"request_id", "action", "payload_sha256",
+                                    "status", "planned_at", "updated_at",
+                                    "receipt_hash"},
+                    "CHALLENGE_REQUEST_ROW_SCHEMA")
+            require(record["request_id"] == request_id and
+                    isinstance(record["action"], str) and
+                    0 < len(record["action"]) <= 100 and
+                    isinstance(record["payload_sha256"], str) and
+                    HEX64.fullmatch(record["payload_sha256"]) and
+                    isinstance(record["planned_at"], str) and
+                    bool(record["planned_at"]) and
+                    isinstance(record["updated_at"], str) and
+                    bool(record["updated_at"]) and
+                    (record["receipt_hash"] is None or (
+                        isinstance(record["receipt_hash"], str) and
+                        HEX64.fullmatch(record["receipt_hash"]))),
+                    "CHALLENGE_REQUEST_ROW_SCHEMA")
+            # Planned, sent and ambiguous are NOT a proven terminal ledger,
+            # even if the snapshot and the surrounding manifest are signed.
+            require(record["status"] in CHALLENGE_TERMINAL_REQUESTS,
+                    "CHALLENGE_REQUEST_NONTERMINAL_STOP")
+            if record["status"] in ("accepted", "reconciled_accepted"):
+                require(isinstance(record["receipt_hash"], str) and
+                        HEX64.fullmatch(record["receipt_hash"]),
+                        "CHALLENGE_ACCEPTED_RECEIPT_MISSING")
+
+
 def verify_files(root, entries):
     observed = {}
     total = 0
@@ -423,6 +480,7 @@ def verify_files(root, entries):
     require_exact_restored_tree(root, set(observed))
     verify_finance_fence_files(observed)
     verify_challenge_artifacts(observed)
+    verify_challenge_request_journals(observed)
     return observed, total
 
 # Exact financial attempt/receipt pairing mirrors the R861/R864 archive
