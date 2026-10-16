@@ -54,6 +54,18 @@ CAPTURE_SIDECARS = frozenset(
 )
 PROOF_PLAN = re.compile(r"proof-plans/[0-9a-f]{16}\.json\Z")
 CURSOR = re.compile(r"cursor-[a-z0-9][a-z0-9_-]{0,47}\.json\Z")
+# TCLK hash-lock preimages and reveal payloads are PRIVATE durable state.
+# Exact 32-hex stage IDs and fixed known prefixes only; no open-ended tree.
+TCLK_PUBLIC = re.compile(
+    r"autopilot/tclk-pilot/(?:stages|previews|locks|work|terminal|reveal-previews)/"
+    r"([a-f0-9]{32})\.json\Z"
+)
+TCLK_PRIVATE = re.compile(
+    r"signer/tclk-pilot-(?:secrets|approvals|accepts|reveals|"
+    r"reveal-approvals|reveal-publishes)/([a-f0-9]{32})\.json\Z"
+)
+TCLK_STAGE_PREFIX = "autopilot/tclk-pilot/stages/"
+TCLK_SECRET_PREFIX = "signer/tclk-pilot-secrets/"
 MAX_META = 128 * 1024
 MAX_PATHS = 512
 MAX_STATE = 6 * 1024**3
@@ -83,9 +95,30 @@ def allowed_state(path):
         return path[len(ROTATED):] in ("1", "2", "3", "4")
     if CURSOR.fullmatch(path) or PROOF_PLAN.fullmatch(path):
         return True
+    if TCLK_PUBLIC.fullmatch(path) or TCLK_PRIVATE.fullmatch(path):
+        return True
     # Opaque subtrees such as close1, resident exports and public-proofs
     # MUST be classified before a complete retirement plan is acceptable.
     return False
+
+def require_tclk_custody(seen):
+    """Pair stage evidence and private hash-lock material without opening it."""
+    secret_stages = set()
+    needed_secrets = set()
+    for path in seen:
+        public = TCLK_PUBLIC.fullmatch(path)
+        private = TCLK_PRIVATE.fullmatch(path)
+        if public is None and private is None:
+            continue
+        stage_id = (public or private).group(1)
+        if path != TCLK_STAGE_PREFIX + stage_id + ".json":
+            require(TCLK_STAGE_PREFIX + stage_id + ".json" in seen,
+                    "TCLK_STAGE_CUSTODY_MISSING")
+        if path.startswith(TCLK_SECRET_PREFIX):
+            secret_stages.add(stage_id)
+        elif path != TCLK_STAGE_PREFIX + stage_id + ".json":
+            needed_secrets.add(stage_id)
+    require(needed_secrets <= secret_stages, "TCLK_SECRET_CUSTODY_MISSING")
 
 def capture_plan(meta):
     require(isinstance(meta, dict) and
@@ -140,8 +173,11 @@ def state_plan(meta):
         require(not path.startswith("observer/autopilot-"),
                 "LEGACY_AUTOPILOT_NEEDS_ADJUDICATION")
         require(allowed_state(path), "UNCLASSIFIED_STATE_FILE_STOP")
+        if TCLK_PUBLIC.fullmatch(path) or TCLK_PRIVATE.fullmatch(path):
+            require(row["size"] > 0, "TCLK_EMPTY_STATE_STOP")
         selected.append(("state/" + path, row["size"]))
     require(REQUIRED.issubset(seen), "REQUIRED_STATE_MISSING")
+    require_tclk_custody(seen)
     attempts = {m.group(1) for name in seen
                 if (m := ATTEMPT.fullmatch(name))}
     receipts = {m.group(1) for name in seen
