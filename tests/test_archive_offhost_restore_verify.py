@@ -645,3 +645,74 @@ def test_r861_valid_optional_source_paths_remain_supported(tmp_path):
     p = verify(b, archive_files(b, extras))
     assert p.returncode == 0, p.stdout
     assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in p.stdout
+
+
+def test_r924_tclk_private_hashlock_reveal_and_approval_archive_verified(tmp_path):
+    bundle = build(tmp_path)
+    stage = "a" * 32
+    records = (
+        "state/autopilot/tclk-pilot/stages/" + stage + ".json",
+        "state/autopilot/tclk-pilot/previews/" + stage + ".json",
+        "state/autopilot/tclk-pilot/locks/" + stage + ".json",
+        "state/autopilot/tclk-pilot/work/" + stage + ".json",
+        "state/autopilot/tclk-pilot/reveal-previews/" + stage + ".json",
+        "state/autopilot/tclk-pilot/terminal/" + stage + ".json",
+        "state/signer/tclk-pilot-secrets/" + stage + ".json",
+        "state/signer/tclk-pilot-approvals/" + stage + ".json",
+        "state/signer/tclk-pilot-accepts/" + stage + ".json",
+        "state/signer/tclk-pilot-reveals/" + stage + ".json",
+        "state/signer/tclk-pilot-reveal-approvals/" + stage + ".json",
+        "state/signer/tclk-pilot-reveal-publishes/" + stage + ".json",
+    )
+    for name in records:
+        file = bundle / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text('{"synthetic":"not a preimage"}', encoding="utf-8")
+        if name.startswith("state/signer/tclk-pilot-"):
+            file.chmod(0o600)
+    result = verify(bundle, manifest(bundle, extras=records))
+    assert result.returncode == 0, result.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in result.stdout
+    assert "not a preimage" not in result.stdout
+
+
+def test_r924_tclk_stage_with_preview_missing_private_preimage_is_rejected(tmp_path):
+    bundle = build(tmp_path)
+    stage = "b" * 32
+    records = (
+        "state/autopilot/tclk-pilot/stages/" + stage + ".json",
+        "state/autopilot/tclk-pilot/previews/" + stage + ".json",
+    )
+    result = verify(bundle, archive_files(bundle, records))
+    assert result.returncode == 42
+    assert "TCLK_SECRET_CUSTODY_MISSING" in result.stdout
+
+
+def test_r924_tclk_private_reveal_without_public_stage_rejected(tmp_path):
+    bundle = build(tmp_path)
+    name = "state/signer/tclk-pilot-reveals/" + "c" * 32 + ".json"
+    sha = archive_files(bundle, (name,))
+    (bundle / name).chmod(0o600)
+    result = verify(bundle, sha)
+    assert result.returncode == 42
+    assert "TCLK_STAGE_CUSTODY_MISSING" in result.stdout
+
+
+def test_r924_tclk_group_readable_secret_rejected_even_with_manifest_pin(tmp_path):
+    bundle = build(tmp_path)
+    stage = "d" * 32
+    records = (
+        "state/autopilot/tclk-pilot/stages/" + stage + ".json",
+        "state/signer/tclk-pilot-secrets/" + stage + ".json",
+    )
+    result = verify(bundle, archive_files(bundle, records))
+    assert result.returncode == 42
+    assert "TCLK_PRIVATE_MODE_EXPOSED" in result.stdout
+
+
+def test_r924_tclk_unknown_secret_prefix_is_rejected(tmp_path):
+    bundle = build(tmp_path)
+    name = "state/signer/tclk-pilot-unreviewed/" + "e" * 32 + ".json"
+    result = verify(bundle, archive_files(bundle, (name,)))
+    assert result.returncode == 42
+    assert "UNCLASSIFIED_ARCHIVE_PATH_STOP" in result.stdout
