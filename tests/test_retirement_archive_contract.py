@@ -369,3 +369,58 @@ def test_r942_tmp_cache_and_unknown_autopilot_log_not_implicitly_skipped():
         state["files"].append({"path": path, "type": "regular", "size": 2})
         with pytest.raises(m.Stop, match="UNCLASSIFIED_STATE_FILE_STOP"):
             m.plan(capture, state)
+
+
+def test_r945_pinned_original_radar_challenge_and_public_proof_files_retained():
+    """Offline source-path parity: exact approved records stay in manifest."""
+    m = module()
+    c, s = fixtures(m)
+    rows = (
+        "airdrop-radar/state.json",
+        "airdrop-radar/events.jsonl",
+        "airdrop-radar/current-snapshot.json",
+        "airdrop-radar/event-index.json",
+        "airdrop-radar/precontest-supervisor.json",
+        "airdrop-radar/precontest-candidates.json",
+        "airdrop-radar/challenges/contest_2026/spec.json",
+        "airdrop-radar/challenges/contest_2026/requests.json",
+        "airdrop-radar/challenges/contest_2026/artifacts.json",
+        "airdrop-radar/challenges/contest_2026/precontest-control-path-proof.json",
+        "airdrop-radar/challenges/contest_2026/precontest-readiness-sources.json",
+        "airdrop-radar/challenge-candidate-reviews/challenge_repo.json",
+        "public-proofs/proof-" + "b" * 16 + "-20261017T080200Z.json",
+    )
+    add(s, *rows)
+    _, items = m.plan(c, s)
+    selected = dict(items)
+    for path in rows:
+        assert selected["state/" + path] == 1
+    assert m.MAX_PATHS == 512
+    assert m.MAX_STATE == 6 * 1024**3
+    assert m.MAX_FILE == 3 * 1024**3
+
+
+@pytest.mark.parametrize("bad,why", (
+    ("airdrop-radar/challenges/Contest/spec.json", "UNCLASSIFIED_STATE_FILE_STOP"),
+    ("airdrop-radar/challenges/contest/unknown.json", "UNCLASSIFIED_STATE_FILE_STOP"),
+    ("airdrop-radar/challenges/contest/artifacts/payload.bin", "PATH_UNSAFE"),
+    ("airdrop-radar/challenge-candidate-reviews/unknown.bin", "UNCLASSIFIED_STATE_FILE_STOP"),
+    ("airdrop-radar/uv-cache/unknown.json", "UNCLASSIFIED_STATE_FILE_STOP"),
+    ("public-proofs/private-seed.json", "UNCLASSIFIED_STATE_FILE_STOP"),
+    ("public-proofs/proof-wrong-20261017T080200Z.json", "UNCLASSIFIED_STATE_FILE_STOP"),
+))
+def test_r945_unknown_radar_proofs_and_subtrees_never_auto_whitelisted(bad, why):
+    m = module()
+    c, s = fixtures(m)
+    add(s, bad)
+    with pytest.raises(m.Stop, match=why):
+        m.plan(c, s)
+
+
+def test_r945_known_radar_evidence_still_subject_to_size_limits():
+    m = module()
+    c, s = fixtures(m)
+    add(s, "airdrop-radar/events.jsonl")
+    s["files"][-1]["size"] = 3 * 1024**3 + 1
+    with pytest.raises(m.Stop, match="STATE_FILE_TYPE_OR_SIZE"):
+        m.plan(c, s)
