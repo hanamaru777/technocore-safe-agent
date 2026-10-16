@@ -282,7 +282,7 @@ def verify_files(root, entries):
                 MAX_SINGLE_FILE and isinstance(expected, str) and
                 HEX64.fullmatch(expected), "ENTRY_SIZE_OR_DIGEST")
         path = no_link_path(root, name)
-        if TCLK_PRIVATE.fullmatch(name[6:]) if name.startswith("state/") else False:
+        if name.startswith("state/") and TCLK_PRIVATE.fullmatch(name[6:]):
             require((path.stat().st_mode & 0o077) == 0,
                     "TCLK_PRIVATE_MODE_EXPOSED")
             require(expected_size > 0, "TCLK_EMPTY_STATE_STOP")
