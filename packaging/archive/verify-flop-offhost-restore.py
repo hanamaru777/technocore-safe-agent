@@ -468,7 +468,7 @@ def verify_radar_ledger(files):
     ledger_path = base + "events.jsonl"
     index_path = base + "event-index.json"
     if ledger_path not in files and index_path not in files:
-        return
+        return {}
     require(index_path in files, "RADAR_LEDGER_INDEX_MISSING")
     index_file = files[index_path]
     require(0 < index_file.stat().st_size <= MAX_RADAR_INDEX_BYTES,
@@ -543,6 +543,9 @@ def verify_radar_ledger(files):
                 row.get("ledger_sequence") == seq and
                 row.get("ledger_hash") == hash_value,
                 "RADAR_INDEX_EVENT_MISMATCH")
+    # Immutable source ledger event IDs are the trust binding for restored
+    # automatically staged actions and Discord alerts. Do not expose IDs.
+    return {event_id: pair[1] for event_id, pair in latest.items()}
 
 
 # R957: a signed archive with lost/pending network-delivery journal entries
@@ -561,7 +564,7 @@ OPERATIONAL_STATES = {
 HEX32_ID = re.compile(r"[a-f0-9]{32}\Z")
 
 
-def verify_radar_operational_state(files):
+def verify_radar_operational_state(files, radar_hashes):
     base = "state/airdrop-radar/"
     present = {}
     for basename, (_version, collection, limit) in OPERATIONAL_STATES.items():
@@ -597,6 +600,10 @@ def verify_radar_operational_state(files):
                     isinstance(row.get("delivered_at"), str) and
                     bool(row["delivered_at"]),
                     "RADAR_ALERT_DELIVERY_RECEIPT_MISSING")
+            require(isinstance(event_id, str) and event_id in radar_hashes and
+                    isinstance(row.get("payload"), dict) and
+                    row["payload"].get("event_id") == event_id,
+                    "RADAR_ALERT_SOURCE_EVENT_MISMATCH")
 
     if "action-inbox.json" in present:
         for request_id, row in present["action-inbox.json"]["requests"].items():
@@ -660,13 +667,34 @@ def verify_radar_operational_state(files):
                 isinstance(row.get("approval_digest"), str) and
                 HEX64.fullmatch(row["approval_digest"]),
                 "RADAR_ACTION_UNBOUND_CANDIDATE_STOP")
+        require(isinstance(row.get("source_event_id"), str) and
+                radar_hashes.get(row["source_event_id"]) ==
+                row.get("source_ledger_hash") and
+                isinstance(row.get("source_ledger_hash"), str) and
+                HEX64.fullmatch(row["source_ledger_hash"]),
+                "RADAR_CANDIDATE_SOURCE_HASH_MISMATCH")
         approval = inbox.get(request_id)
         require(isinstance(approval, dict) and
                 approval.get("status") in ("rejected", "expired", "consumed") and
                 approval.get("approval_digest") == row["approval_digest"],
                 "RADAR_ACTION_CANDIDATE_APPROVAL_MISMATCH")
+        require(all(approval.get(field) == row.get(field) for field in (
+                "source_event_id", "payload_sha256", "action_class")),
+                "RADAR_ACTION_CANDIDATE_REQUEST_BINDING_MISMATCH")
+    by_id = {row.get("request_id"): row for row in candidates.values()
+             if isinstance(row, dict) and isinstance(row.get("request_id"), str)}
     for request_id, row in present.get("action-executions.json", {}).get(
             "executions", {}).items():
+        candidate = by_id.get(request_id)
+        require(isinstance(candidate, dict) and
+                candidate.get("candidate_id") == row.get("candidate_id") and
+                isinstance(row.get("source_event_id"), str) and
+                radar_hashes.get(row["source_event_id"]) ==
+                row.get("source_ledger_hash") and
+                all(row.get(field) == candidate.get(field) for field in (
+                    "source_event_id", "source_ledger_hash",
+                    "payload_sha256", "action_class", "approval_digest")),
+                "RADAR_EXECUTION_SOURCE_CANDIDATE_MISMATCH")
         if row.get("status") != "succeeded":
             continue
         approval = inbox.get(request_id)
@@ -717,8 +745,8 @@ def verify_files(root, entries):
     verify_finance_fence_files(observed)
     verify_challenge_artifacts(observed)
     verify_challenge_request_journals(observed)
-    verify_radar_ledger(observed)
-    verify_radar_operational_state(observed)
+    source_radar_hashes = verify_radar_ledger(observed)
+    verify_radar_operational_state(observed, source_radar_hashes)
     return observed, total
 
 # Exact financial attempt/receipt pairing mirrors the R861/R864 archive
