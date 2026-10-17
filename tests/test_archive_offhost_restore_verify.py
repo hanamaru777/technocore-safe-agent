@@ -980,3 +980,129 @@ def test_r954_radar_events_without_index_stop(tmp_path):
     result = verify(bundle, archive_files(bundle, (path,)))
     assert result.returncode == 42
     assert "RADAR_LEDGER_INDEX_MISSING" in result.stdout
+
+
+
+def _r957_operational_state(bundle, filename, root, key, item=None):
+    path = "state/airdrop-radar/" + filename
+    archive_files(bundle, (path,))
+    value = {"schema_version": 1}
+    if root is not None:
+        value[root] = {} if key is None else {key: item}
+    (bundle / path).write_text(json.dumps(value), encoding="utf-8")
+    return manifest(bundle, extras=(path,))
+
+
+@pytest.mark.parametrize("filename,root,key,row,reason", (
+    ("alert-outbox.json", "events", "alert-1",
+     {"event_id": "alert-1", "delivery_state": "pending"},
+     "RADAR_ALERT_DELIVERY_UNCERTAIN_STOP"),
+    ("action-inbox.json", "requests", "a" * 32,
+     {"request_id": "a" * 32, "status": "approved"},
+     "RADAR_ACTION_APPROVAL_NOT_TERMINAL_STOP"),
+    ("action-inbox.json", "requests", "a" * 32,
+     {"request_id": "a" * 32, "status": "pending"},
+     "RADAR_ACTION_APPROVAL_NOT_TERMINAL_STOP"),
+    ("action-executions.json", "executions", "a" * 32,
+     {"request_id": "a" * 32, "status": "attempting"},
+     "RADAR_ACTION_EXECUTION_UNCERTAIN_STOP"),
+    ("action-executions.json", "executions", "a" * 32,
+     {"request_id": "a" * 32, "status": "ambiguous"},
+     "RADAR_ACTION_EXECUTION_UNCERTAIN_STOP"),
+    ("action-executions.json", "executions", "a" * 32,
+     {"request_id": "a" * 32, "status": "execution_prepared"},
+     "RADAR_ACTION_EXECUTION_UNCERTAIN_STOP"),
+))
+def test_r957_inflight_delivery_and_action_states_refuse_active_restore(
+    tmp_path, filename, root, key, row, reason
+):
+    bundle = build(tmp_path)
+    digest = _r957_operational_state(bundle, filename, root, key, row)
+    result = verify(bundle, digest)
+    assert result.returncode == 42
+    assert reason in result.stdout
+    assert key not in result.stdout
+
+
+@pytest.mark.parametrize("filename,root,key,row", (
+    ("alert-outbox.json", "events", "alert-1",
+     {"event_id": "alert-1", "delivery_state": "delivered",
+      "delivery_receipt": "example-receipt", "delivered_at": "2026-10-17T00:00Z"}),
+    ("action-inbox.json", "requests", "a" * 32,
+     {"request_id": "a" * 32, "status": "consumed",
+      "consumption_receipt": "example-receipt", "consumed_at": "2026-10-17T00:00Z"}),
+    ("action-executions.json", "executions", "a" * 32,
+     {"request_id": "a" * 32, "status": "failed_before_write",
+      "error_code": "no_external_attempt", "terminal_at": "2026-10-17T00:00Z"}),
+))
+def test_r957_terminal_operational_state_keeps_historic_receipts(
+    tmp_path, filename, root, key, row
+):
+    bundle = build(tmp_path)
+    digest = _r957_operational_state(bundle, filename, root, key, row)
+    result = verify(bundle, digest)
+    assert result.returncode == 0, result.stdout
+    assert "FLOP_OFFHOST_ARCHIVE_CONTENT_VERIFIED_PASS" in result.stdout
+
+
+@pytest.mark.parametrize("name", (
+    "monitor-config.json", "monitor-heartbeat.json",
+    "discord-notifier-state.json", "action-candidates.json",
+))
+def test_r957_other_operational_source_documents_preserved(name, tmp_path):
+    bundle = build(tmp_path)
+    root = "candidates" if name == "action-candidates.json" else None
+    result = verify(bundle, _r957_operational_state(bundle, name, root, None))
+    assert result.returncode == 0, result.stdout
+
+
+
+def test_r957_unbound_candidate_never_auto_restaged_after_restore(tmp_path):
+    bundle = build(tmp_path)
+    path = "state/airdrop-radar/action-candidates.json"
+    archive_files(bundle, (path,))
+    candidate_id = "b" * 32
+    (bundle / path).write_text(json.dumps({
+        "schema_version": 1, "candidates": {
+            candidate_id: {"candidate_id": candidate_id,
+                           "request_id": None, "approval_digest": None}
+        }
+    }))
+    result = verify(bundle, manifest(bundle, extras=(path,)))
+    assert result.returncode == 42
+    assert "RADAR_ACTION_UNBOUND_CANDIDATE_STOP" in result.stdout
+
+
+def test_r957_success_requires_consumed_approval_with_same_receipt(tmp_path):
+    bundle = build(tmp_path)
+    prefix = "state/airdrop-radar/"
+    e, a = prefix + "action-executions.json", prefix + "action-inbox.json"
+    ids = (e, a)
+    archive_files(bundle, ids)
+    rid = "c" * 32
+    receipt = "synthetic-confirmed-receipt"
+    (bundle / e).write_text(json.dumps({
+        "schema_version": 1,
+        "executions": {rid: {
+            "request_id": rid, "status": "succeeded",
+            "receipt": receipt, "approval_digest": "d" * 64,
+            "terminal_at": "2026-10-17T00:00:00+00:00",
+        }},
+    }))
+    approvals = {
+        "schema_version": 1,
+        "requests": {rid: {
+            "request_id": rid, "status": "consumed",
+            "approval_digest": "d" * 64,
+            "consumed_at": "2026-10-17T00:00:00+00:00",
+            "consumption_receipt": receipt,
+        }},
+    }
+    (bundle / a).write_text(json.dumps(approvals))
+    valid = verify(bundle, manifest(bundle, extras=ids))
+    assert valid.returncode == 0, valid.stdout
+    approvals["requests"][rid]["consumption_receipt"] = "wrong-receipt"
+    (bundle / a).write_text(json.dumps(approvals))
+    invalid = verify(bundle, manifest(bundle, extras=ids))
+    assert invalid.returncode == 42
+    assert "RADAR_ACTION_SUCCESS_APPROVAL_MISMATCH" in invalid.stdout
