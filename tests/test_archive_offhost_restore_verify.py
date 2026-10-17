@@ -990,6 +990,19 @@ def _r957_operational_state(bundle, filename, root, key, item=None):
     if root is not None:
         value[root] = {} if key is None else {key: item}
     (bundle / path).write_text(json.dumps(value), encoding="utf-8")
+    # Synthetic cross-file test cases were originally single-record. Include
+    # a coherent empty Radar history witness only when a record is inserted.
+    # This is not an original source census or authentic ledger proof.
+    if key is not None:
+        ev = "state/airdrop-radar/events.jsonl"
+        ix = "state/airdrop-radar/event-index.json"
+        (bundle / ev).parent.mkdir(parents=True, exist_ok=True)
+        (bundle / ev).write_bytes(b"")
+        (bundle / ix).write_text(json.dumps({
+            "schema_version": 1, "ledger_count": 0,
+            "ledger_tip_hash": "", "events": {}
+        }), encoding="utf-8")
+        return manifest(bundle, extras=(path, ev, ix))
     return manifest(bundle, extras=(path,))
 
 
@@ -1099,6 +1112,13 @@ def test_r957_success_requires_consumed_approval_with_same_receipt(tmp_path):
         }},
     }
     (bundle / a).write_text(json.dumps(approvals))
+    ev, ix = prefix + "events.jsonl", prefix + "event-index.json"
+    (bundle / ev).write_bytes(b"")
+    (bundle / ix).write_text(json.dumps({
+        "schema_version": 1, "ledger_count": 0,
+        "ledger_tip_hash": "", "events": {}
+    }), encoding="utf-8")
+    ids = (e, a, ev, ix)
     valid = verify(bundle, manifest(bundle, extras=ids))
     assert valid.returncode == 0, valid.stdout
     approvals["requests"][rid]["consumption_receipt"] = "wrong-receipt"
@@ -1106,3 +1126,44 @@ def test_r957_success_requires_consumed_approval_with_same_receipt(tmp_path):
     invalid = verify(bundle, manifest(bundle, extras=ids))
     assert invalid.returncode == 42
     assert "RADAR_ACTION_SUCCESS_APPROVAL_MISMATCH" in invalid.stdout
+
+
+def test_r959_radar_extra_index_event_not_in_hashchain_stops(tmp_path):
+    bundle = build(tmp_path)
+    source_hash = _r954_ledger(bundle)
+    _ = source_hash
+    idx = "state/airdrop-radar/event-index.json"
+    data = json.loads((bundle / idx).read_text())
+    data["events"]["f" * 24] = {
+        "event_id": "f" * 24,
+        "ledger_sequence": 999,
+        "ledger_hash": "a" * 64,
+    }
+    (bundle / idx).write_text(json.dumps(data))
+    newpin = manifest(bundle, extras=(
+        "state/airdrop-radar/events.jsonl", idx))
+    result = verify(bundle, newpin)
+    assert result.returncode == 42
+    assert "RADAR_INDEX_ORPHAN_EVENT_STOP" in result.stdout
+    assert "f" * 24 not in result.stdout
+
+
+def test_r959_action_row_with_omitted_radar_source_history_stops(tmp_path):
+    bundle = build(tmp_path)
+    path = "state/airdrop-radar/alert-outbox.json"
+    raw = {"schema_version": 1, "events": {
+        "e": {"event_id": "e", "delivery_state": "delivered",
+              "delivery_receipt": "synthetic", "delivered_at": "2026-10-17T00:00Z"}
+    }}
+    archive_files(bundle, (path,))
+    (bundle / path).write_text(json.dumps(raw), encoding="utf-8")
+    result = verify(bundle, manifest(bundle, extras=(path,)))
+    assert result.returncode == 42
+    assert "RADAR_ACTION_EVIDENCE_MISSING_STOP" in result.stdout
+
+
+def test_r959_empty_operational_metadata_requires_no_imaginary_ledger(tmp_path):
+    bundle = build(tmp_path)
+    result = verify(bundle, _r957_operational_state(
+        bundle, "discord-notifier-state.json", None, None))
+    assert result.returncode == 0, result.stdout
