@@ -628,6 +628,38 @@ def verify_radar_operational_state(files):
                 require(isinstance(row.get("error_code"), str) and
                         bool(row["error_code"]), "RADAR_ACTION_TERMINAL_PROOF_MISSING")
 
+    inbox = present.get("action-inbox.json", {}).get("requests", {})
+    candidates = present.get("action-candidates.json", {}).get("candidates", {})
+    for candidate_id, row in candidates.items():
+        require(isinstance(candidate_id, str) and HEX32_ID.fullmatch(candidate_id)
+                and isinstance(row, dict) and
+                row.get("candidate_id") == candidate_id,
+                "RADAR_ACTION_CANDIDATE_ROW_INVALID")
+        request_id = row.get("request_id")
+        # Original source reconcile_incomplete() can resume any candidate
+        # without request binding. Even if the same bytes were SHA-pinned,
+        # such a mid-write cutover cannot automatically become active.
+        require(isinstance(request_id, str) and
+                HEX32_ID.fullmatch(request_id) and
+                isinstance(row.get("approval_digest"), str) and
+                HEX64.fullmatch(row["approval_digest"]),
+                "RADAR_ACTION_UNBOUND_CANDIDATE_STOP")
+        approval = inbox.get(request_id)
+        require(isinstance(approval, dict) and
+                approval.get("status") in ("rejected", "expired", "consumed") and
+                approval.get("approval_digest") == row["approval_digest"],
+                "RADAR_ACTION_CANDIDATE_APPROVAL_MISMATCH")
+    for request_id, row in present.get("action-executions.json", {}).get(
+            "executions", {}).items():
+        if row.get("status") != "succeeded":
+            continue
+        approval = inbox.get(request_id)
+        require(isinstance(approval, dict) and
+                approval.get("status") == "consumed" and
+                approval.get("consumption_receipt") == row.get("receipt") and
+                approval.get("approval_digest") == row.get("approval_digest"),
+                "RADAR_ACTION_SUCCESS_APPROVAL_MISMATCH")
+
 def verify_files(root, entries):
     observed = {}
     total = 0
