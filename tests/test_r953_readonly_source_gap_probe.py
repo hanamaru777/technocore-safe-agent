@@ -135,3 +135,33 @@ def test_source_gate_rejects_unprivileged_user(monkeypatch):
     monkeypatch.setattr(m.os, "geteuid", lambda: 1000)
     with pytest.raises(m.Stop, match="ORIGINAL_SOURCE_ROOT_REQUIRED"):
         m.source_pin()
+
+
+def test_r953_signer_cache_shape_is_only_candidate_never_disposable(tmp_path):
+    m = mod()
+    base = tmp_path / "signer"
+    (base / "uv-cache" / "module-v1").mkdir(parents=True)
+    (base / "uv-cache" / "module-v1" / "wheel.pyc").write_bytes(b"cache-not-to-delete")
+    (base / "tclk-pilot-secrets").mkdir()
+    (base / "tclk-pilot-secrets" / ("a" * 32 + ".json")).write_bytes(b"private")
+    (base / ("close1-attempt-" + "b" * 64 + ".json")).write_bytes(b"nonce")
+    (base / "oracle-signer-receipts.json").write_bytes(b"receipt")
+    report = m.profile(tmp_path)
+    classes = report["signer_classes"]
+    assert classes["signer_uv_cache_UNVERIFIED_NOT_DISPOSABLE"]["files"] == 1
+    assert classes["signer_private_tclk_NOT_DISPOSABLE"]["files"] == 1
+    assert classes["signer_close1_finance_NOT_DISPOSABLE"]["files"] == 1
+    assert classes["signer_durable_fixed_NOT_DISPOSABLE"]["files"] == 1
+    assert "wheel.pyc" not in str(report)
+    assert "nonce" not in str(report)
+    assert report["archive_complete"] is False
+    assert report["writer_epoch_proven"] is False
+
+
+def test_r953_signer_unknown_never_classified_cache(tmp_path):
+    m = mod()
+    p = tmp_path / "signer"
+    p.mkdir()
+    (p / "unexpected-file.json").write_bytes(b"cannot-discard")
+    result = m.profile(tmp_path)
+    assert result["signer_classes"]["signer_UNCLASSIFIED_NOT_DISPOSABLE"]["files"] == 1
