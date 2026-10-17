@@ -1081,7 +1081,14 @@ def test_r957_unbound_candidate_never_auto_restaged_after_restore(tmp_path):
                            "request_id": None, "approval_digest": None}
         }
     }))
-    result = verify(bundle, manifest(bundle, extras=(path,)))
+    ev = "state/airdrop-radar/events.jsonl"
+    ix = "state/airdrop-radar/event-index.json"
+    (bundle / ev).write_bytes(b"")
+    (bundle / ix).write_text(json.dumps({
+        "schema_version": 1, "ledger_count": 0,
+        "ledger_tip_hash": "", "events": {}
+    }), encoding="utf-8")
+    result = verify(bundle, manifest(bundle, extras=(path, ev, ix)))
     assert result.returncode == 42
     assert "RADAR_ACTION_UNBOUND_CANDIDATE_STOP" in result.stdout
 
