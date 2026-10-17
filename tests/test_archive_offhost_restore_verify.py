@@ -1038,15 +1038,9 @@ def test_r957_inflight_delivery_and_action_states_refuse_active_restore(
 
 
 @pytest.mark.parametrize("filename,root,key,row", (
-    ("alert-outbox.json", "events", "alert-1",
-     {"event_id": "alert-1", "delivery_state": "delivered",
-      "delivery_receipt": "example-receipt", "delivered_at": "2026-10-17T00:00Z"}),
     ("action-inbox.json", "requests", "a" * 32,
      {"request_id": "a" * 32, "status": "consumed",
       "consumption_receipt": "example-receipt", "consumed_at": "2026-10-17T00:00Z"}),
-    ("action-executions.json", "executions", "a" * 32,
-     {"request_id": "a" * 32, "status": "failed_before_write",
-      "error_code": "no_external_attempt", "terminal_at": "2026-10-17T00:00Z"}),
 ))
 def test_r957_terminal_operational_state_keeps_historic_receipts(
     tmp_path, filename, root, key, row
@@ -1093,46 +1087,69 @@ def test_r957_unbound_candidate_never_auto_restaged_after_restore(tmp_path):
     assert "RADAR_ACTION_UNBOUND_CANDIDATE_STOP" in result.stdout
 
 
+def _r961_complete_action_bundle(bundle, *, status="succeeded"):
+    # The original source auto-execution always requires a durable source
+    # event, a staged candidate, a consumed approval, and matching receipt.
+    _r954_ledger(bundle)
+    prefix = "state/airdrop-radar/"
+    event_record = json.loads((bundle / (prefix+"events.jsonl")).read_text())
+    eid, ehash = event_record["event_id"], event_record["hash"]
+    rid, cid = "c" * 32, "b" * 32
+    approval_digest = "d" * 64
+    receipt = "synthetic-confirmed-receipt"
+    cand = {
+        "candidate_id": cid, "request_id": rid,
+        "approval_digest": approval_digest,
+        "source_event_id": eid, "source_ledger_hash": ehash,
+        "payload_sha256": "e" * 64, "action_class": "faucet",
+    }
+    approval = {
+        "request_id": rid, "status": "consumed",
+        "approval_digest": approval_digest,
+        "source_event_id": eid,
+        "payload_sha256": "e" * 64, "action_class": "faucet",
+        "consumed_at": "2026-10-17T00:00:00+00:00",
+        "consumption_receipt": receipt,
+    }
+    exe = {
+        **cand, "status": status,
+        "terminal_at": "2026-10-17T00:00:00+00:00",
+        "receipt": receipt if status == "succeeded" else None,
+        "error_code": None if status == "succeeded" else "no_external_attempt",
+    }
+    docs = {
+        prefix+"action-candidates.json": {"schema_version":1,
+                                          "candidates":{cid:cand}},
+        prefix+"action-inbox.json": {"schema_version":1,
+                                    "requests":{rid:approval}},
+        prefix+"action-executions.json": {"schema_version":1,
+                                         "executions":{rid:exe}},
+    }
+    for name, payload in docs.items():
+        (bundle / name).write_text(json.dumps(payload))
+    extras = tuple(docs) + (prefix+"events.jsonl", prefix+"event-index.json")
+    return rid, cid, eid, docs, extras
+
+
 def test_r957_success_requires_consumed_approval_with_same_receipt(tmp_path):
     bundle = build(tmp_path)
-    prefix = "state/airdrop-radar/"
-    e, a = prefix + "action-executions.json", prefix + "action-inbox.json"
-    ids = (e, a)
-    archive_files(bundle, ids)
-    rid = "c" * 32
-    receipt = "synthetic-confirmed-receipt"
-    (bundle / e).write_text(json.dumps({
-        "schema_version": 1,
-        "executions": {rid: {
-            "request_id": rid, "status": "succeeded",
-            "receipt": receipt, "approval_digest": "d" * 64,
-            "terminal_at": "2026-10-17T00:00:00+00:00",
-        }},
-    }))
-    approvals = {
-        "schema_version": 1,
-        "requests": {rid: {
-            "request_id": rid, "status": "consumed",
-            "approval_digest": "d" * 64,
-            "consumed_at": "2026-10-17T00:00:00+00:00",
-            "consumption_receipt": receipt,
-        }},
-    }
-    (bundle / a).write_text(json.dumps(approvals))
-    ev, ix = prefix + "events.jsonl", prefix + "event-index.json"
-    (bundle / ev).write_bytes(b"")
-    (bundle / ix).write_text(json.dumps({
-        "schema_version": 1, "ledger_count": 0,
-        "ledger_tip_hash": "", "events": {}
-    }), encoding="utf-8")
-    ids = (e, a, ev, ix)
-    valid = verify(bundle, manifest(bundle, extras=ids))
+    rid, _cid, _eid, docs, extras = _r961_complete_action_bundle(bundle)
+    valid = verify(bundle, manifest(bundle, extras=extras))
     assert valid.returncode == 0, valid.stdout
-    approvals["requests"][rid]["consumption_receipt"] = "wrong-receipt"
-    (bundle / a).write_text(json.dumps(approvals))
-    invalid = verify(bundle, manifest(bundle, extras=ids))
+    name = "state/airdrop-radar/action-inbox.json"
+    docs[name]["requests"][rid]["consumption_receipt"] = "wrong-receipt"
+    (bundle / name).write_text(json.dumps(docs[name]))
+    invalid = verify(bundle, manifest(bundle, extras=extras))
     assert invalid.returncode == 42
     assert "RADAR_ACTION_SUCCESS_APPROVAL_MISMATCH" in invalid.stdout
+
+
+def test_r961_verified_terminal_failed_before_write_preserved(tmp_path):
+    bundle = build(tmp_path)
+    _rid, _cid, _eid, _docs, extras = _r961_complete_action_bundle(
+        bundle, status="failed_before_write")
+    result = verify(bundle, manifest(bundle, extras=extras))
+    assert result.returncode == 0, result.stdout
 
 
 def test_r959_radar_extra_index_event_not_in_hashchain_stops(tmp_path):
@@ -1173,4 +1190,83 @@ def test_r959_empty_operational_metadata_requires_no_imaginary_ledger(tmp_path):
     bundle = build(tmp_path)
     result = verify(bundle, _r957_operational_state(
         bundle, "discord-notifier-state.json", None, None))
+    assert result.returncode == 0, result.stdout
+
+
+
+def test_r961_delivered_alert_binds_to_real_source_event(tmp_path):
+    bundle = build(tmp_path)
+    _r954_ledger(bundle)
+    base = "state/airdrop-radar/"
+    eid = json.loads((bundle / (base+"events.jsonl")).read_text())["event_id"]
+    a = base+"alert-outbox.json"
+    (bundle / a).write_text(json.dumps({"schema_version":1,"events":{
+        eid:{"event_id":eid,"delivery_state":"delivered",
+             "delivered_at":"2026-10-17T00:00:00+00:00",
+             "delivery_receipt":"synthetic-ack",
+             "payload":{"event_id":eid}},
+    }}))
+    files = (a, base+"events.jsonl",base+"event-index.json")
+    okay = verify(bundle, manifest(bundle, extras=files))
+    assert okay.returncode == 0, okay.stdout
+    data = json.loads((bundle / a).read_text())
+    data["events"][eid]["payload"]["event_id"] = "f"*24
+    (bundle / a).write_text(json.dumps(data))
+    bad = verify(bundle, manifest(bundle, extras=files))
+    assert bad.returncode == 42
+    assert "RADAR_ALERT_SOURCE_EVENT_MISMATCH" in bad.stdout
+
+
+@pytest.mark.parametrize("changed_file,field,wrong,expected", (
+    ("action-candidates.json", "source_ledger_hash", "0"*64,
+     "RADAR_CANDIDATE_SOURCE_HASH_MISMATCH"),
+    ("action-candidates.json", "source_event_id", "f"*24,
+     "RADAR_CANDIDATE_SOURCE_HASH_MISMATCH"),
+    ("action-inbox.json", "source_event_id", "f"*24,
+     "RADAR_ACTION_CANDIDATE_REQUEST_BINDING_MISMATCH"),
+    ("action-executions.json", "source_ledger_hash", "0"*64,
+     "RADAR_EXECUTION_SOURCE_CANDIDATE_MISMATCH"),
+    ("action-executions.json", "candidate_id", "f"*32,
+     "RADAR_EXECUTION_SOURCE_CANDIDATE_MISMATCH"),
+))
+def test_r961_manifest_repinned_but_source_binding_forged_stops(
+    tmp_path, changed_file, field, wrong, expected
+):
+    bundle = build(tmp_path)
+    rid, cid, _eid, docs, files = _r961_complete_action_bundle(bundle)
+    key = "state/airdrop-radar/" + changed_file
+    row_id = cid if changed_file == "action-candidates.json" else rid
+    section = {
+        "action-candidates.json":"candidates",
+        "action-inbox.json":"requests",
+        "action-executions.json":"executions",
+    }[changed_file]
+    docs[key][section][row_id][field] = wrong
+    (bundle / key).write_text(json.dumps(docs[key]))
+    outcome = verify(bundle, manifest(bundle, extras=files))
+    assert outcome.returncode == 42
+    assert expected in outcome.stdout
+    assert "synthetic_metric" not in outcome.stdout
+
+
+def test_r961_manually_staged_terminal_approval_without_radar_event_valid(tmp_path):
+    # Real manual approval stages can carry arbitrary non-Radar source IDs.
+    # This does not represent an approved live action or cutover.
+    bundle = build(tmp_path)
+    path = "state/airdrop-radar/action-inbox.json"
+    (bundle / path).parent.mkdir(parents=True, exist_ok=True)
+    (bundle / path).write_text(json.dumps({
+        "schema_version": 1, "requests": {
+            "c"*32: {"request_id":"c"*32, "status":"rejected",
+                     "source_event_id":"manual-verified-record"},
+        },
+    }))
+    ev = "state/airdrop-radar/events.jsonl"
+    ix = "state/airdrop-radar/event-index.json"
+    (bundle / ev).write_bytes(b"")
+    (bundle / ix).write_text(json.dumps({
+        "schema_version":1, "ledger_count":0,
+        "ledger_tip_hash":"", "events":{},
+    }))
+    result = verify(bundle,manifest(bundle,extras=(path,ev,ix)))
     assert result.returncode == 0, result.stdout
