@@ -1032,9 +1032,6 @@ def test_r957_inflight_delivery_and_action_states_refuse_active_restore(
      {"request_id": "a" * 32, "status": "consumed",
       "consumption_receipt": "example-receipt", "consumed_at": "2026-10-17T00:00Z"}),
     ("action-executions.json", "executions", "a" * 32,
-     {"request_id": "a" * 32, "status": "succeeded",
-      "receipt": "example-receipt", "terminal_at": "2026-10-17T00:00Z"}),
-    ("action-executions.json", "executions", "a" * 32,
      {"request_id": "a" * 32, "status": "failed_before_write",
       "error_code": "no_external_attempt", "terminal_at": "2026-10-17T00:00Z"}),
 ))
@@ -1057,3 +1054,55 @@ def test_r957_other_operational_source_documents_preserved(name, tmp_path):
     root = "candidates" if name == "action-candidates.json" else None
     result = verify(bundle, _r957_operational_state(bundle, name, root, None))
     assert result.returncode == 0, result.stdout
+
+
+
+def test_r957_unbound_candidate_never_auto_restaged_after_restore(tmp_path):
+    bundle = build(tmp_path)
+    path = "state/airdrop-radar/action-candidates.json"
+    archive_files(bundle, (path,))
+    candidate_id = "b" * 32
+    (bundle / path).write_text(json.dumps({
+        "schema_version": 1, "candidates": {
+            candidate_id: {"candidate_id": candidate_id,
+                           "request_id": None, "approval_digest": None}
+        }
+    }))
+    result = verify(bundle, manifest(bundle, extras=(path,)))
+    assert result.returncode == 42
+    assert "RADAR_ACTION_UNBOUND_CANDIDATE_STOP" in result.stdout
+
+
+def test_r957_success_requires_consumed_approval_with_same_receipt(tmp_path):
+    bundle = build(tmp_path)
+    prefix = "state/airdrop-radar/"
+    e, a = prefix + "action-executions.json", prefix + "action-inbox.json"
+    ids = (e, a)
+    archive_files(bundle, ids)
+    rid = "c" * 32
+    receipt = "synthetic-confirmed-receipt"
+    (bundle / e).write_text(json.dumps({
+        "schema_version": 1,
+        "executions": {rid: {
+            "request_id": rid, "status": "succeeded",
+            "receipt": receipt, "approval_digest": "d" * 64,
+            "terminal_at": "2026-10-17T00:00:00+00:00",
+        }},
+    }))
+    approvals = {
+        "schema_version": 1,
+        "requests": {rid: {
+            "request_id": rid, "status": "consumed",
+            "approval_digest": "d" * 64,
+            "consumed_at": "2026-10-17T00:00:00+00:00",
+            "consumption_receipt": receipt,
+        }},
+    }
+    (bundle / a).write_text(json.dumps(approvals))
+    valid = verify(bundle, manifest(bundle, extras=ids))
+    assert valid.returncode == 0, valid.stdout
+    approvals["requests"][rid]["consumption_receipt"] = "wrong-receipt"
+    (bundle / a).write_text(json.dumps(approvals))
+    invalid = verify(bundle, manifest(bundle, extras=ids))
+    assert invalid.returncode == 42
+    assert "RADAR_ACTION_SUCCESS_APPROVAL_MISMATCH" in invalid.stdout
