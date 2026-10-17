@@ -98,6 +98,22 @@ def radar_kind(relative):
     return "radar_UNREVIEWED"
 
 
+def signer_kind(relative):
+    # Source-derived plausible families only. This NEVER authorizes removal.
+    parts = relative.split("/")
+    name = parts[-1]
+    if len(parts) > 2 and parts[1] == "uv-cache":
+        return "signer_uv_cache_UNVERIFIED_NOT_DISPOSABLE"
+    if len(parts) > 2 and parts[1].startswith("tclk-pilot-"):
+        return "signer_private_tclk_NOT_DISPOSABLE"
+    if name.startswith("close1-"):
+        return "signer_close1_finance_NOT_DISPOSABLE"
+    if name in ("oracle-signer-receipts.json", "signer-health.json",
+                "upstream-health.json"):
+        return "signer_durable_fixed_NOT_DISPOSABLE"
+    return "signer_UNCLASSIFIED_NOT_DISPOSABLE"
+
+
 def profile(root=ROOT, *, monotonic=time.monotonic):
     start = monotonic()
     result = {
@@ -105,11 +121,12 @@ def profile(root=ROOT, *, monotonic=time.monotonic):
         "known_files": 0, "known_dirs": 0, "known_bytes": 0,
         "symlinks": 0, "special": 0, "hardlinks": 0,
         "unknown_roots": [], "symlink_classes": dict(),
-        "radar": {}, "reason": "none",
+        "radar": {}, "signer_classes": {}, "reason": "none",
         "metadata_walk_complete": False,
         "archive_complete": False, "writer_epoch_proven": False,
     }
     kinds = defaultdict(lambda: {"files": 0, "bytes": 0})
+    signer_kinds = defaultdict(lambda: {"files": 0, "bytes": 0})
     link_types = Counter()
     seen_inodes = set()
 
@@ -199,6 +216,10 @@ def profile(root=ROOT, *, monotonic=time.monotonic):
                     kind = radar_kind(relative)
                     kinds[kind]["files"] += 1
                     kinds[kind]["bytes"] += current.st_size
+                elif relative.startswith("signer/"):
+                    kind = signer_kind(relative)
+                    signer_kinds[kind]["files"] += 1
+                    signer_kinds[kind]["bytes"] += current.st_size
 
     try:
         fd = os.open(root, D_FLAGS)
@@ -209,6 +230,7 @@ def profile(root=ROOT, *, monotonic=time.monotonic):
     except (OSError, Stop) as exc:
         result["reason"] = str(exc) if isinstance(exc, Stop) else "METADATA_UNAVAILABLE_STOP"
     result["radar"] = dict(sorted(kinds.items()))
+    result["signer_classes"] = dict(sorted(signer_kinds.items()))
     result["symlink_classes"] = dict(sorted(link_types.items()))
     # Unknown roots by definition are not exhausted even after their
     # first-level metadata read. Links also remain uninterpreted.
