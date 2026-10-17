@@ -61,7 +61,7 @@ def test_r963_synthetic_pair_consistency_is_only_metadata_not_production():
     ("incomplete","SOURCE_CENSUS_NOT_EXHAUSTIVE_STOP"),
     ("source_missing_db","ORIGINAL_REQUIRED_SOURCE_MISSING_STOP"),
     ("source_duplicate","SOURCE_ENTRY_DUPLICATE_OR_TYPE_STOP"),
-    ("archive_sidecar","ARCHIVE_PATH_ABSENT_FROM_SOURCE_STOP"),
+    ("archive_sidecar","LIVE_SQLITE_COPY_FORBIDDEN_STOP"),
     ("capture_missing","CAPTURE_IMAGES_MISSING_STOP"),
     ("source_commit","SOURCE_WITNESS_SCHEMA_STOP"),
 ))
