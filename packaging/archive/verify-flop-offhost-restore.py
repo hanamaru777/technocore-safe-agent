@@ -585,6 +585,20 @@ def verify_radar_operational_state(files, radar_hashes):
                     "RADAR_OPERATIONAL_COLLECTION_STOP")
         present[basename] = data
 
+    # A self-signed archive that retains actionable rows while omitting
+    # their original Radar evidence cannot be accepted as a cutover state.
+    # This still DOES NOT prove files omitted entirely from the source.
+    has_actions = any(present.get(f, {}).get(k) for f, k in (
+        ("alert-outbox.json", "events"),
+        ("action-candidates.json", "candidates"),
+        ("action-inbox.json", "requests"),
+        ("action-executions.json", "executions"),
+    ))
+    if has_actions:
+        require("state/airdrop-radar/events.jsonl" in files and
+                "state/airdrop-radar/event-index.json" in files,
+                "RADAR_ACTION_EVIDENCE_MISSING_STOP")
+
     # Do not treat a copied-but-unacknowledged Discord alert as safe to
     # deliver. Its original HTTP side effect might already have happened.
     if "alert-outbox.json" in present:
@@ -638,19 +652,6 @@ def verify_radar_operational_state(files, radar_hashes):
                 require(isinstance(row.get("error_code"), str) and
                         bool(row["error_code"]), "RADAR_ACTION_TERMINAL_PROOF_MISSING")
 
-    # A self-signed archive that retains actionable rows while omitting
-    # their original Radar evidence cannot be accepted as a cutover state.
-    # This still DOES NOT prove files omitted entirely from the source.
-    has_actions = any(present.get(f, {}).get(k) for f, k in (
-        ("alert-outbox.json", "events"),
-        ("action-candidates.json", "candidates"),
-        ("action-inbox.json", "requests"),
-        ("action-executions.json", "executions"),
-    ))
-    if has_actions:
-        require("state/airdrop-radar/events.jsonl" in files and
-                "state/airdrop-radar/event-index.json" in files,
-                "RADAR_ACTION_EVIDENCE_MISSING_STOP")
     inbox = present.get("action-inbox.json", {}).get("requests", {})
     candidates = present.get("action-candidates.json", {}).get("candidates", {})
     for candidate_id, row in candidates.items():
