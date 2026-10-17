@@ -66,6 +66,14 @@ RADAR_FIXED = frozenset((
     "airdrop-radar/events.jsonl",
     "airdrop-radar/precontest-supervisor.json",
     "airdrop-radar/precontest-candidates.json",
+    # R957: original notification/approval/execution operational journals.
+    "airdrop-radar/monitor-config.json",
+    "airdrop-radar/monitor-heartbeat.json",
+    "airdrop-radar/alert-outbox.json",
+    "airdrop-radar/discord-notifier-state.json",
+    "airdrop-radar/action-candidates.json",
+    "airdrop-radar/action-inbox.json",
+    "airdrop-radar/action-executions.json",
 ))
 RADAR_CHALLENGE_LEAVES = frozenset((
     "spec.json", "progress.json", "requests.json", "artifacts.json",
@@ -533,6 +541,93 @@ def verify_radar_ledger(files):
                 row.get("ledger_hash") == hash_value,
                 "RADAR_INDEX_EVENT_MISMATCH")
 
+
+# R957: a signed archive with lost/pending network-delivery journal entries
+# is NOT safe for active cutover. Original source can send before recording a
+# receipt, so "pending" does not prove no prior network delivery.
+MAX_OPERATIONAL_JSON = 4 * 1024**2
+OPERATIONAL_STATES = {
+    "monitor-config.json": ("schema_version", None, 0),
+    "monitor-heartbeat.json": ("schema_version", None, 0),
+    "discord-notifier-state.json": ("schema_version", None, 0),
+    "action-candidates.json": ("schema_version", "candidates", 256),
+    "alert-outbox.json": ("schema_version", "events", 10000),
+    "action-inbox.json": ("schema_version", "requests", 256),
+    "action-executions.json": ("schema_version", "executions", 256),
+}
+HEX32_ID = re.compile(r"[a-f0-9]{32}\Z")
+
+
+def verify_radar_operational_state(files):
+    base = "state/airdrop-radar/"
+    present = {}
+    for basename, (_version, collection, limit) in OPERATIONAL_STATES.items():
+        name = base + basename
+        if name not in files:
+            continue
+        path = files[name]
+        size = path.stat().st_size
+        require(0 < size <= MAX_OPERATIONAL_JSON,
+                "RADAR_OPERATIONAL_STATE_SIZE_STOP")
+        data = json.loads(path.read_bytes().decode("utf-8"))
+        require(isinstance(data, dict) and
+                type(data.get("schema_version")) is int and
+                data["schema_version"] == 1, "RADAR_OPERATIONAL_SCHEMA_STOP")
+        if collection is not None:
+            items = data.get(collection)
+            require(isinstance(items, dict) and len(items) <= limit,
+                    "RADAR_OPERATIONAL_COLLECTION_STOP")
+        present[basename] = data
+
+    # Do not treat a copied-but-unacknowledged Discord alert as safe to
+    # deliver. Its original HTTP side effect might already have happened.
+    if "alert-outbox.json" in present:
+        for event_id, row in present["alert-outbox.json"]["events"].items():
+            require(isinstance(event_id, str) and 0 < len(event_id) <= 128 and
+                    isinstance(row, dict) and row.get("event_id") == event_id,
+                    "RADAR_ALERT_ROW_INVALID")
+            require(row.get("delivery_state") == "delivered",
+                    "RADAR_ALERT_DELIVERY_UNCERTAIN_STOP")
+            require(isinstance(row.get("delivery_receipt"), str) and
+                    bool(row["delivery_receipt"]) and
+                    len(row["delivery_receipt"]) <= 200 and
+                    isinstance(row.get("delivered_at"), str) and
+                    bool(row["delivered_at"]),
+                    "RADAR_ALERT_DELIVERY_RECEIPT_MISSING")
+
+    if "action-inbox.json" in present:
+        for request_id, row in present["action-inbox.json"]["requests"].items():
+            require(isinstance(request_id, str) and HEX32_ID.fullmatch(request_id)
+                    and isinstance(row, dict) and
+                    row.get("request_id") == request_id,
+                    "RADAR_ACTION_APPROVAL_ROW_INVALID")
+            require(row.get("status") in ("rejected", "expired", "consumed"),
+                    "RADAR_ACTION_APPROVAL_NOT_TERMINAL_STOP")
+            if row["status"] == "consumed":
+                require(isinstance(row.get("consumption_receipt"), str) and
+                        bool(row["consumption_receipt"]) and
+                        isinstance(row.get("consumed_at"), str) and
+                        bool(row["consumed_at"]),
+                        "RADAR_ACTION_CONSUMPTION_RECEIPT_MISSING")
+
+    if "action-executions.json" in present:
+        for request_id, row in present["action-executions.json"]["executions"].items():
+            require(isinstance(request_id, str) and HEX32_ID.fullmatch(request_id)
+                    and isinstance(row, dict) and
+                    row.get("request_id") == request_id,
+                    "RADAR_ACTION_EXECUTION_ROW_INVALID")
+            require(row.get("status") in ("succeeded", "failed_before_write", "blocked"),
+                    "RADAR_ACTION_EXECUTION_UNCERTAIN_STOP")
+            require(isinstance(row.get("terminal_at"), str) and
+                    bool(row["terminal_at"]),
+                    "RADAR_ACTION_TERMINAL_PROOF_MISSING")
+            if row["status"] == "succeeded":
+                require(isinstance(row.get("receipt"), str) and
+                        bool(row["receipt"]), "RADAR_ACTION_SUCCESS_RECEIPT_MISSING")
+            else:
+                require(isinstance(row.get("error_code"), str) and
+                        bool(row["error_code"]), "RADAR_ACTION_TERMINAL_PROOF_MISSING")
+
 def verify_files(root, entries):
     observed = {}
     total = 0
@@ -575,6 +670,7 @@ def verify_files(root, entries):
     verify_challenge_artifacts(observed)
     verify_challenge_request_journals(observed)
     verify_radar_ledger(observed)
+    verify_radar_operational_state(observed)
     return observed, total
 
 # Exact financial attempt/receipt pairing mirrors the R861/R864 archive
