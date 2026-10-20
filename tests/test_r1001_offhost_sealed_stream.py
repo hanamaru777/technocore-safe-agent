@@ -152,6 +152,18 @@ def test_reject_world_readable_archive_dir(context):
     assert b"DIR_CUSTODY_STOP" in r.stdout
 
 
+def test_offhost_guard_rejects_actual_k137_and_flop_shadow(monkeypatch):
+    spec = importlib.util.spec_from_file_location("r1001_host_guard", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod.os, "geteuid", lambda: 10001)
+    for marker in ("/opt/tradebot-k137-private", "/opt/flop-shadow"):
+        with monkeypatch.context() as patch:
+            patch.setattr(mod.Path, "exists", lambda self: str(self) == marker)
+            with pytest.raises(mod.Stop, match="LIVE_HOST_REFUSED"):
+                mod.guard_offhost()
+
+
 def test_not_wrongly_claim_source_snapshot_or_oci_retirement(context):
     body = SCRIPT.read_text()
     assert "WRITER_EPOCH_NOT_PROVEN" in body

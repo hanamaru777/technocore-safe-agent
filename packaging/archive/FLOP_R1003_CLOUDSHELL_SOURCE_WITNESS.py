@@ -148,9 +148,10 @@ def seal_manifest(raw):
 
 
 def main():
+    blocked = ("/opt/technocore-safe-agent", "/opt/tradebot-k137",
+               "/opt/tradebot-k137-private", "/opt/flop-shadow")
     need(sys.platform == "linux" and os.geteuid() != 0
-         and not Path("/opt/technocore-safe-agent").exists()
-         and not Path("/opt/tradebot-k137").exists(),
+         and not any(Path(path).exists() for path in blocked),
          "CLOUDSHELL_NONROOT_NOT_LIVE_HOST_REQUIRED")
     # Do not touch Oracle until required crypto dependency imported and code verified.
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM

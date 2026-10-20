@@ -45,6 +45,15 @@ def cloud(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_cloudshell_bridge_rejects_actual_k137_and_shadow(monkeypatch):
+    monkeypatch.setattr(m.os, "geteuid", lambda: 10001)
+    for marker in ("/opt/tradebot-k137-private", "/opt/flop-shadow"):
+        with monkeypatch.context() as patch:
+            patch.setattr(m.Path, "exists", lambda self: str(self) == marker)
+            with pytest.raises(m.Stop, match="CLOUDSHELL_NONROOT_NOT_LIVE_HOST_REQUIRED"):
+                m.main()
+
+
 def test_pinned_remote_command_is_exact_code_only(cloud):
     src, rawcode = m.load_bundle(m.SOURCE, "sourcetmp")
     def fake_ssh(cmd, capture_output, check, timeout):

@@ -53,8 +53,9 @@ def need(condition, code):
 def guard_offhost():
     need(sys.platform == "linux" and os.geteuid() != 0,
          "OFFHOST_LINUX_NONROOT_REQUIRED")
-    need(not Path("/opt/technocore-safe-agent").exists()
-         and not Path("/opt/tradebot-k137").exists(),
+    blocked = ("/opt/technocore-safe-agent", "/opt/tradebot-k137",
+               "/opt/tradebot-k137-private", "/opt/flop-shadow")
+    need(not any(Path(path).exists() for path in blocked),
          "LIVE_HOST_REFUSED")
 
 
