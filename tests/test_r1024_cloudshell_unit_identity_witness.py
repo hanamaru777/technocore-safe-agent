@@ -41,7 +41,7 @@ def encoded(value):
 
 def test_commit_blob_and_download_pin():
     content = source()
-    assert m.COMMIT == "4f78fc8b4afb14604792e5b2f07f1fecdc131736"
+    assert m.COMMIT == "b676c925bc86e74c38f3fa13314f82d0b23c89cf"
     assert hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest() == m.BLOB_SHA
     def fetch(url, timeout):
         assert m.COMMIT in url and url.endswith("/r1023_unit_identity_readonly.py")
@@ -158,4 +158,3 @@ def test_no_mutating_or_sensitive_primitives():
                       "systemctl mask", "sqlite3", "journalctl", "os.environ", ".write_text(",
                       ".write_bytes(", "print(result.stdout)", "print(raw)", "urlopen("):
         assert forbidden not in raw
-

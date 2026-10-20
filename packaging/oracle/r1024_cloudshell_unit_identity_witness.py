@@ -18,8 +18,8 @@ import subprocess
 import sys
 import urllib.request
 
-COMMIT = "4f78fc8b4afb14604792e5b2f07f1fecdc131736"
-BLOB_SHA = "b4109419c2664ed13182a45d4af994fb63aafb1d"
+COMMIT = "b676c925bc86e74c38f3fa13314f82d0b23c89cf"
+BLOB_SHA = "40b4518aa587ed799d1ccc1ed73e03a9ecaaf817"
 PROBE_URL = ("https://raw.githubusercontent.com/"
              "hanamaru777/technocore-safe-agent/" + COMMIT +
              "/packaging/oracle/r1023_unit_identity_readonly.py")
@@ -232,4 +232,3 @@ if __name__ == "__main__":
     except (OSError, ValueError, TypeError, UnicodeError):
         print(STOP_TAG + "LOCAL_RUNTIME_GUARD_FAILED")
         sys.exit(42)
-
