@@ -56,7 +56,7 @@ def test_source_is_exactly_pinned_original_probe_without_network():
         b"blob " + str(len(content)).encode("ascii") + b"\0" + content
     ).hexdigest()
     assert asserted == m.BLOB_SHA
-    assert m.COMMIT == "d8a53427d75de40471dda30d056d9cc7a99ec953"
+    assert m.COMMIT == "562a79fa0e03058e1ff33362c8d0b439d952787b"
     assert m.EXPECTED_ORIGINAL.encode() in content
     assert "FLOP_R1016_OVERSIZED_CMDLINE_PROCESSES" in m.EXPECTED_KEYS
     assert "FLOP_R1016_OVERSIZED_CGROUP_PROCESSES" in m.EXPECTED_KEYS
@@ -199,6 +199,10 @@ def test_missing_custody_files_yield_only_fixed_public_codes(tmp_path):
      "ORIGINAL_GUEST_ORIGINAL_HEAD_MISMATCH_STOP"),
     (42, b"FLOP_R1016_STOP=PROC_ACCESS_STOP\r\n",
      "ORIGINAL_GUEST_PROC_ACCESS_STOP"),
+    (42, b"FLOP_R1016_STOP=READONLY_HEAD_EXIT_STOP\n",
+     "ORIGINAL_GUEST_READONLY_HEAD_EXIT_STOP"),
+    (42, b"FLOP_R1016_STOP=READONLY_UNIT_FILES_TIMEOUT_STOP\n",
+     "ORIGINAL_GUEST_READONLY_UNIT_FILES_TIMEOUT_STOP"),
     (42, b"unsafe-text\0private-data", "PINNED_GUEST_COMMAND_EXIT_STOP"),
     (1, b"remote-message-that-must-not-be-shown", "PINNED_GUEST_COMMAND_EXIT_STOP"),
 ))

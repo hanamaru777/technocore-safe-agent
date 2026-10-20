@@ -17,8 +17,8 @@ import subprocess
 import sys
 import urllib.request
 
-COMMIT = "d8a53427d75de40471dda30d056d9cc7a99ec953"
-BLOB_SHA = "f57a146446344ba79a7a13c3bcd7fc1de5ad5bf3"
+COMMIT = "562a79fa0e03058e1ff33362c8d0b439d952787b"
+BLOB_SHA = "da3975ca6fb518f491b494880bdf9c4efad32746"
 PROBE_URL = ("https://raw.githubusercontent.com/"
              "hanamaru777/technocore-safe-agent/" + COMMIT +
              "/packaging/oracle/r1016_writer_inventory_readonly.py")
