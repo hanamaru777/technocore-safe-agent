@@ -122,6 +122,38 @@ def valid_receipt_hash(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+def nonce_binding(receipts, outbox, nonces, did):
+    """Fail closed unless every receipt nonce is bound to its outbox room.
+
+    Nonce high-watermarks are local evidence only, not remote submission proof.
+    The original source uses core.make_nonce(room, did) to save an integer
+    under "<did>|<room>" before creating the signer prepared receipt.
+    """
+    signer = receipts["receipts"]
+    entries = outbox["outbox"]
+    if not signer:
+        return False
+    seen = set()
+    for intent_id, receipt in signer.items():
+        entry = entries.get(intent_id)
+        if not isinstance(entry, dict):
+            return False
+        room = entry.get("room")
+        nonce = receipt.get("nonce")
+        if (not isinstance(room, str) or not 1 <= len(room) <= 128
+                or "|" in room or not isinstance(nonce, str)
+                or re.fullmatch(r"[1-9][0-9]{0,18}", nonce) is None):
+            return False
+        issued = int(nonce)
+        latest = nonces.get(f"{did}|{room}")
+        if (type(latest) is not int or not 1 <= issued <= latest
+                or latest > 9999999999999999999
+                or (room, nonce) in seen):
+            return False
+        seen.add((room, nonce))
+    return True
+
+
 def pairing(receipts, outbox, nonces, did):
     """Assess identity/state congruence; print no sensitive keys or data."""
     summary = report(receipts, outbox, nonces, did)
@@ -188,6 +220,7 @@ def pairing(receipts, outbox, nonces, did):
         "unreconciled_prepared": len(prepared - recognized),
         "unreconciled_quarantined": len(quarantined - recognized),
         "ack_ids_consistent": receipt_hash_match,
+        "nonce_binding_consistent": nonce_binding(receipts, outbox, nonces, did),
         "active_or_ambiguous_outbox": (
             summary["outbox_queued"] + summary["outbox_posted"] +
             summary["outbox_ambiguous"]

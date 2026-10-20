@@ -22,16 +22,16 @@ def fixture():
     def key(version):
         return hashlib.sha256(("controlled-e2e-" + version).encode()).hexdigest()[:20]
     r = {
-        "ack-id": {"state": "acknowledged", "did": did, "receipt_hash": receipt},
-        key("v1"): {"state": "prepared", "did": did, "last_error_code": "submission_unknown", "attempts": 1},
-        key("v2"): {"state": "prepared", "did": did, "last_error_code": None, "attempts": 0},
+        "ack-id": {"state": "acknowledged", "did": did, "receipt_hash": receipt, "nonce": "21"},
+        key("v1"): {"state": "prepared", "did": did, "nonce": "22", "last_error_code": "submission_unknown", "attempts": 1},
+        key("v2"): {"state": "prepared", "did": did, "nonce": "23", "last_error_code": None, "attempts": 0},
     }
     ob = {
-        "ack-id": {"status": "acknowledged", "receipt_hash": receipt},
-        key("v1"): {"status": "quarantined", "category": "controlled_e2e",
+        "ack-id": {"status": "acknowledged", "receipt_hash": receipt, "room": "lobby"},
+        key("v1"): {"status": "quarantined", "room": "lobby", "category": "controlled_e2e",
                     "topic": "prompt_injection_safety", "source_candidate_id": "controlled-e2e-v1",
                     "quarantine_reason": "submission_unknown"},
-        key("v2"): {"status": "quarantined", "category": "controlled_e2e",
+        key("v2"): {"status": "quarantined", "room": "lobby", "category": "controlled_e2e",
                     "topic": "prompt_injection_safety", "source_candidate_id": "controlled-e2e-v2",
                     "quarantine_reason": "legacy_unhandled_http_ambiguity"},
     }
@@ -39,7 +39,7 @@ def fixture():
         {"schema_version": 1, "receipts": r},
         {"schema_version": 1, "enabled": True, "paused": False,
          "outbox": ob, "receipts": {"ack-id": {"receipt_hash": receipt}}},
-        {"nonce-key": "not-for-output"}, {"did": did}
+        {did + "|lobby": 23, "nonce-key": "not-for-output"}, {"did": did}
     )
 
 def test_all_prepared_are_exact_quarantined_controlled_e2e_without_printing_sensitive_data():
@@ -50,6 +50,7 @@ def test_all_prepared_are_exact_quarantined_controlled_e2e_without_printing_sens
     assert val["recognized_quarantined_e2e"] == 2
     assert val["unreconciled_prepared"] == val["unreconciled_quarantined"] == 0
     assert val["ack_ids_consistent"] is True
+    assert val["nonce_binding_consistent"] is True
     assert val["autopilot_enabled"] is True and val["autopilot_paused"] is False
     for sensitive in ("not-for-output", data[3]["did"], "nonce-key", "ack-id"):
         assert sensitive not in str(val)
@@ -122,6 +123,52 @@ def test_blank_non_hex_or_non_string_receipt_hash_rejected():
                        data[1]["receipts"]["ack-id"]):
             record["receipt_hash"] = value
         assert m.pairing(*data)["ack_ids_consistent"] is False
+
+
+def test_nonce_binding_detects_missing_watermark_outbox_or_receipt_nonce():
+    m = load()
+    cases = (
+        lambda d: d[2].clear(),
+        lambda d: d[0]["receipts"]["ack-id"].pop("nonce"),
+        lambda d: d[1]["outbox"]["ack-id"].pop("room"),
+        lambda d: d[1]["outbox"].pop("ack-id"),
+    )
+    for mutate in cases:
+        d = list(fixture())
+        mutate(d)
+        assert m.pairing(*d)["nonce_binding_consistent"] is False
+
+
+def test_nonce_binding_rejects_reused_future_malformed_and_wrong_room_nonce():
+    m = load()
+    for change in ("duplicate", "future", "zero", "unicode", "wrong_room",
+                   "non_integer_watermark", "bool_watermark"):
+        d = list(fixture())
+        if change == "duplicate":
+            d[0]["receipts"]["ack-id"]["nonce"] = "22"
+        elif change == "future":
+            d[0]["receipts"]["ack-id"]["nonce"] = "24"
+        elif change == "zero":
+            d[0]["receipts"]["ack-id"]["nonce"] = "0"
+        elif change == "unicode":
+            d[0]["receipts"]["ack-id"]["nonce"] = "２１"
+        elif change == "wrong_room":
+            d[1]["outbox"]["ack-id"]["room"] = "other"
+        elif change == "non_integer_watermark":
+            d[2][d[3]["did"] + "|lobby"] = "23"
+        else:
+            d[2][d[3]["did"] + "|lobby"] = True
+        assert m.pairing(*d)["nonce_binding_consistent"] is False
+
+
+def test_nonce_binding_per_room_high_watermarks_and_no_remote_proof_claim():
+    m = load()
+    d = list(fixture())
+    d[1]["outbox"]["ack-id"]["room"] = "other"
+    d[2][d[3]["did"] + "|other"] = 21
+    assert m.pairing(*d)["nonce_binding_consistent"] is True
+    assert "external" not in str(m.pairing(*d))
+    assert m.nonce_binding({"receipts": {}}, d[1], d[2], d[3]["did"]) is False
 
 
 def test_live_scope_no_service_mutation_no_large_file_reads():
