@@ -75,10 +75,16 @@ def preflight():
 def private_custody(file, *, allow_readable=False):
     need(file.is_absolute() and ".." not in file.parts, "CUSTODY_ABSOLUTE_STOP")
     parent = file.parent
-    p = os.lstat(parent)
+    try:
+        p = os.lstat(parent)
+    except FileNotFoundError:
+        raise Stop("CUSTODY_PARENT_MISSING_STOP") from None
     need(stat.S_ISDIR(p.st_mode) and p.st_uid == os.geteuid()
          and not (p.st_mode & 0o077), "CUSTODY_PARENT_STOP")
-    f = os.lstat(file)
+    try:
+        f = os.lstat(file)
+    except FileNotFoundError:
+        raise Stop("CUSTODY_FILE_MISSING_STOP") from None
     need(stat.S_ISREG(f.st_mode) and f.st_uid == os.geteuid()
          and f.st_nlink == 1 and not (f.st_mode & 0o022)
          and (allow_readable or not (f.st_mode & 0o077)),
@@ -138,9 +144,21 @@ def bounded_invoke(source, *, executor=subprocess.run):
                           input=None, check=False, timeout=TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired):
         raise Stop("PINNED_REMOTE_READONLY_FAILED_STOP") from None
-    need(result.returncode == 0 and isinstance(result.stdout, bytes)
+    if result.returncode != 0:
+        if result.returncode == 255:
+            raise Stop("PINNED_SSH_AUTH_OR_NETWORK_STOP")
+        if result.returncode == 42 and isinstance(result.stdout, bytes):
+            # The guest prints one literal error code, never credentials.
+            match = re.fullmatch(
+                rb"FLOP_R1016_STOP=([A-Z0-9_]{3,56})\\r?\\n?",
+                result.stdout,
+            )
+            if match:
+                raise Stop("ORIGINAL_GUEST_" + match.group(1).decode("ascii"))
+        raise Stop("PINNED_GUEST_COMMAND_EXIT_STOP")
+    need(isinstance(result.stdout, bytes)
          and 100 < len(result.stdout) <= OUT_MAX,
-         "REMOTE_RESPONSE_BOUNDS_OR_EXIT_STOP")
+         "REMOTE_RESPONSE_BOUNDS_STOP")
     return result.stdout
 
 
@@ -195,7 +213,14 @@ def run():
 if __name__ == "__main__":
     try:
         run()
-    except (Stop, OSError, ValueError, TypeError, UnicodeError):
-        # Never pass untrusted stderr, raw remote stdout or paths to terminal.
-        print(STOP_TAG + "READONLY_GUARD_FAILED")
+    except Stop as error:
+        # Only source-owned stable STOP codes, never raw remote output,
+        # SSH stderr, credentials, sensitive paths, or exception repr.
+        reason = str(error)
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,110}", reason):
+            reason = "UNCLASSIFIED_GUARD_FAILED"
+        print(STOP_TAG + reason)
+        sys.exit(42)
+    except (OSError, ValueError, TypeError, UnicodeError):
+        print(STOP_TAG + "LOCAL_RUNTIME_GUARD_FAILED")
         sys.exit(42)
