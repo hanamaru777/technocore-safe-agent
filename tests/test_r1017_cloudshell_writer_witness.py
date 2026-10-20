@@ -131,8 +131,40 @@ def test_remote_nonzero_exit_never_prints_remote_stderr(tmp_path, monkeypatch):
     monkeypatch.setattr(m.Path, "home", staticmethod(lambda: tmp_path))
     def failed(args, **kw):
         return SimpleNamespace(returncode=255, stdout=b"remote-data-should-not-print")
-    with pytest.raises(m.Stop, match="REMOTE_RESPONSE_BOUNDS_OR_EXIT_STOP"):
+    with pytest.raises(m.Stop, match="PINNED_SSH_AUTH_OR_NETWORK_STOP"):
         m.bounded_invoke(b"safe", executor=failed)
+
+
+def test_missing_custody_files_yield_only_fixed_public_codes(tmp_path):
+    parent = tmp_path / "private"
+    with pytest.raises(m.Stop, match="CUSTODY_PARENT_MISSING_STOP"):
+        m.private_custody(parent / "missing")
+    parent.mkdir(mode=0o700)
+    with pytest.raises(m.Stop, match="CUSTODY_FILE_MISSING_STOP"):
+        m.private_custody(parent / "missing")
+
+
+@pytest.mark.parametrize(("code", "output", "expected"), (
+    (42, b"FLOP_R1016_STOP=ORIGINAL_HEAD_MISMATCH_STOP\n",
+     "ORIGINAL_GUEST_ORIGINAL_HEAD_MISMATCH_STOP"),
+    (42, b"FLOP_R1016_STOP=PROC_ACCESS_STOP\r\n",
+     "ORIGINAL_GUEST_PROC_ACCESS_STOP"),
+    (42, b"unsafe-text\0private-data", "PINNED_GUEST_COMMAND_EXIT_STOP"),
+    (1, b"remote-message-that-must-not-be-shown", "PINNED_GUEST_COMMAND_EXIT_STOP"),
+))
+def test_guest_exit_classified_without_raw_stdout(tmp_path, monkeypatch, code, output, expected):
+    parent = tmp_path / m.KEY_DIR
+    parent.mkdir(mode=0o700)
+    for name in ("new-operator-ecdsa", "known_hosts"):
+        file = parent / name
+        file.write_bytes(b"fixture")
+        file.chmod(0o600)
+    monkeypatch.setattr(m.Path, "home", staticmethod(lambda: tmp_path))
+    def fake_executor(args, **kw):
+        return SimpleNamespace(returncode=code, stdout=output)
+    with pytest.raises(m.Stop, match=expected) as error:
+        m.bounded_invoke(b"only-synthetic-source", executor=fake_executor)
+    assert b"private-data" not in str(error.value).encode()
 
 
 def test_static_no_mutating_calls_and_output_never_raw_response():
