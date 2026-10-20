@@ -1,0 +1,148 @@
+"""R1017 synthetic Cloud Shell original-OCI witness; no SSH or network calls."""
+import hashlib
+import importlib.util
+import io
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "packaging/oracle/r1017_cloudshell_writer_witness.py"
+ORIGINAL_PROBE = ROOT / "packaging/oracle/r1016_writer_inventory_readonly.py"
+SPEC = importlib.util.spec_from_file_location("r1017_cloudshell_writer_witness", SCRIPT)
+m = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(m)
+
+
+def valid_result():
+    entries = {key: "0" for key in m.EXPECTED_KEYS}
+    entries["FLOP_R1016_STATIC_SERVICE_COUNT"] = "19"
+    entries["FLOP_R1016_STATIC_TIMER_COUNT"] = "8"
+    entries.update(dict(m.EXPECTED_FLAGS))
+    return ("".join(f"{key}={entries[key]}\n" for key in sorted(entries))).encode()
+
+
+def test_source_is_exactly_pinned_original_probe_without_network():
+    content = ORIGINAL_PROBE.read_bytes()
+    asserted = hashlib.sha1(
+        b"blob " + str(len(content)).encode("ascii") + b"\0" + content
+    ).hexdigest()
+    assert asserted == m.BLOB_SHA
+    assert m.COMMIT == "57f9a1126dd597d17976ead31ddff55c8d8c38bf"
+    assert m.EXPECTED_ORIGINAL.encode() in content
+    assert m.checked_source(fetcher=lambda url, timeout: io.BytesIO(content)) == content
+
+
+def test_changed_downloaded_source_rejected_before_ssh():
+    content = ORIGINAL_PROBE.read_bytes()
+    with pytest.raises(m.Stop, match="PINNED_PROBE_BLOB_STOP"):
+        m.checked_source(fetcher=lambda url, timeout:
+                         io.BytesIO(content.replace(b"STATE =", b"STATE_ =", 1)))
+
+
+def test_source_oversize_fails_even_with_streaming_response():
+    with pytest.raises(m.Stop, match="PROBE_SOURCE_OVERSIZE_STOP"):
+        m.checked_source(fetcher=lambda url, timeout:
+                         io.BytesIO(b"x" * (m.SOURCE_MAX + 10)))
+
+
+def test_ssh_whitelist_preserves_prior_operator_custody(tmp_path, monkeypatch):
+    parent = tmp_path / m.KEY_DIR
+    parent.mkdir(mode=0o700)
+    key = parent / "new-operator-ecdsa"
+    hosts = parent / "known_hosts"
+    key.write_bytes(b"synthetic-private-operator-key")
+    key.chmod(0o600)
+    hosts.write_bytes(b"synthetic-original-known-host")
+    hosts.chmod(0o600)
+    monkeypatch.setattr(m.Path, "home", staticmethod(lambda: tmp_path))
+    plain = b"print('synthetic-only')"
+    def fake_call(args, stdout, stderr, input, check, timeout):
+        assert args[0:4] == ["ssh", "-F", "/dev/null", "-T"]
+        assert "StrictHostKeyChecking=yes" in args
+        assert "HostKeyAlgorithms=ecdsa-sha2-nistp256" in args
+        assert "IdentityAgent=none" in args
+        assert "ClearAllForwardings=yes" in args
+        assert "PasswordAuthentication=no" in args
+        assert "KbdInteractiveAuthentication=no" in args
+        assert args[-2] == "ubuntu@" + m.HOST
+        assert "sudo -n /usr/bin/python3 -c" in args[-1]
+        assert "systemctl stop" not in args[-1]
+        assert timeout <= 58
+        return SimpleNamespace(returncode=0, stdout=valid_result())
+    assert m.bounded_invoke(plain, executor=fake_call) == valid_result()
+
+
+def test_custody_refuses_world_readable_private_key(tmp_path):
+    base = tmp_path / "private"
+    base.mkdir(mode=0o700)
+    key = base / "operator"
+    key.write_bytes(b"fixture")
+    key.chmod(0o644)
+    with pytest.raises(m.Stop, match="CUSTODY_FILE_STOP"):
+        m.private_custody(key)
+
+
+def test_original_or_k137_host_paths_refuse_preflight(monkeypatch):
+    monkeypatch.setattr(m.os, "geteuid", lambda: 10001)
+    original_exists = m.Path.exists
+    original_symlink = m.Path.is_symlink
+    for unsafe in ("/opt/technocore-safe-agent", "/opt/tradebot-k137-private",
+                   "/opt/flop-shadow"):
+        with monkeypatch.context() as patch:
+            patch.setattr(m.Path, "exists",
+                          lambda self: str(self) == unsafe or original_exists(self))
+            patch.setattr(m.Path, "is_symlink",
+                          lambda self: (str(self) == unsafe and False)
+                          or original_symlink(self))
+            with pytest.raises(m.Stop, match="LIVE_HOST_REFUSED"):
+                m.preflight()
+
+
+def test_accept_exact_aggregate_flags_but_never_claim_quiescence():
+    parsed = m.inspect_output(valid_result())
+    assert parsed["FLOP_R1016_STATIC_SERVICE_COUNT"] == "19"
+    assert parsed["FLOP_R1016_ALL_WRITERS_FENCED"] == "NO"
+    assert parsed["FLOP_R1016_SIGNER_INFLIGHT_POST_RESOLVED"] == "NO"
+
+
+@pytest.mark.parametrize("update", (
+    lambda b: b.replace(b"=19\n", b"=20\n", 1),
+    lambda b: b.replace(b"=NO\n", b"=YES\n", 1),
+    lambda b: b.replace(b"=0\n", b"=01\n", 1),
+    lambda b: b + b"FLOP_R1016_OTHER=0\n",
+    lambda b: b[:-1],
+    lambda b: b.replace(b"=0\n", b"=\xff\n", 1),
+))
+def test_wrong_or_ambiguous_remote_response_fails_closed(update):
+    with pytest.raises(m.Stop):
+        m.inspect_output(update(valid_result()))
+
+
+def test_remote_nonzero_exit_never_prints_remote_stderr(tmp_path, monkeypatch):
+    base = tmp_path / m.KEY_DIR
+    base.mkdir(mode=0o700)
+    for f in ("new-operator-ecdsa", "known_hosts"):
+        p = base / f
+        p.write_bytes(b"fake")
+        p.chmod(0o600)
+    monkeypatch.setattr(m.Path, "home", staticmethod(lambda: tmp_path))
+    def failed(args, **kw):
+        return SimpleNamespace(returncode=255, stdout=b"remote-data-should-not-print")
+    with pytest.raises(m.Stop, match="REMOTE_RESPONSE_BOUNDS_OR_EXIT_STOP"):
+        m.bounded_invoke(b"safe", executor=failed)
+
+
+def test_static_no_mutating_calls_and_output_never_raw_response():
+    src = SCRIPT.read_text()
+    compile(src, str(SCRIPT), "exec")
+    for forbidden in (
+        "systemctl stop", "systemctl restart", "systemctl disable",
+        "subprocess.Popen(", "os.unlink(", "os.remove(",
+        "sudo systemctl", "AWS_ACCESS_KEY", "print(result.stdout)",
+    ):
+        assert forbidden not in src
+    assert "RESPONSE_SAFETY_FLAG_STOP" in src
+    assert "NO_WRITER_EPOCH_PROVEN=YES" in src
