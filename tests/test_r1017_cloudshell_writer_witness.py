@@ -16,6 +16,32 @@ m = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(m)
 
 
+@pytest.fixture(autouse=True)
+def _provide_posix_euid_on_windows(monkeypatch):
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0, raising=False)
+    if os.name != "nt":
+        return
+    native_lstat = m.os.lstat
+
+    def posix_lstat(path):
+        native = native_lstat(path)
+        candidate = Path(path)
+        is_dir = candidate.is_dir()
+        permissions = 0o700 if is_dir else (0o644 if candidate.name == "operator" else 0o600)
+        return SimpleNamespace(
+            st_mode=(m.stat.S_IFDIR if is_dir else m.stat.S_IFREG) | permissions,
+            st_uid=0,
+            st_nlink=1,
+            st_size=native.st_size,
+        )
+
+    monkeypatch.setattr(m.os, "lstat", posix_lstat)
+
+
+def pinned_probe_content():
+    return ORIGINAL_PROBE.read_bytes().replace(b"\r\n", b"\n")
+
+
 def valid_result():
     entries = {key: "0" for key in m.EXPECTED_KEYS}
     entries["FLOP_R1016_STATIC_SERVICE_COUNT"] = "19"
@@ -25,21 +51,36 @@ def valid_result():
 
 
 def test_source_is_exactly_pinned_original_probe_without_network():
-    content = ORIGINAL_PROBE.read_bytes()
+    content = pinned_probe_content()
     asserted = hashlib.sha1(
         b"blob " + str(len(content)).encode("ascii") + b"\0" + content
     ).hexdigest()
     assert asserted == m.BLOB_SHA
-    assert m.COMMIT == "57f9a1126dd597d17976ead31ddff55c8d8c38bf"
+    assert m.COMMIT == "d8a53427d75de40471dda30d056d9cc7a99ec953"
     assert m.EXPECTED_ORIGINAL.encode() in content
+    assert "FLOP_R1016_OVERSIZED_CMDLINE_PROCESSES" in m.EXPECTED_KEYS
+    assert "FLOP_R1016_OVERSIZED_CGROUP_PROCESSES" in m.EXPECTED_KEYS
     assert m.checked_source(fetcher=lambda url, timeout: io.BytesIO(content)) == content
 
 
 def test_changed_downloaded_source_rejected_before_ssh():
-    content = ORIGINAL_PROBE.read_bytes()
+    content = pinned_probe_content()
     with pytest.raises(m.Stop, match="PINNED_PROBE_BLOB_STOP"):
         m.checked_source(fetcher=lambda url, timeout:
                          io.BytesIO(content.replace(b"STATE =", b"STATE_ =", 1)))
+
+
+def test_old_probe_without_oversized_counters_is_rejected_before_ssh():
+    content = pinned_probe_content()
+    old = content.replace(
+        b'            "oversized_cmdline_processes": oversized_cmdline,\n'
+        b'            "oversized_cgroup_processes": oversized_cgroup,\n',
+        b"",
+        1,
+    )
+    assert old != content
+    with pytest.raises(m.Stop, match="PINNED_PROBE_BLOB_STOP"):
+        m.checked_source(fetcher=lambda url, timeout: io.BytesIO(old))
 
 
 def test_source_oversize_fails_even_with_streaming_response():
@@ -86,6 +127,7 @@ def test_custody_refuses_world_readable_private_key(tmp_path):
 
 
 def test_original_or_k137_host_paths_refuse_preflight(monkeypatch):
+    monkeypatch.setattr(m.sys, "platform", "linux")
     monkeypatch.setattr(m.os, "geteuid", lambda: 10001)
     original_exists = m.Path.exists
     original_symlink = m.Path.is_symlink
@@ -93,9 +135,10 @@ def test_original_or_k137_host_paths_refuse_preflight(monkeypatch):
                    "/opt/flop-shadow"):
         with monkeypatch.context() as patch:
             patch.setattr(m.Path, "exists",
-                          lambda self: str(self) == unsafe or original_exists(self))
+                          lambda self: str(self).replace("\\", "/") == unsafe
+                          or original_exists(self))
             patch.setattr(m.Path, "is_symlink",
-                          lambda self: (str(self) == unsafe and False)
+                          lambda self: (str(self).replace("\\", "/") == unsafe and False)
                           or original_symlink(self))
             with pytest.raises(m.Stop, match="LIVE_HOST_REFUSED"):
                 m.preflight()
@@ -106,6 +149,13 @@ def test_accept_exact_aggregate_flags_but_never_claim_quiescence():
     assert parsed["FLOP_R1016_STATIC_SERVICE_COUNT"] == "19"
     assert parsed["FLOP_R1016_ALL_WRITERS_FENCED"] == "NO"
     assert parsed["FLOP_R1016_SIGNER_INFLIGHT_POST_RESOLVED"] == "NO"
+
+
+def test_missing_oversized_count_is_rejected():
+    raw = valid_result()
+    missing = raw.replace(b"FLOP_R1016_OVERSIZED_CMDLINE_PROCESSES=0\n", b"", 1)
+    with pytest.raises(m.Stop, match="RESPONSE_LINE_COUNT_STOP"):
+        m.inspect_output(missing)
 
 
 @pytest.mark.parametrize("update", (

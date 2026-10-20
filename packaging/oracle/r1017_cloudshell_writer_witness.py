@@ -17,8 +17,8 @@ import subprocess
 import sys
 import urllib.request
 
-COMMIT = "57f9a1126dd597d17976ead31ddff55c8d8c38bf"
-BLOB_SHA = "20cce79795648e345c07aa97e52ceb4b7a149a82"
+COMMIT = "d8a53427d75de40471dda30d056d9cc7a99ec953"
+BLOB_SHA = "f57a146446344ba79a7a13c3bcd7fc1de5ad5bf3"
 PROBE_URL = ("https://raw.githubusercontent.com/"
              "hanamaru777/technocore-safe-agent/" + COMMIT +
              "/packaging/oracle/r1016_writer_inventory_readonly.py")
@@ -40,6 +40,8 @@ EXPECTED_KEYS = frozenset({
     "FLOP_R1016_UNKNOWN_FLOP_UNIT_ROWS",
     "FLOP_R1016_CANDIDATE_FLOP_PROCESSES",
     "FLOP_R1016_UNSCOPED_OR_RACED_PROCESSES",
+    "FLOP_R1016_OVERSIZED_CMDLINE_PROCESSES",
+    "FLOP_R1016_OVERSIZED_CGROUP_PROCESSES",
     "FLOP_R1016_CRON_LOCATIONS_PRESENT",
 })
 EXPECTED_FLAGS = frozenset({
