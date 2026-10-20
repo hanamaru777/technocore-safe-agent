@@ -220,7 +220,7 @@ def pairing(receipts, outbox, nonces, did):
         "unreconciled_prepared": len(prepared - recognized),
         "unreconciled_quarantined": len(quarantined - recognized),
         "ack_ids_consistent": receipt_hash_match,
-        "nonce_binding_consistent": nonce_binding(receipts, outbox, nonces, did),
+        "nonce_binding_consistent": nonce_binding(receipts, outbox, nonces, did["did"]),
         "active_or_ambiguous_outbox": (
             summary["outbox_queued"] + summary["outbox_posted"] +
             summary["outbox_ambiguous"]
