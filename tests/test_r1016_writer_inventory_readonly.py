@@ -67,9 +67,41 @@ def test_guest_pin_mismatch_fails_before_scanning(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "STATE", state)
     monkeypatch.setattr(m.sys, "platform", "linux")
     monkeypatch.setattr(m.os, "geteuid", lambda: 0, raising=False)
-    monkeypatch.setattr(m, "read_command", lambda args: "changed-head")
+    monkeypatch.setattr(m, "read_command", lambda args, stage: "changed-head")
     with pytest.raises(m.Stop, match="ORIGINAL_HEAD_MISMATCH_STOP"):
         m.guest_preflight()
+
+
+@pytest.mark.parametrize(("stage", "cause", "expected"), (
+    ("HEAD", "timeout", "READONLY_HEAD_TIMEOUT_STOP"),
+    ("HEAD", "nonzero", "READONLY_HEAD_EXIT_STOP"),
+    ("UNIT_FILES", "os_error", "READONLY_UNIT_FILES_EXEC_STOP"),
+    ("UNIT_FILES", "too_big", "READONLY_UNIT_FILES_OUTPUT_BOUND_STOP"),
+    ("LIVE_UNITS", "timeout", "READONLY_LIVE_UNITS_TIMEOUT_STOP"),
+    ("LIVE_UNITS", "nonzero", "READONLY_LIVE_UNITS_EXIT_STOP"),
+))
+def test_readonly_guest_command_failure_has_safe_stage_code(
+        monkeypatch, stage, cause, expected):
+    def simulated_run(args, **kwargs):
+        if cause == "timeout":
+            raise m.subprocess.TimeoutExpired(cmd=args, timeout=10)
+        if cause == "os_error":
+            raise OSError("sensitive-data-must-not-be-output")
+        if cause == "nonzero":
+            return SimpleNamespace(returncode=1, stdout="sensitive-result")
+        return SimpleNamespace(returncode=0, stdout="x" * 512001)
+    monkeypatch.setattr(m.subprocess, "run", simulated_run)
+    with pytest.raises(m.Stop, match=expected) as error:
+        m.read_command(("synthetic-readonly-only",), stage=stage)
+    assert "sensitive" not in str(error.value)
+
+
+def test_invalid_readonly_stage_rejected_without_execution(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("unexpected execution")
+    monkeypatch.setattr(m.subprocess, "run", forbidden)
+    with pytest.raises(m.Stop, match="READONLY_STAGE_INVALID_STOP"):
+        m.read_command(("ignored",), stage="UNTRUSTED")
 
 
 def test_proc_metadata_counts_manual_processes_without_printing_arguments(tmp_path):

@@ -62,18 +62,24 @@ def guest_preflight():
     need(stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode),
          "SOURCE_ROOT_TYPE_STOP")
     head = read_command(("git", "-c", f"safe.directory={ROOT}",
-                         "-C", str(ROOT), "rev-parse", "--verify", "HEAD"))
+                         "-C", str(ROOT), "rev-parse", "--verify", "HEAD"),
+                        stage="HEAD")
     need(head.strip() == ORIGINAL_HEAD, "ORIGINAL_HEAD_MISMATCH_STOP")
 
 
-def read_command(args):
+def read_command(args, *, stage):
+    # All stage labels are hardcoded; no guest output or arguments are printed.
+    need(stage in {"HEAD", "UNIT_FILES", "LIVE_UNITS"},
+         "READONLY_STAGE_INVALID_STOP")
     try:
         r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                            text=True, check=False, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        raise Stop("READONLY_COMMAND_FAILED_STOP") from None
-    need(r.returncode == 0 and len(r.stdout) <= 512_000,
-         "READONLY_COMMAND_FAILED_STOP")
+    except subprocess.TimeoutExpired:
+        raise Stop("READONLY_" + stage + "_TIMEOUT_STOP") from None
+    except OSError:
+        raise Stop("READONLY_" + stage + "_EXEC_STOP") from None
+    need(r.returncode == 0, "READONLY_" + stage + "_EXIT_STOP")
+    need(len(r.stdout) <= 512_000, "READONLY_" + stage + "_OUTPUT_BOUND_STOP")
     return r.stdout
 
 
@@ -186,10 +192,10 @@ def run():
     guest_preflight()
     installed = metadata_names(read_command((
         "systemctl", "list-unit-files", "--type=service", "--type=timer",
-        "--no-legend", "--no-pager")))
+        "--no-legend", "--no-pager"), stage="UNIT_FILES"))
     live = metadata_names(read_command((
         "systemctl", "list-units", "--all", "--type=service", "--type=timer",
-        "--no-legend", "--no-pager")), active=True)
+        "--no-legend", "--no-pager"), stage="LIVE_UNITS"), active=True)
     report = {**analyze_units(installed, live),
               **process_witness(), **cron_presence()}
     for key in sorted(report):
