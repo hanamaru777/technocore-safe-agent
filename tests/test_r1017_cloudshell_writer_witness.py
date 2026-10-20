@@ -18,9 +18,9 @@ SPEC.loader.exec_module(m)
 
 @pytest.fixture(autouse=True)
 def _provide_posix_euid_on_windows(monkeypatch):
-    monkeypatch.setattr(m.os, "geteuid", lambda: 0, raising=False)
     if os.name != "nt":
         return
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0, raising=False)
     native_lstat = m.os.lstat
 
     def posix_lstat(path):
