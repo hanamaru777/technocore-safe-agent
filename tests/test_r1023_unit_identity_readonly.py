@@ -55,7 +55,7 @@ def test_unknown_identity_safe_allowlist_or_digest():
     "x.service enabled\nx.service disabled\n", "x.service unexpected\n",
     "x.service\n", "not-unit enabled\n", "x" * (m.MAX_INPUT + 1),
     "x.service enabled\n" * (m.MAX_LINES + 1),
-])
+], ids=["duplicate", "bad-state", "missing-state", "bad-name", "byte-bound", "line-bound"])
 def test_malformed_duplicate_and_oversized_metadata_rejected(raw):
     with pytest.raises(m.Stop):
         m.metadata_names(raw)
