@@ -150,7 +150,7 @@ def bounded_invoke(source, *, executor=subprocess.run):
         if result.returncode == 42 and isinstance(result.stdout, bytes):
             # The guest prints one literal error code, never credentials.
             match = re.fullmatch(
-                rb"FLOP_R1016_STOP=([A-Z0-9_]{3,56})\\r?\\n?",
+                rb"FLOP_R1016_STOP=([A-Z0-9_]{3,56})\r?\n?",
                 result.stdout,
             )
             if match:
