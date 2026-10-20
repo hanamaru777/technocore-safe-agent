@@ -23,6 +23,7 @@ class Feed(io.BytesIO):
 @pytest.fixture
 def storage(tmp_path, monkeypatch):
     monkeypatch.setattr(m.os, "isatty", lambda unused: False)
+    monkeypatch.setattr(m, "receiver_host_guard", lambda: None)
     # GitHub ephemeral runner does not have K137's real 20GiB free-space floor.
     # Production ENFORCEMENT is tested in a separate synthetic pressure case.
     monkeypatch.setattr(m, "enough_space", lambda d, n, f: None)
@@ -171,6 +172,47 @@ def test_disk_floor_fail_closed_when_free_space_would_cross_reserve(monkeypatch)
     with pytest.raises(m.Stop, match="DISK_FLOOR_MINIMUM_STOP"):
         m.receive_stream(io.BytesIO(b""), Path("/tmp/dummy"),
                          floor=m.FLOOR_BYTES - 1)
+
+
+def test_receiver_refuses_missing_or_symlinked_k137_markers(monkeypatch):
+    monkeypatch.setattr(m.os, "geteuid", lambda: 10001)
+    original_lstat = os.lstat
+    names = ("/opt/tradebot-k137-private", "/opt/flop-shadow")
+    for missing in names:
+        with monkeypatch.context() as patch:
+            def fake_lstat(path, *a, **kw):
+                if str(path) == missing:
+                    raise FileNotFoundError()
+                if str(path) in names:
+                    return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700)
+                return original_lstat(path, *a, **kw)
+            patch.setattr(m.os, "lstat", fake_lstat)
+            with pytest.raises(m.Stop, match="K137_REQUIRED_MARKER_STOP"):
+                m.receiver_host_guard()
+    with monkeypatch.context() as patch:
+        def fake_symlink(path, *a, **kw):
+            if str(path) in names:
+                return SimpleNamespace(st_mode=stat.S_IFLNK | 0o777)
+            return original_lstat(path, *a, **kw)
+        patch.setattr(m.os, "lstat", fake_symlink)
+        with pytest.raises(m.Stop, match="K137_REQUIRED_MARKER_STOP"):
+            m.receiver_host_guard()
+
+
+def test_receiver_refuses_original_oracle_runtime_even_with_markers(monkeypatch):
+    monkeypatch.setattr(m.os, "geteuid", lambda: 10001)
+    original_lstat = os.lstat
+    original_exists = m.Path.exists
+    with monkeypatch.context() as patch:
+        patch.setattr(m.os, "lstat", lambda path, *a, **kw:
+                      SimpleNamespace(st_mode=stat.S_IFDIR | 0o700)
+                      if str(path) in ("/opt/tradebot-k137-private", "/opt/flop-shadow")
+                      else original_lstat(path, *a, **kw))
+        patch.setattr(m.Path, "exists", lambda self:
+                      True if str(self) == "/opt/technocore-safe-agent"
+                      else original_exists(self))
+        with pytest.raises(m.Stop, match="ORIGINAL_OCI_RUNTIME_REFUSED"):
+            m.receiver_host_guard()
 
 
 def test_no_network_shell_mutation_or_live_service_calls():

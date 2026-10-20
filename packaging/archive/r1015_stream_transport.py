@@ -178,6 +178,20 @@ def enough_space(dirfd, amount, floor):
     need(st.f_bavail * st.f_frsize - amount >= floor, "DISK_FLOOR_STOP")
 
 
+def receiver_host_guard():
+    """Marker-only host guard; NOT cryptographic instance identity attestation."""
+    need(sys.platform == "linux" and os.geteuid() != 0,
+         "LINUX_NONROOT_RECEIVER_ONLY")
+    for marker in ("/opt/tradebot-k137-private", "/opt/flop-shadow"):
+        try:
+            info = os.lstat(marker)
+        except OSError:
+            raise Stop("K137_REQUIRED_MARKER_STOP") from None
+        need(stat.S_ISDIR(info.st_mode), "K137_REQUIRED_MARKER_STOP")
+    need(not Path("/opt/technocore-safe-agent").exists(),
+         "ORIGINAL_OCI_RUNTIME_REFUSED")
+
+
 def receive_stream(source, dest, *, floor=FLOOR_BYTES):
     """Store untrusted ciphertext as a new, bounded, all-or-nothing *claim*.
 
@@ -185,8 +199,7 @@ def receive_stream(source, dest, *, floor=FLOOR_BYTES):
     verify R1001 plaintext and commit independently on a different machine.
     On failure partial ciphertext remains QUARANTINED; it is never committed.
     """
-    need(sys.platform == "linux" and os.geteuid() != 0,
-         "LINUX_NONROOT_RECEIVER_ONLY")
+    receiver_host_guard()
     need(floor >= FLOOR_BYTES, "DISK_FLOOR_MINIMUM_STOP")
     need(exact(source, len(MAGIC)) == MAGIC, "WIRE_MAGIC_STOP")
     kind, hdr = read_packet(source)
