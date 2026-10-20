@@ -65,7 +65,8 @@ def test_guest_pin_mismatch_fails_before_scanning(monkeypatch, tmp_path):
     state.mkdir()
     monkeypatch.setattr(m, "ROOT", source)
     monkeypatch.setattr(m, "STATE", state)
-    monkeypatch.setattr(m.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(m.sys, "platform", "linux")
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(m, "read_command", lambda args: "changed-head")
     with pytest.raises(m.Stop, match="ORIGINAL_HEAD_MISMATCH_STOP"):
         m.guest_preflight()
@@ -86,12 +87,42 @@ def test_proc_metadata_counts_manual_processes_without_printing_arguments(tmp_pa
     r = m.process_witness(proc)
     assert r["candidate_flop_processes"] == 2
     assert r["unscoped_or_raced_processes"] == 1
+    assert r["oversized_cmdline_processes"] == 0
+    assert r["oversized_cgroup_processes"] == 0
     assert r["process_scan_racy"] is True
     assert "flop_agent" not in str(r)
 
 
+def test_oversized_process_metadata_is_unclassified_without_raw_output(tmp_path):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    oversized_cmd = proc / "40"
+    oversized_cmd.mkdir()
+    (oversized_cmd / "cmdline").write_bytes(b"x" * (m.MAX_CMDLINE + 1))
+    (oversized_cmd / "cgroup").write_bytes(b"unused")
+    oversized_cgroup = proc / "50"
+    oversized_cgroup.mkdir()
+    (oversized_cgroup / "cmdline").write_bytes(
+        b"python\x00-m\x00flop_agent.oracle_signer"
+    )
+    (oversized_cgroup / "cgroup").write_bytes(b"y" * (m.MAX_CGROUP + 1))
+
+    result = m.process_witness(proc)
+
+    assert result == {
+        "candidate_flop_processes": 1,
+        "unscoped_or_raced_processes": 2,
+        "oversized_cmdline_processes": 1,
+        "oversized_cgroup_processes": 1,
+        "process_scan_racy": True,
+    }
+    assert "40" not in str(result)
+    assert "50" not in str(result)
+    assert "flop_agent" not in str(result)
+
+
 def test_readonly_no_host_side_effect_primitive_and_no_approval():
-    raw = SCRIPT.read_text()
+    raw = SCRIPT.read_text(encoding="utf-8")
     compile(raw, str(SCRIPT), "exec")
     for denied in ("systemctl stop", "systemctl disable", "systemctl mask",
                    "os.unlink(", "os.remove(", ".write_text(", ".write_bytes(",

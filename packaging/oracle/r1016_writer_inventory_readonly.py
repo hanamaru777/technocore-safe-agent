@@ -39,6 +39,7 @@ EXPECTED = frozenset(PREFIX + item for item in UNIT_SOURCES)
 MAX_LIST_LINES = 8000
 MAX_PROCESS_IDS = 4096
 MAX_CMDLINE = 4096
+MAX_CGROUP = 8192
 STOP_TAG = "FLOP_R1016_STOP="
 
 
@@ -139,19 +140,27 @@ def process_witness(proc=Path("/proc")):
     except OSError:
         raise Stop("PROC_ACCESS_STOP") from None
     need(len(names) <= MAX_PROCESS_IDS, "PROC_COUNT_BOUND_STOP")
-    seen = unknown = 0
+    seen = unknown = oversized_cmdline = oversized_cgroup = 0
     for path in names:
         try:
             # Read no environment, no file descriptors and no user data.
             with (path / "cmdline").open("rb") as f:
                 cmd = f.read(MAX_CMDLINE + 1)
-            need(len(cmd) <= MAX_CMDLINE, "CMDLINE_BOUND_STOP")
+            if len(cmd) > MAX_CMDLINE:
+                # The bounded prefix is insufficient to classify this process.
+                # Count it conservatively without printing PID or raw metadata.
+                oversized_cmdline += 1
+                unknown += 1
+                continue
             if not (b"flop_agent" in cmd or b"technocore-safe-agent" in cmd):
                 continue
             seen += 1
             with (path / "cgroup").open("rb") as f:
-                cg = f.read(8193)
-            need(len(cg) <= 8192, "CGROUP_BOUND_STOP")
+                cg = f.read(MAX_CGROUP + 1)
+            if len(cg) > MAX_CGROUP:
+                oversized_cgroup += 1
+                unknown += 1
+                continue
             if b"technocore-safe-agent-" not in cg:
                 unknown += 1
         except (FileNotFoundError, ProcessLookupError, PermissionError):
@@ -159,6 +168,8 @@ def process_witness(proc=Path("/proc")):
             unknown += 1
     return {"candidate_flop_processes": seen,
             "unscoped_or_raced_processes": unknown,
+            "oversized_cmdline_processes": oversized_cmdline,
+            "oversized_cgroup_processes": oversized_cgroup,
             "process_scan_racy": True}
 
 
