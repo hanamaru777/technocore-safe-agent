@@ -185,4 +185,3 @@ if __name__ == "__main__":
         code = str(error) if isinstance(error, Stop) else "LOCAL_GUARD_STOP"
         print("FLOP_R1023_STOP=" + code)
         sys.exit(42)
-

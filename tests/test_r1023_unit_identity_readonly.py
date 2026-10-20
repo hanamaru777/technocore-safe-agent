@@ -90,4 +90,3 @@ def test_no_mutation_or_sensitive_read_primitives():
                       "systemctl disable", "systemctl mask", "sqlite3", "journalctl",
                       "os.environ", "/proc/", ".write_text(", ".write_bytes(", "urlopen"):
         assert forbidden not in raw
-
