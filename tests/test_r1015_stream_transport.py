@@ -169,6 +169,7 @@ def test_disk_floor_fail_closed_when_free_space_would_cross_reserve(monkeypatch)
                         lambda fd: SimpleNamespace(f_bavail=100, f_frsize=4096))
     with pytest.raises(m.Stop, match="DISK_FLOOR_STOP"):
         m.enough_space(1, 1, m.FLOOR_BYTES)
+    monkeypatch.setattr(m, "receiver_host_guard", lambda: None)
     with pytest.raises(m.Stop, match="DISK_FLOOR_MINIMUM_STOP"):
         m.receive_stream(io.BytesIO(b""), Path("/tmp/dummy"),
                          floor=m.FLOOR_BYTES - 1)
