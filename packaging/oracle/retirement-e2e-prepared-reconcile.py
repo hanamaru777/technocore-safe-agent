@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import pwd
 import stat
@@ -116,6 +117,11 @@ def report(receipts, outbox, nonces, did):
             "COUNTER_LIMIT_STOP")
     return summary
 
+def valid_receipt_hash(value):
+    """Require complete, canonical SHA-256 shape, not empty defaults."""
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
 def pairing(receipts, outbox, nonces, did):
     """Assess identity/state congruence; print no sensitive keys or data."""
     summary = report(receipts, outbox, nonces, did)
@@ -133,14 +139,13 @@ def pairing(receipts, outbox, nonces, did):
     receipt_hash_match = ack_keys_match and all(
         isinstance(acknowledged.get(key), dict)
         and isinstance(entries.get(key), dict)
-        and hmac.compare_digest(
-            str(signer[key].get("receipt_hash", "")),
-            str(acknowledged[key].get("receipt_hash", ""))
-        )
-        and hmac.compare_digest(
-            str(signer[key].get("receipt_hash", "")),
-            str(entries[key].get("receipt_hash", ""))
-        )
+        and all(valid_receipt_hash(row.get("receipt_hash")) for row in (
+            signer[key], acknowledged[key], entries[key]
+        ))
+        and hmac.compare_digest(signer[key]["receipt_hash"],
+                                acknowledged[key]["receipt_hash"])
+        and hmac.compare_digest(signer[key]["receipt_hash"],
+                                entries[key]["receipt_hash"])
         for key in signer_acked
     )
 

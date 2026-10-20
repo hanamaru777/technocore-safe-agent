@@ -91,6 +91,39 @@ def test_acknowledged_ids_and_hashes_must_match():
     data[1]["outbox"]["ack-id"]["receipt_hash"] = "c" * 64
     assert not m.pairing(*data)["ack_ids_consistent"]
 
+def test_missing_acknowledged_hash_never_passes_even_when_ids_equal():
+    # Previously three missing strings compared equal and reported a false PASS.
+    for record in ("signer", "outbox", "acknowledged"):
+        m = load()
+        data = list(fixture())
+        if record == "signer":
+            target = data[0]["receipts"]["ack-id"]
+        elif record == "outbox":
+            target = data[1]["outbox"]["ack-id"]
+        else:
+            target = data[1]["receipts"]["ack-id"]
+        del target["receipt_hash"]
+        assert m.pairing(*data)["ack_ids_consistent"] is False
+
+    m = load()
+    data = list(fixture())
+    del data[0]["receipts"]["ack-id"]["receipt_hash"]
+    del data[1]["outbox"]["ack-id"]["receipt_hash"]
+    del data[1]["receipts"]["ack-id"]["receipt_hash"]
+    assert m.pairing(*data)["ack_ids_consistent"] is False
+
+
+def test_blank_non_hex_or_non_string_receipt_hash_rejected():
+    m = load()
+    for value in ("", "not-hex", "g" * 64, "A" * 64, None, 123):
+        data = list(fixture())
+        for record in (data[0]["receipts"]["ack-id"],
+                       data[1]["outbox"]["ack-id"],
+                       data[1]["receipts"]["ack-id"]):
+            record["receipt_hash"] = value
+        assert m.pairing(*data)["ack_ids_consistent"] is False
+
+
 def test_live_scope_no_service_mutation_no_large_file_reads():
     s = SRC.read_text()
     compile(s, str(SRC), "exec")
