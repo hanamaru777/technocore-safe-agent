@@ -36,8 +36,16 @@ def require(value: bool, reason: str) -> None:
 def live_host_refusal() -> None:
     require(sys.platform.startswith("linux") and os.geteuid() != 0,
             "OFFHOST_NONROOT_LINUX_REQUIRED")
-    require(not Path("/opt/technocore-safe-agent").exists() and
-            not Path("/opt/tradebot-k137").exists(), "LIVE_HOST_FORBIDDEN")
+    # Existing protected K137 uses tradebot-k137-private, not the legacy
+    # tradebot-k137 path. Its disarmed FLOP shadow is also a live-host marker.
+    protected = (
+        "/opt/technocore-safe-agent",
+        "/opt/tradebot-k137",
+        "/opt/tradebot-k137-private",
+        "/opt/flop-shadow",
+    )
+    require(not any(Path(path).exists() for path in protected),
+            "LIVE_HOST_FORBIDDEN")
 
 
 def opened_dir(path: Path) -> int:

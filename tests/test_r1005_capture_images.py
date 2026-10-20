@@ -169,6 +169,17 @@ def test_live_host_and_root_guard():
             m.live_host_refusal()
 
 
+def test_refuse_actual_protected_k137_and_flop_shadow_paths(monkeypatch):
+    m = load()
+    # This is an offline guard test; it creates no /opt paths or host changes.
+    monkeypatch.setattr(m.os, "geteuid", lambda: 10001)
+    for marker in ("/opt/tradebot-k137-private", "/opt/flop-shadow"):
+        with monkeypatch.context() as patch:
+            patch.setattr(m.Path, "exists", lambda self: str(self) == marker)
+            with pytest.raises(m.Stop, match="LIVE_HOST_FORBIDDEN"):
+                m.live_host_refusal()
+
+
 def test_no_content_value_returned(images):
     m = load()
     fd = m.opened_dir(images)
