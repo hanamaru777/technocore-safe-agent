@@ -67,21 +67,59 @@ def test_guest_scope_pin_rejected_before_systemd(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "ROOT", tmp_path)
     monkeypatch.setattr(m, "STATE", tmp_path)
     calls = []
-    monkeypatch.setattr(m, "read_command", lambda args: calls.append(args) or "wrong")
+    monkeypatch.setattr(m, "read_command", lambda args, stage: calls.append((args, stage)) or "wrong")
     with pytest.raises(m.Stop, match="ORIGINAL_HEAD_MISMATCH_STOP"):
         m.guest_preflight()
-    assert len(calls) == 1 and calls[0][0] == "git"
+    assert len(calls) == 1 and calls[0][0][0] == "git" and calls[0][1] == "HEAD"
 
 
 def test_run_only_fixed_metadata_commands(monkeypatch, capsys):
     monkeypatch.setattr(m, "guest_preflight", lambda: None)
     calls = []
-    monkeypatch.setattr(m, "read_command", lambda args: calls.append(args) or "")
+    monkeypatch.setattr(m, "read_command", lambda args, stage: calls.append((args, stage)) or "")
     m.run()
     output = capsys.readouterr().out
     assert len(calls) == 2
-    assert all(args[:2] in (("systemctl", "list-unit-files"), ("systemctl", "list-units")) for args in calls)
+    assert {stage for _, stage in calls} == {"UNIT_FILES", "LIVE_UNITS"}
+    assert all(args[:2] in (("systemctl", "list-unit-files"), ("systemctl", "list-units")) for args, _ in calls)
     assert "STRICT_NO_GO" in output and "process_enumeration_complete" in output
+
+
+@pytest.mark.parametrize(("stage", "failure", "code"), (
+    ("HEAD", "timeout", "READONLY_HEAD_TIMEOUT_STOP"),
+    ("HEAD", "exit", "READONLY_HEAD_EXIT_STOP"),
+    ("UNIT_FILES", "exec", "READONLY_UNIT_FILES_EXEC_STOP"),
+    ("UNIT_FILES", "oversize", "READONLY_UNIT_FILES_OUTPUT_BOUND_STOP"),
+    ("LIVE_UNITS", "timeout", "READONLY_LIVE_UNITS_TIMEOUT_STOP"),
+    ("LIVE_UNITS", "exit", "READONLY_LIVE_UNITS_EXIT_STOP"),
+    ("LIVE_UNITS", "encoding", "READONLY_LIVE_UNITS_ENCODING_STOP"),
+))
+def test_readonly_command_stages_are_diagnostic_without_raw_data(
+        monkeypatch, stage, failure, code):
+    def fake_run(args, **kwargs):
+        if failure == "timeout":
+            raise m.subprocess.TimeoutExpired(cmd=args, timeout=10)
+        if failure == "exec":
+            raise OSError("synthetic private error")
+        if failure == "exit":
+            return type("Completed", (), {"returncode": 1, "stdout": b"SECRET"})()
+        if failure == "oversize":
+            return type("Completed", (), {
+                "returncode": 0, "stdout": b"x" * (m.MAX_INPUT + 1)})()
+        return type("Completed", (), {"returncode": 0, "stdout": bytes([255])})()
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    with pytest.raises(m.Stop, match=code) as caught:
+        m.read_command(("git",), stage=stage)
+    assert "SECRET" not in str(caught.value)
+    assert "private" not in str(caught.value)
+
+
+def test_invalid_command_stage_fails_before_any_subprocess(monkeypatch):
+    def no_execution(*args, **kwargs):
+        raise AssertionError("unexpected subprocess")
+    monkeypatch.setattr(m.subprocess, "run", no_execution)
+    with pytest.raises(m.Stop, match="READONLY_STAGE_INVALID_STOP"):
+        m.read_command(("synthetic",), stage="UNTRUSTED")
 
 
 def test_no_mutation_or_sensitive_read_primitives():

@@ -63,17 +63,22 @@ def need(ok, code):
         raise Stop(code)
 
 
-def read_command(args):
+def read_command(args, *, stage):
+    # Only these fixed, source-owned stage names may appear in public STOP codes.
+    need(stage in ("HEAD", "UNIT_FILES", "LIVE_UNITS"), "READONLY_STAGE_INVALID_STOP")
     try:
         result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 check=False, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        raise Stop("READONLY_COMMAND_STOP") from None
-    need(result.returncode == 0 and len(result.stdout) <= MAX_INPUT, "READONLY_COMMAND_STOP")
+    except subprocess.TimeoutExpired:
+        raise Stop("READONLY_" + stage + "_TIMEOUT_STOP") from None
+    except OSError:
+        raise Stop("READONLY_" + stage + "_EXEC_STOP") from None
+    need(result.returncode == 0, "READONLY_" + stage + "_EXIT_STOP")
+    need(len(result.stdout) <= MAX_INPUT, "READONLY_" + stage + "_OUTPUT_BOUND_STOP")
     try:
         return result.stdout.decode("utf-8", "strict")
     except UnicodeError:
-        raise Stop("METADATA_ENCODING_STOP") from None
+        raise Stop("READONLY_" + stage + "_ENCODING_STOP") from None
 
 
 def guest_preflight():
@@ -85,7 +90,7 @@ def guest_preflight():
         mode = os.lstat(path).st_mode
         need(stat.S_ISDIR(mode) and not stat.S_ISLNK(mode), "ROOT_TYPE_STOP")
     head = read_command(("git", "-c", f"safe.directory={ROOT}", "-C", str(ROOT),
-                         "rev-parse", "--verify", "HEAD"))
+                         "rev-parse", "--verify", "HEAD"), stage="HEAD")
     need(head.strip() == ORIGINAL_HEAD, "ORIGINAL_HEAD_MISMATCH_STOP")
 
 
@@ -172,9 +177,9 @@ def render(report):
 def run():
     guest_preflight()
     installed = metadata_names(read_command(("systemctl", "list-unit-files",
-        "--type=service", "--type=timer", "--no-legend", "--no-pager")))
+        "--type=service", "--type=timer", "--no-legend", "--no-pager"), stage="UNIT_FILES"))
     live = metadata_names(read_command(("systemctl", "list-units", "--all",
-        "--type=service", "--type=timer", "--no-legend", "--no-pager")), live=True)
+        "--type=service", "--type=timer", "--no-legend", "--no-pager"), stage="LIVE_UNITS"), live=True)
     print(render(analyze_units(installed, live)), end="")
 
 
