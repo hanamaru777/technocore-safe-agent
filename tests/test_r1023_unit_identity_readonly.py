@@ -114,6 +114,13 @@ def test_readonly_command_stages_are_diagnostic_without_raw_data(
     assert "private" not in str(caught.value)
 
 
+def test_successful_readonly_command_is_not_reclassified_as_failure(monkeypatch):
+    def fake_run(args, **kwargs):
+        return type("Completed", (), {"returncode": 0, "stdout": b"safe-output"})()
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+    assert m.read_command(("synthetic",), stage="UNIT_FILES") == "safe-output"
+
+
 def test_invalid_command_stage_fails_before_any_subprocess(monkeypatch):
     def no_execution(*args, **kwargs):
         raise AssertionError("unexpected subprocess")
