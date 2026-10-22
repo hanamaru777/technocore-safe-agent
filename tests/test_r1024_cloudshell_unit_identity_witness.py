@@ -41,7 +41,7 @@ def encoded(value):
 
 def test_commit_blob_and_download_pin():
     content = source()
-    assert m.COMMIT == "b676c925bc86e74c38f3fa13314f82d0b23c89cf"
+    assert m.COMMIT == "1983c9893f05a7b7769d04ba5c5d321428c7ea3d"
     assert hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest() == m.BLOB_SHA
     def fetch(url, timeout):
         assert m.COMMIT in url and url.endswith("/r1023_unit_identity_readonly.py")
@@ -134,6 +134,10 @@ def test_safe_guest_stop_and_no_raw_output(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(m.Path, "home", staticmethod(lambda: tmp_path))
     monkeypatch.setattr(m, "private_custody", lambda *args, **kwargs: None)
     for payload, expected in ((b"FLOP_R1023_STOP=WRONG_GUEST_SCOPE\n", "ORIGINAL_GUEST_WRONG_GUEST_SCOPE"),
+                              (b"FLOP_R1023_STOP=READONLY_UNIT_FILES_EXIT_STOP\n",
+                               "ORIGINAL_GUEST_READONLY_UNIT_FILES_EXIT_STOP"),
+                              (b"FLOP_R1023_STOP=READONLY_LIVE_UNITS_TIMEOUT_STOP\n",
+                               "ORIGINAL_GUEST_READONLY_LIVE_UNITS_TIMEOUT_STOP"),
                               (b"synthetic-secret-raw-data", "PINNED_GUEST_COMMAND_EXIT_STOP")):
         with pytest.raises(m.Stop, match=expected):
             m.bounded_invoke(source(), executor=lambda *args, **kwargs:

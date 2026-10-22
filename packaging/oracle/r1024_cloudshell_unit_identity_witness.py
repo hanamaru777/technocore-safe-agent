@@ -18,8 +18,8 @@ import subprocess
 import sys
 import urllib.request
 
-COMMIT = "b676c925bc86e74c38f3fa13314f82d0b23c89cf"
-BLOB_SHA = "40b4518aa587ed799d1ccc1ed73e03a9ecaaf817"
+COMMIT = "1983c9893f05a7b7769d04ba5c5d321428c7ea3d"
+BLOB_SHA = "937039a7c136b409f46573abcc1982ba5023ae66"
 PROBE_URL = ("https://raw.githubusercontent.com/"
              "hanamaru777/technocore-safe-agent/" + COMMIT +
              "/packaging/oracle/r1023_unit_identity_readonly.py")
