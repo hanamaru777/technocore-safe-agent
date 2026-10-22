@@ -226,3 +226,16 @@ jobs:
             throw 'keypair mismatch'
           }
           Write-Host 'WINDOWS_PS51_CI_KEYGEN_REGRESSION=PASS'
+
+      - name: Set up Python for synthetic R1027 regression
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test R1027 escrow and read-only transport with synthetic data
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check pytest "cryptography>=45,<51"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q tests/test_r1027_windows_escrow_readonly.py
+          exit $LASTEXITCODE
