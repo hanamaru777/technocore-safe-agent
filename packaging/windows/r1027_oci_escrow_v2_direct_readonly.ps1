@@ -27,19 +27,20 @@ namespace FlopR1027 {
         public const string EXPECTED_SHA256 = "8dae15bf339e54ece1a23b7c78fdcb43a5adb0534b01064fe44d5713c9d96301";
         public const string GuestCommit = "1983c9893f05a7b7769d04ba5c5d321428c7ea3d";
         public const string GuestBlob = "937039a7c136b409f46573abcc1982ba5023ae66";
+        public const string GuestRouteBlob = "b4a9387eaca5e51213c94cfd03c29d8227cc9768";
         public const string OriginalHead = "ec4bc4892d40cdd2a03e102faa44d72c89e01b99";
         static void Need(bool ok) { if (!ok) throw new InvalidOperationException("R1027_GUARD"); }
         public static void Clear(byte[] value) { if (value != null) Array.Clear(value, 0, value.Length); }
         public static string Sha256(byte[] data) {
             using (var hash = SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
         }
-        public static void VerifySource(byte[] source) {
+        public static void VerifySource(byte[] source, string expected = GuestBlob) {
             Need(source != null && source.Length > 0 && source.Length <= 32768);
             byte[] prefix = Encoding.ASCII.GetBytes("blob " + source.Length + "\0");
             using (var hash = SHA1.Create()) {
                 hash.TransformBlock(prefix, 0, prefix.Length, prefix, 0);
                 hash.TransformFinalBlock(source, 0, source.Length);
-                Need(BitConverter.ToString(hash.Hash).Replace("-", "").ToLowerInvariant() == GuestBlob);
+                Need(BitConverter.ToString(hash.Hash).Replace("-", "").ToLowerInvariant() == expected);
             }
         }
         static byte[] Derive(byte[] password, byte[] salt) {
@@ -223,6 +224,74 @@ namespace FlopR1027 {
                 for (int i = 0; i < array.Length; i++) result[i] = Ordered(array[i]); return result; }
             return value;
         }
+        public static string ValidateRoutes(byte[] raw) {
+            Need(raw != null && raw.Length > 0 && raw.Length <= 16384);
+            foreach (byte b in raw) Need((b >= 32 && b <= 126) || b == 10);
+            string txt = Encoding.ASCII.GetString(raw);
+            var serial = new JavaScriptSerializer { MaxJsonLength = 16384, RecursionLimit = 8 };
+            var doc = Dict(serial.DeserializeObject(txt),
+                new string[] { "schema_version", "original_head", "units", "cron", "processes", "flags" });
+            Need(doc["schema_version"] is int && (int)doc["schema_version"] == 2);
+            Need(doc["original_head"] is string && (string)doc["original_head"] == OriginalHead);
+            string[] names = new string[] {
+                "technocore-safe-agent-close1-discord-activation.service",
+                "technocore-safe-agent-close1-discord-activation.timer",
+                "technocore-safe-agent-close1-standalone-watch.timer",
+                "technocore-safe-agent-postreboot-check.service" };
+            var units = doc["units"] as object[]; Need(units != null && units.Length == 4);
+            for (int i = 0; i < units.Length; i++) {
+                var row = Dict(units[i], new string[] {
+                    "identity", "active", "installed", "load", "command_kind", "fragment_origin" });
+                Need(row["identity"] is string && (string)row["identity"] == names[i]);
+                Need(row["active"] is string && new string[] {
+                    "active","inactive","activating","deactivating","failed","reloading"
+                }.Contains((string)row["active"]));
+                Need(row["load"] is string && new string[] {
+                    "loaded","not-found","masked","error","bad-setting"
+                }.Contains((string)row["load"]));
+                Need(row["installed"] is string && new string[] {
+                    "enabled","enabled-runtime","disabled","indirect","static","masked",
+                    "masked-runtime","linked","linked-runtime","generated","alias","bad","transient",""
+                }.Contains((string)row["installed"]));
+                Need(row["command_kind"] is string && new string[] {
+                    "NO_EXEC","FLOP_PYTHON","SHELL","OTHER_UNVERIFIED"
+                }.Contains((string)row["command_kind"]));
+                Need(row["fragment_origin"] is string && new string[] {
+                    "ETC_SYSTEMD","NO_FRAGMENT","OTHER_UNVERIFIED"
+                }.Contains((string)row["fragment_origin"]));
+            }
+            var cron = Dict(doc["cron"], new string[] {
+                "cron_regular_files_read", "cron_flop_matching_lines",
+                "cron_unverified_entries", "cron_scan_complete" });
+            foreach (string key in new string[] { "cron_regular_files_read",
+                        "cron_flop_matching_lines", "cron_unverified_entries" }) {
+                Need(cron[key] is int && (int)cron[key] >= 0 && (int)cron[key] <= 8192);
+            }
+            Need(cron["cron_scan_complete"] is bool && !(bool)cron["cron_scan_complete"]);
+            var proc = Dict(doc["processes"], new string[] {
+                "matching_processes", "cgroup_inspected_candidates",
+                "unknown_or_raced_processes", "process_scan_complete" });
+            foreach (string key in new string[] { "matching_processes",
+                        "cgroup_inspected_candidates", "unknown_or_raced_processes" }) {
+                Need(proc[key] is int && (int)proc[key] >= 0 && (int)proc[key] <= 4096);
+            }
+            Need((int)proc["cgroup_inspected_candidates"] <= (int)proc["matching_processes"]);
+            Need(proc["process_scan_complete"] is bool && !(bool)proc["process_scan_complete"]);
+            var flags = Dict(doc["flags"], new string[] {
+                "original_source_pin", "no_service_or_state_modification",
+                "process_and_cron_discovery_complete", "all_writers_fenced",
+                "signer_inflight_post_resolved", "capture_common_epoch_proven", "oci_retirement" });
+            foreach (string key in flags.Keys) {
+                string expected = key == "original_source_pin" ? "PASS" :
+                    (key == "no_service_or_state_modification" ? "YES" :
+                    (key == "oci_retirement" ? "STRICT_NO_GO" : "NO"));
+                Need(flags[key] is string && (string)flags[key] == expected);
+            }
+            string canonical = serial.Serialize(Ordered(doc)) + "\n";
+            Need(txt == canonical);
+            return canonical.TrimEnd('\n');
+        }
+
         public static string ValidateReport(byte[] raw) {
             Need(raw != null && raw.Length > 0 && raw.Length <= 65536);
             foreach (byte b in raw) Need(b >= 32 && b <= 126 || b == 10);
@@ -377,8 +446,12 @@ function Get-R1027SshArguments([string]$Key, [string]$KnownHosts) {
         'ubuntu@140.238.55.171', 'sudo -n /usr/bin/python3 -')
 }
 
-function Get-R1027Source {
-    $url = 'https://raw.githubusercontent.com/hanamaru777/technocore-safe-agent/1983c9893f05a7b7769d04ba5c5d321428c7ea3d/packaging/oracle/r1023_unit_identity_readonly.py'
+function Get-R1027Source([bool]$RouteProbe = $false) {
+    $url = if ($RouteProbe) {
+        'https://raw.githubusercontent.com/hanamaru777/technocore-safe-agent/3fcf5324f2b88cff6c08204bb48f142728993d7e/packaging/oracle/r1036_writer_routes_readonly.py'
+    } else {
+        'https://raw.githubusercontent.com/hanamaru777/technocore-safe-agent/1983c9893f05a7b7769d04ba5c5d321428c7ea3d/packaging/oracle/r1023_unit_identity_readonly.py'
+    }
     $priorTls = [Net.ServicePointManager]::SecurityProtocol
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $request = [Net.HttpWebRequest]::Create($url)
@@ -398,7 +471,8 @@ function Get-R1027Source {
             $memory.Write($buffer, 0, $count)
         }
         $bytes = $memory.ToArray()
-        [FlopR1027.Guards]::VerifySource($bytes)
+        if ($RouteProbe) { [FlopR1027.Guards]::VerifySource($bytes, [FlopR1027.Guards]::GuestRouteBlob) }
+        else { [FlopR1027.Guards]::VerifySource($bytes) }
         return ,$bytes
     } finally {
         if ($stream) { $stream.Dispose() }
@@ -483,7 +557,7 @@ function Get-R1027SshFailure([int]$ExitCode, [byte[]]$Output) {
     return 'GUEST_UNRECOGNIZED_STOP'
 }
 
-function Invoke-R1027 {
+function Invoke-R1027([bool]$RouteProbe = $false) {
     $ErrorActionPreference = 'Stop'
     $stage = 'PREFLIGHT_STOP'; $directory = $null; $plain = $null; $code = $null
     $encrypted = $null; $result = $null; $summary = $null; $ok = $false; $clean = $true
@@ -494,7 +568,7 @@ function Invoke-R1027 {
         $stage = 'BACKUP_HASH_STOP'
         $encrypted = Read-R1027Backup
         $stage = 'SOURCE_PIN_STOP'
-        $source = Get-R1027Source
+        $source = Get-R1027Source $RouteProbe
         $stage = 'DECRYPT_STOP'
         $code = Read-Host 'R987 V2 recovery code' -AsSecureString
         try { $plain = Unprotect-R1027 $encrypted $code }
@@ -508,11 +582,14 @@ function Invoke-R1027 {
         $arguments = Get-R1027SshArguments $key $context.Hosts
         $result = Invoke-R1027Ssh $context.Ssh $arguments $source
         if ($result.ExitCode -ne 0) {
-            $stage = Get-R1027SshFailure $result.ExitCode $result.Output
+            if ($RouteProbe -and $result.ExitCode -eq 42) { $stage = 'GUEST_ROUTE_GUARD_STOP' }
+            else { $stage = Get-R1027SshFailure $result.ExitCode $result.Output }
             throw 'REMOTE_NONZERO_STOP'
         }
         $stage = 'RESPONSE_STOP'
-        $summary = [FlopR1027.Guards]::ValidateReport($result.Output)
+        $summary = if ($RouteProbe) {
+            [FlopR1027.Guards]::ValidateRoutes($result.Output)
+        } else { [FlopR1027.Guards]::ValidateReport($result.Output) }
         $ok = $true
     } catch {
         # Never format the exception, native output, code, key, paths, or environment.
@@ -532,10 +609,17 @@ function Invoke-R1027 {
     if (-not $clean) { [Console]::WriteLine('FLOP_R1027_STOP=CLEANUP_STOP'); return }
     if (-not $ok) { [Console]::WriteLine('FLOP_R1027_STOP=' + $stage); return }
     [Console]::WriteLine($summary)
-    [Console]::WriteLine('FLOP_R1027_ALL_WRITERS_FENCED=NO')
-    [Console]::WriteLine('FLOP_R1027_OCI_RETIREMENT=STRICT_NO_GO')
-    [Console]::WriteLine('FLOP_R1027_READONLY=PASS')
+    if ($RouteProbe) {
+        [Console]::WriteLine('FLOP_R1036_ALL_WRITERS_FENCED=NO')
+        [Console]::WriteLine('FLOP_R1036_OCI_RETIREMENT=STRICT_NO_GO')
+        [Console]::WriteLine('FLOP_R1036_READONLY=PASS')
+    } else {
+        [Console]::WriteLine('FLOP_R1027_ALL_WRITERS_FENCED=NO')
+        [Console]::WriteLine('FLOP_R1027_OCI_RETIREMENT=STRICT_NO_GO')
+        [Console]::WriteLine('FLOP_R1027_READONLY=PASS')
+    }
 }
 
-if ($args.Count -ne 0) { [Console]::WriteLine('FLOP_R1027_STOP=ARGUMENTS_STOP') }
-else { Invoke-R1027 }
+if ($args.Count -eq 0) { Invoke-R1027 }
+elseif ($args.Count -eq 1 -and $args[0] -ceq '-R1036') { Invoke-R1027 $true }
+else { [Console]::WriteLine('FLOP_R1027_STOP=ARGUMENTS_STOP') }
