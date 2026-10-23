@@ -403,7 +403,7 @@ def test_r1036_pin_and_schema_reject_forgery(tmp_path):
     route = ROOT / "packaging/oracle/r1036_writer_routes_readonly.py"
     raw = route.read_bytes().replace(b"\r\n", b"\n")
     blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
-    assert blob == "b4a9387eaca5e51213c94cfd03c29d8227cc9768"
+    assert blob == "4921bfca59abed4cb744d0a0ca1c05c31291f877"
     canonical_route = tmp_path / "route-lf.py"
     canonical_route.write_bytes(raw)
     fixture = tmp_path / "route-public.json"
