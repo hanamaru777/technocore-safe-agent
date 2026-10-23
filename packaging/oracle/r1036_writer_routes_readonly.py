@@ -95,7 +95,7 @@ def unit_rows():
              "UNIT_STATE_STOP")
         need(fields["ActiveState"] in ("active", "inactive", "activating", "deactivating", "failed", "reloading"),
              "UNIT_STATE_STOP")
-        need(fields["UnitFileState"] in ("enabled", "disabled", "static", "masked", "linked", "transient", ""),
+        need(fields["UnitFileState"] in ("enabled", "enabled-runtime", "disabled", "indirect", "static", "masked", "masked-runtime", "linked", "linked-runtime", "generated", "alias", "bad", "transient", ""),
              "UNIT_STATE_STOP")
         command = fields["ExecStart"]
         need(len(command) <= 8192, "UNIT_COMMAND_BOUND_STOP")
@@ -119,9 +119,9 @@ def unit_rows():
                      "command_kind": kind, "fragment_origin": file_origin})
     return rows
 
-def bounded_cron():
+def bounded_cron(primary=Path("/etc/crontab"), directories=CRON_DIRS):
     candidates = []
-    for root in (Path("/etc/crontab"),) + CRON_DIRS:
+    for root in (primary,) + tuple(directories):
         try:
             info = os.lstat(root)
         except FileNotFoundError:
@@ -177,9 +177,9 @@ def bounded_cron():
     return {"cron_regular_files_read": scanned, "cron_flop_matching_lines": relevant,
             "cron_unverified_entries": uncertain, "cron_scan_complete": False}
 
-def bounded_processes():
+def bounded_processes(proc=Path("/proc")):
     try:
-        entries = [p for p in Path("/proc").iterdir() if p.name.isdecimal()]
+        entries = [p for p in proc.iterdir() if p.name.isdecimal()]
     except OSError:
         raise Stop("PROC_DIR_STOP") from None
     need(len(entries) <= MAX_PROC, "PROC_COUNT_STOP")
@@ -201,7 +201,7 @@ def bounded_processes():
             checked += 1
         except (OSError, ProcessLookupError):
             uncertain += 1
-    return {"matching_processes": candidates, "known_cgroup_candidates": checked,
+    return {"matching_processes": candidates, "cgroup_inspected_candidates": checked,
             "unknown_or_raced_processes": uncertain, "process_scan_complete": False}
 
 def run():
