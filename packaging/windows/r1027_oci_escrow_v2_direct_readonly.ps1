@@ -28,7 +28,7 @@ namespace FlopR1027 {
         public const string EXPECTED_SHA256 = "8dae15bf339e54ece1a23b7c78fdcb43a5adb0534b01064fe44d5713c9d96301";
         public const string GuestCommit = "1983c9893f05a7b7769d04ba5c5d321428c7ea3d";
         public const string GuestBlob = "937039a7c136b409f46573abcc1982ba5023ae66";
-        public const string GuestRouteBlob = "759090ef4f38b11464602fabb3a79e2286a4a782";
+        public const string GuestRouteBlob = "b4a9387eaca5e51213c94cfd03c29d8227cc9768";
         public const string OriginalHead = "ec4bc4892d40cdd2a03e102faa44d72c89e01b99";
         static void Need(bool ok) { if (!ok) throw new InvalidOperationException("R1027_GUARD"); }
         public static void Clear(byte[] value) { if (value != null) Array.Clear(value, 0, value.Length); }
