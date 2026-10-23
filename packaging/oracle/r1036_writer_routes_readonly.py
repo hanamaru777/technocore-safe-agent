@@ -89,7 +89,9 @@ def unit_rows():
             key, value = line.split("=", 1)
             need(key in UNIT_KEYS and key not in fields, "UNIT_SCHEMA_STOP")
             fields[key] = value
-        need(set(fields) == set(UNIT_KEYS) and fields["Id"] == name,
+        need((set(UNIT_KEYS) - {"ExecStart"}) <= set(fields)
+             and fields["Id"] == name
+             and (suffix.endswith(".timer") or "ExecStart" in fields),
              "UNIT_ID_STOP")
         need(fields["LoadState"] in ("loaded", "not-found", "masked", "error", "bad-setting"),
              "UNIT_STATE_STOP")
@@ -97,7 +99,7 @@ def unit_rows():
              "UNIT_STATE_STOP")
         need(fields["UnitFileState"] in ("enabled", "enabled-runtime", "disabled", "indirect", "static", "masked", "masked-runtime", "linked", "linked-runtime", "generated", "alias", "bad", "transient", ""),
              "UNIT_STATE_STOP")
-        command = fields["ExecStart"]
+        command = fields.get("ExecStart", "")
         need(len(command) <= 8192, "UNIT_COMMAND_BOUND_STOP")
         if not command:
             kind = "NO_EXEC"

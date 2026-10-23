@@ -163,3 +163,18 @@ def test_readonly_source_has_no_unsafe_primitives():
             assert bad not in raw
         else:
             assert bad not in raw
+
+
+def test_timer_without_service_only_exec_property(monkeypatch):
+    def fake(argv, stage):
+        name = argv[-1]
+        response = fixed_unit_output(name, installed="disabled")
+        if name.endswith(".timer"):
+            response = response.replace("ExecStart=\n", "")
+        return response
+    monkeypatch.setattr(m, "execute", fake)
+    report = m.unit_rows()
+    assert len(report) == 4
+    assert report[1]["command_kind"] == "NO_EXEC"
+    assert report[2]["command_kind"] == "NO_EXEC"
+    assert report[0]["command_kind"] == "NO_EXEC"
