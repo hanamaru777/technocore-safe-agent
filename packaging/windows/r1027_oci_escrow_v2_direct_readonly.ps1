@@ -304,6 +304,10 @@ function New-R1027Custody([string]$Directory) {
     $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
     $acl.AddAccessRule($rule)
     $null = [IO.Directory]::CreateDirectory($Directory, $acl)
+    # On elevated Windows tokens the initial owner can be Administrators
+    # even when the requested DACL is private. Explicitly normalize the
+    # owner to the CURRENT user before any key bytes are ever written.
+    [IO.Directory]::SetAccessControl($Directory, $acl)
     Assert-R1027Acl $Directory
 }
 
@@ -337,6 +341,11 @@ function Write-R1027Key([string]$Directory, [byte[]]$Bytes) {
     $path = Join-Path $Directory 'recovered-v2'
     $stream = New-Object IO.FileStream($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     try { $stream.Write($Bytes, 0, $Bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    # A child file can also acquire the token's default owner. Keep the
+    # inherited single-user DACL while enforcing explicit file ownership.
+    $fileAcl = [IO.File]::GetAccessControl($path)
+    $fileAcl.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)
+    [IO.File]::SetAccessControl($path, $fileAcl)
     Assert-R1027Acl $path
     return $path
 }
