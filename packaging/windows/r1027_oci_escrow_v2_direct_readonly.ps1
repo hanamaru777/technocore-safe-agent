@@ -9,6 +9,7 @@ function Initialize-R1027 {
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
