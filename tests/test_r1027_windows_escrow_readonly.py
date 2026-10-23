@@ -417,7 +417,7 @@ $valid = [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(fix
 if (-not $valid.Contains('STRICT_NO_GO')) {{ throw 'ROUTE_REJECT' }}
 $rejected = $false
 try {{
-    [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(bad)}) | Out-Null
+    [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(bad)})) | Out-Null
 }} catch {{ $rejected = $true }}
 if (-not $rejected) {{ throw 'ROUTE_FORGERY' }}
 [Console]::WriteLine('R1036_JSON=PASS')
