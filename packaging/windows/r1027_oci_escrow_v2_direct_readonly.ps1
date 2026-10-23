@@ -312,10 +312,24 @@ function Assert-R1027Acl([string]$Path) {
     if ([IO.Directory]::Exists($Path)) { $acl = [IO.Directory]::GetAccessControl($Path) }
     else { $acl = [IO.File]::GetAccessControl($Path) }
     if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { throw 'ACL_STOP' }
+    # Windows normalizes effective FullControl masks and may split same-user
+    # ACEs. Reject ANY other principal/deny ACE, not legitimate mask variations.
+    # The directory itself must remain protected from parent ACL inheritance.
+    if ([IO.Directory]::Exists($Path) -and -not $acl.AreAccessRulesProtected) { throw 'ACL_STOP' }
     $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
-    if ($rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid.Value -or
-        $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
-        $rules[0].FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl) { throw 'ACL_STOP' }
+    if ($rules.Count -lt 1) { throw 'ACL_STOP' }
+    $allowRead = $false
+    $allowWrite = $false
+    foreach ($rule in $rules) {
+        if ($rule.IdentityReference.Value -ne $sid.Value -or
+            $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) {
+            throw 'ACL_STOP'
+        }
+        $rights = [int]$rule.FileSystemRights
+        if (($rights -band [int][Security.AccessControl.FileSystemRights]::ReadData) -ne 0) { $allowRead = $true }
+        if (($rights -band [int][Security.AccessControl.FileSystemRights]::WriteData) -ne 0) { $allowWrite = $true }
+    }
+    if (-not ($allowRead -and $allowWrite)) { throw 'ACL_STOP' }
 }
 
 function Write-R1027Key([string]$Directory, [byte[]]$Bytes) {
