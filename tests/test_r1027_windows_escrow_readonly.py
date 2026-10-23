@@ -370,3 +370,98 @@ if ($rejected -ne 2) {{ throw 'BACKUP_REJECTION' }}
 [Console]::WriteLine('BACKUP_GUARDS=PASS')
 """)
     assert output.strip() == "BACKUP_GUARDS=PASS"
+
+
+def writer_route_report():
+    names = (
+        "technocore-safe-agent-close1-discord-activation.service",
+        "technocore-safe-agent-close1-discord-activation.timer",
+        "technocore-safe-agent-close1-standalone-watch.timer",
+        "technocore-safe-agent-postreboot-check.service",
+    )
+    units = [
+        dict(identity=name, active="inactive", installed="disabled",
+             load="loaded", command_kind="FLOP_PYTHON", fragment_origin="ETC_SYSTEMD")
+        for name in names
+    ]
+    return dict(
+        schema_version=2, original_head="ec4bc4892d40cdd2a03e102faa44d72c89e01b99",
+        units=units,
+        cron=dict(cron_regular_files_read=2, cron_flop_matching_lines=1,
+                  cron_unverified_entries=0, cron_scan_complete=False),
+        processes=dict(matching_processes=5, cgroup_inspected_candidates=5,
+                       unknown_or_raced_processes=1, process_scan_complete=False),
+        flags=dict(original_source_pin="PASS", no_service_or_state_modification="YES",
+                   process_and_cron_discovery_complete="NO", all_writers_fenced="NO",
+                   signer_inflight_post_resolved="NO", capture_common_epoch_proven="NO",
+                   oci_retirement="STRICT_NO_GO"),
+    )
+
+
+@WINDOWS
+def test_r1036_pin_and_schema_reject_forgery(tmp_path):
+    route = ROOT / "packaging/oracle/r1036_writer_routes_readonly.py"
+    raw = route.read_bytes()
+    blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+    assert blob == "b4a9387eaca5e51213c94cfd03c29d8227cc9768"
+    fixture = tmp_path / "route-public.json"
+    fixture.write_bytes(encoded(writer_route_report()))
+    forged = writer_route_report()
+    forged["units"][0]["command_kind"] = "PRIVATE_UNTRUSTED_COMMAND"
+    bad = tmp_path / "route-bad.json"
+    bad.write_bytes(encoded(forged))
+    output = ps_run(tmp_path, rf"""
+[FlopR1027.Guards]::VerifySource([IO.File]::ReadAllBytes({literal(route)}),
+    [FlopR1027.Guards]::GuestRouteBlob)
+$valid = [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(fixture)}))
+if (-not $valid.Contains('STRICT_NO_GO')) {{ throw 'ROUTE_REJECT' }}
+$rejected = $false
+try {{
+    [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(bad)}) | Out-Null
+}} catch {{ $rejected = $true }}
+if (-not $rejected) {{ throw 'ROUTE_FORGERY' }}
+[Console]::WriteLine('R1036_JSON=PASS')
+""")
+    assert output.strip() == "R1036_JSON=PASS"
+
+
+@WINDOWS
+@pytest.mark.parametrize(("exit_code", "expect"), [
+    (0, "FLOP_R1036_READONLY=PASS"),
+    (42, "FLOP_R1027_STOP=GUEST_ROUTE_GUARD_STOP"),
+    (255, "FLOP_R1027_STOP=SSH_TRANSPORT_OR_AUTH_STOP"),
+])
+def test_r1036_one_shot_mode_and_no_raw_error(tmp_path, exit_code, expect):
+    fixture = tmp_path / "route-public.json"
+    fixture.write_bytes(encoded(writer_route_report()))
+    output = ps_run(tmp_path, rf"""
+$script:calls = 0
+$script:clean = 0
+function Get-R1027Prerequisites {{ return @{{ Ssh='MOCK'; Hosts='MOCK' }} }}
+function Read-R1027Backup {{ return ,([byte[]]@(1,2,3)) }}
+function Get-R1027Source {{ param([bool]$RouteProbe)
+    if (-not $RouteProbe) {{ throw 'WRONG_ROUTE_MODE' }}
+    return ,([Text.Encoding]::ASCII.GetBytes('mock-guest')) }}
+function Read-Host {{ param($Prompt, [switch]$AsSecureString)
+    if (-not $AsSecureString) {{ throw 'VISIBLE_PROMPT' }}
+    return New-SyntheticCode 'mock-only' }}
+function Unprotect-R1027 {{ param($Encrypted, $Code)
+    return ,([Text.Encoding]::ASCII.GetBytes('mock-key')) }}
+function New-R1027Custody {{ param($Directory) }}
+function Write-R1027Key {{ param($Directory, $Bytes) return 'MOCK-KEY' }}
+function Get-R1027SshArguments {{ param($Key, $Hosts)
+    return @('sudo -n /usr/bin/python3 -') }}
+function Invoke-R1027Ssh {{ param($Ssh, $Arguments, $Source)
+    $script:calls++
+    if ($Arguments[-1] -cne 'sudo -n /usr/bin/python3 -') {{ throw 'ARGUMENT_FAIL' }}
+    return @{{ ExitCode={exit_code}; Output=$(if ({exit_code} -eq 0) {{
+        [IO.File]::ReadAllBytes({literal(fixture)})
+    }} else {{ [Text.Encoding]::ASCII.GetBytes('SENSITIVE_BAD_ERROR') }}) }} }}
+function Remove-R1027Custody {{ param($Directory) $script:clean++ }}
+Invoke-R1027 $true
+if ($script:calls -ne 1 -or $script:clean -ne 1) {{ throw 'CALL_COUNT_OR_CLEANUP' }}
+""")
+    assert expect in output
+    assert "SENSITIVE_BAD_ERROR" not in output
+    if exit_code == 0:
+        assert "FLOP_R1036_ALL_WRITERS_FENCED=NO" in output
