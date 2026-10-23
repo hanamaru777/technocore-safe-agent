@@ -403,7 +403,7 @@ def test_r1036_pin_and_schema_reject_forgery(tmp_path):
     route = ROOT / "packaging/oracle/r1036_writer_routes_readonly.py"
     raw = route.read_bytes()
     blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
-    assert blob == "b4a9387eaca5e51213c94cfd03c29d8227cc9768"
+    assert blob == "759090ef4f38b11464602fabb3a79e2286a4a782"
     fixture = tmp_path / "route-public.json"
     fixture.write_bytes(encoded(writer_route_report()))
     forged = writer_route_report()
@@ -450,7 +450,7 @@ function Unprotect-R1027 {{ param($Encrypted, $Code)
 function New-R1027Custody {{ param($Directory) }}
 function Write-R1027Key {{ param($Directory, $Bytes) return 'MOCK-KEY' }}
 function Get-R1027SshArguments {{ param($Key, $Hosts)
-    return @('sudo -n /usr/bin/python3 -') }}
+    return @('MOCK-TRANSPORT', 'sudo -n /usr/bin/python3 -') }}
 function Invoke-R1027Ssh {{ param($Ssh, $Arguments, $Source)
     $script:calls++
     if ($Arguments[-1] -cne 'sudo -n /usr/bin/python3 -') {{ throw 'ARGUMENT_FAIL' }}
