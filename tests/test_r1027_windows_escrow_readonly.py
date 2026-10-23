@@ -401,9 +401,11 @@ def writer_route_report():
 @WINDOWS
 def test_r1036_pin_and_schema_reject_forgery(tmp_path):
     route = ROOT / "packaging/oracle/r1036_writer_routes_readonly.py"
-    raw = route.read_bytes()
+    raw = route.read_bytes().replace(b"\r\n", b"\n")
     blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
-    assert blob == "759090ef4f38b11464602fabb3a79e2286a4a782"
+    assert blob == "b4a9387eaca5e51213c94cfd03c29d8227cc9768"
+    canonical_route = tmp_path / "route-lf.py"
+    canonical_route.write_bytes(raw)
     fixture = tmp_path / "route-public.json"
     fixture.write_bytes(encoded(writer_route_report()))
     forged = writer_route_report()
@@ -411,7 +413,7 @@ def test_r1036_pin_and_schema_reject_forgery(tmp_path):
     bad = tmp_path / "route-bad.json"
     bad.write_bytes(encoded(forged))
     output = ps_run(tmp_path, rf"""
-[FlopR1027.Guards]::VerifySource([IO.File]::ReadAllBytes({literal(route)}),
+[FlopR1027.Guards]::VerifySource([IO.File]::ReadAllBytes({literal(canonical_route)}),
     [FlopR1027.Guards]::GuestRouteBlob)
 $valid = [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(fixture)}))
 if (-not $valid.Contains('STRICT_NO_GO')) {{ throw 'ROUTE_REJECT' }}
