@@ -455,6 +455,34 @@ function Invoke-R1027Ssh([string]$Ssh, [string[]]$Arguments, [byte[]]$Source) {
     return [FlopR1027.Guards]::Run($Ssh, $Arguments, $Source, 58000, 65536)
 }
 
+# Fixed public stage codes only; no native stderr, raw stdout, key, or path.
+function Get-R1027SshFailure([int]$ExitCode, [byte[]]$Output) {
+    if ($ExitCode -eq 255) { return 'SSH_TRANSPORT_OR_AUTH_STOP' }
+    if ($ExitCode -ne 42) { return 'SSH_REMOTE_EXIT_STOP' }
+    if ($null -eq $Output -or $Output.Length -lt 15 -or $Output.Length -gt 160) {
+        return 'GUEST_UNRECOGNIZED_STOP'
+    }
+    foreach ($b in $Output) {
+        if ($b -ne 10 -and ($b -lt 32 -or $b -gt 126)) { return 'GUEST_UNRECOGNIZED_STOP' }
+    }
+    $line = [Text.Encoding]::ASCII.GetString($Output)
+    $match = [Text.RegularExpressions.Regex]::Match(
+        $line, '\AFLOP_R1023_STOP=([A-Z0-9_]{3,90})\n\z',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $match.Success) { return 'GUEST_UNRECOGNIZED_STOP' }
+    $reason = $match.Groups[1].Value
+    $other = @('ORIGINAL_ROOT_OPERATOR_REQUIRED', 'WRONG_GUEST_SCOPE',
+        'ROOT_TYPE_STOP', 'ORIGINAL_HEAD_MISMATCH_STOP', 'METADATA_BOUND_STOP',
+        'METADATA_ROW_STOP', 'METADATA_NAME_STOP', 'METADATA_DUPLICATE_STOP',
+        'METADATA_STATE_STOP', 'UNIT_COUNT_BOUND_STOP', 'REPORT_BOUND_STOP',
+        'READONLY_STAGE_INVALID_STOP', 'LOCAL_GUARD_STOP')
+    if ($other -ccontains $reason -or
+        $reason -cmatch '\AREADONLY_(HEAD|UNIT_FILES|LIVE_UNITS)_(TIMEOUT|EXEC|EXIT|OUTPUT_BOUND|ENCODING)_STOP\z') {
+        return ('GUEST_' + $reason)
+    }
+    return 'GUEST_UNRECOGNIZED_STOP'
+}
+
 function Invoke-R1027 {
     $ErrorActionPreference = 'Stop'
     $stage = 'PREFLIGHT_STOP'; $directory = $null; $plain = $null; $code = $null
@@ -476,10 +504,13 @@ function Invoke-R1027 {
         New-R1027Custody $directory
         try { $key = Write-R1027Key $directory $plain }
         finally { [FlopR1027.Guards]::Clear($plain); $plain = $null }
-        $stage = 'SSH_STOP'
+        $stage = 'SSH_INVOKE_STOP'
         $arguments = Get-R1027SshArguments $key $context.Hosts
         $result = Invoke-R1027Ssh $context.Ssh $arguments $source
-        if ($result.ExitCode -ne 0) { throw 'SSH_STOP' }
+        if ($result.ExitCode -ne 0) {
+            $stage = Get-R1027SshFailure $result.ExitCode $result.Output
+            throw 'REMOTE_NONZERO_STOP'
+        }
         $stage = 'RESPONSE_STOP'
         $summary = [FlopR1027.Guards]::ValidateReport($result.Output)
         $ok = $true

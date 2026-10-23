@@ -275,8 +275,12 @@ if ($accepted -ne 1 -or $rejected -ne ($paths.Count-1)) { throw 'SCHEMA_GUARD' }
 
 @WINDOWS
 @pytest.mark.parametrize("scenario,expected", [
-    ("success", "READONLY=PASS"), ("ssh-failure", "STOP=SSH_STOP"),
-    ("timeout", "STOP=SSH_STOP"), ("invalid-report", "STOP=RESPONSE_STOP"),
+    ("success", "READONLY=PASS"), ("ssh-failure", "STOP=SSH_TRANSPORT_OR_AUTH_STOP"),
+    ("timeout", "STOP=SSH_INVOKE_STOP"), ("invalid-report", "STOP=RESPONSE_STOP"),
+    ("guest-stage", "STOP=GUEST_READONLY_HEAD_EXIT_STOP"),
+    ("guest-identity", "STOP=GUEST_ORIGINAL_HEAD_MISMATCH_STOP"),
+    ("guest-forgery", "STOP=GUEST_UNRECOGNIZED_STOP"),
+    ("remote-nonstandard", "STOP=SSH_REMOTE_EXIT_STOP"),
     ("cleanup-failure", "STOP=CLEANUP_STOP"), ("decrypt-failure", "STOP=DECRYPT_STOP"),
     ("hash-failure", "STOP=BACKUP_HASH_STOP"),
 ])
@@ -318,7 +322,10 @@ function Invoke-R1027Ssh {{
     if ($Arguments[-1] -cne 'sudo -n /usr/bin/python3 -') {{ throw 'REMOTE_COMMAND' }}
     if ('{scenario}' -eq 'timeout') {{ throw 'synthetic-private-stderr' }}
     if ('{scenario}' -eq 'invalid-report') {{ return @{{ ExitCode=0; Output=[Text.Encoding]::ASCII.GetBytes('synthetic-secret') }} }}
-    return @{{ ExitCode=$(if ('{scenario}' -eq 'ssh-failure') {{255}} else {{0}});
+    if ('{scenario}' -eq 'guest-stage') {{ return @{{ ExitCode=42; Output=[Text.Encoding]::ASCII.GetBytes("FLOP_R1023_STOP=READONLY_HEAD_EXIT_STOP`n") }} }}
+    if ('{scenario}' -eq 'guest-identity') {{ return @{{ ExitCode=42; Output=[Text.Encoding]::ASCII.GetBytes("FLOP_R1023_STOP=ORIGINAL_HEAD_MISMATCH_STOP`n") }} }}
+    if ('{scenario}' -eq 'guest-forgery') {{ return @{{ ExitCode=42; Output=[Text.Encoding]::ASCII.GetBytes("FLOP_R1023_STOP=SYNTHETIC_PRIVATE_INFORMATION`n") }} }}
+    return @{{ ExitCode=$(if ('{scenario}' -eq 'ssh-failure') {{255}} elseif ('{scenario}' -eq 'remote-nonstandard') {{17}} else {{0}});
               Output=[IO.File]::ReadAllBytes({literal(fixture)}) }}
 }}
 function Remove-R1027Custody {{
