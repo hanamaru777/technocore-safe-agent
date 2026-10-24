@@ -101,6 +101,12 @@ def test_private_pin_map_permissions_and_symlink_refused(tmp_path, bundle):
     link.symlink_to(p)
     with pytest.raises(OSError):
         m.read_private_pin_map(link)
+    # A real leaf behind a symlinked parent is still untrusted: leaf-only
+    # O_NOFOLLOW is insufficient unless every parent was pinned by dir-fd.
+    alias = tmp_path / "pin-dir-symlink"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(OSError):
+        m.read_private_pin_map(alias / p.name)
 
 
 def test_wrong_ledger_pin_rejected_with_no_content_logged(bundle):
