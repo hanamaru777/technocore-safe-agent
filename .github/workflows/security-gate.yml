@@ -237,5 +237,5 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check pytest "cryptography>=45,<51"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m pytest -q tests/test_r1027_windows_escrow_readonly.py
+          python -m pytest -q tests/test_r1027_windows_escrow_readonly.py tests/test_r1041_windows_signer_unit_cron.py
           exit $LASTEXITCODE
