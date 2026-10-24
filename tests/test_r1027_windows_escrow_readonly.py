@@ -112,9 +112,9 @@ def test_ps51_parse_and_source_pin_rejection(tmp_path):
     guest.write_bytes(GUEST.read_bytes().replace(b"\r\n", b"\n"))
     output = ps_run(tmp_path, rf"""
 if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {{ throw 'EXPECTED_PS51' }}
-[FlopR1027.Guards]::VerifySource([IO.File]::ReadAllBytes({literal(guest)}))
+[FlopR1036.Guards]::VerifySource([IO.File]::ReadAllBytes({literal(guest)}))
 $failed = $false
-try {{ [FlopR1027.Guards]::VerifySource([Text.Encoding]::ASCII.GetBytes('tampered')) }} catch {{ $failed = $true }}
+try {{ [FlopR1036.Guards]::VerifySource([Text.Encoding]::ASCII.GetBytes('tampered')) }} catch {{ $failed = $true }}
 if (-not $failed) {{ throw 'UNPINNED_SOURCE_ACCEPTED' }}
 [Console]::WriteLine('PIN=PASS')
 """)
@@ -131,13 +131,13 @@ def test_openssl_pbkdf2_aes_compatibility_synthetic(tmp_path, salt_size):
 $data = [IO.File]::ReadAllBytes({literal(fixture)})
 $code = New-SyntheticCode 'synthetic-recovery-only'
 try {{
-    $plain = [FlopR1027.Guards]::Decrypt($data, '{hashlib.sha256(encrypted).hexdigest()}', $code)
-    if ([FlopR1027.Guards]::Sha256($plain) -cne '{hashlib.sha256(plain).hexdigest()}') {{ throw 'DECRYPT_MISMATCH' }}
+    $plain = [FlopR1036.Guards]::Decrypt($data, '{hashlib.sha256(encrypted).hexdigest()}', $code)
+    if ([FlopR1036.Guards]::Sha256($plain) -cne '{hashlib.sha256(plain).hexdigest()}') {{ throw 'DECRYPT_MISMATCH' }}
     [Console]::WriteLine('CRYPTO=PASS')
 }} finally {{
     $code.Dispose()
-    [FlopR1027.Guards]::Clear($plain)
-    [FlopR1027.Guards]::Clear($data)
+    [FlopR1036.Guards]::Clear($plain)
+    [FlopR1036.Guards]::Clear($data)
 }}
 """)
     assert output.strip() == "CRYPTO=PASS"
@@ -152,10 +152,10 @@ def test_wrong_hash_before_password_and_wrong_recovery_code_stop(tmp_path):
     output = ps_run(tmp_path, rf"""
 $data = [IO.File]::ReadAllBytes({literal(fixture)})
 $rejected = 0
-try {{ [FlopR1027.Guards]::Decrypt($data, ('0' * 64), $null) }} catch {{ $rejected++ }}
+try {{ [FlopR1036.Guards]::Decrypt($data, ('0' * 64), $null) }} catch {{ $rejected++ }}
 $code = New-SyntheticCode 'wrong-synthetic-code'
 try {{
-    try {{ [FlopR1027.Guards]::Decrypt($data, '{hashlib.sha256(encrypted).hexdigest()}', $code) }} catch {{ $rejected++ }}
+    try {{ [FlopR1036.Guards]::Decrypt($data, '{hashlib.sha256(encrypted).hexdigest()}', $code) }} catch {{ $rejected++ }}
 }} finally {{ $code.Dispose() }}
 if ($rejected -ne 2) {{ throw 'FAIL_CLOSE_MISSING' }}
 [Console]::WriteLine('REJECTED=2')
@@ -203,7 +203,7 @@ foreach ($required in @('NUL','StrictHostKeyChecking=yes','HostKeyAlgorithms=ecd
 $argument = 'space path\"quoted\\'
 $probe = Join-Path {literal(tmp_path)} 'argv-probe.ps1'
 [IO.File]::WriteAllText($probe, 'param([string]$Value) if ($Value -cne ''space path\"quoted\\'') {{ exit 7 }}; exit 0')
-$result = [FlopR1027.Guards]::Run((Get-Process -Id $PID).Path,
+$result = [FlopR1036.Guards]::Run((Get-Process -Id $PID).Path,
     @('-NoProfile','-NonInteractive','-File',$probe,$argument), [byte[]]@(), 10000, 1024)
 if ($result.ExitCode -ne 0) {{ throw 'ARGUMENT_QUOTING' }}
 [Console]::WriteLine('ARGV=PASS')
@@ -216,16 +216,16 @@ def test_bounded_runner_stderr_failure_timeout_and_output_limit(tmp_path):
     output = ps_run(tmp_path, r"""
 $exe = (Get-Process -Id $PID).Path
 $source = [Text.Encoding]::ASCII.GetBytes('public-guest-source')
-$success = [FlopR1027.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
+$success = [FlopR1036.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
     '[Console]::In.ReadToEnd() | Out-Null; [Console]::Error.WriteLine("synthetic-private-stderr"); [Console]::Out.Write("ok"); exit 0'), $source, 10000, 1024)
 if ($success.ExitCode -ne 0 -or [Text.Encoding]::ASCII.GetString($success.Output) -cne 'ok') { throw 'RUNNER' }
-$failure = [FlopR1027.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
+$failure = [FlopR1036.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
     '[Console]::In.ReadToEnd() | Out-Null; exit 255'), $source, 10000, 1024)
 if ($failure.ExitCode -ne 255) { throw 'EXIT_CODE' }
 $rejected = 0
-try { [FlopR1027.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
+try { [FlopR1036.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
     'Start-Sleep -Seconds 30'), $source, 100, 1024) } catch { $rejected++ }
-try { [FlopR1027.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
+try { [FlopR1036.Guards]::Run($exe, @('-NoProfile','-NonInteractive','-Command',
     '[Console]::In.ReadToEnd() | Out-Null; [Console]::Out.Write(("x"*8192))'), $source, 10000, 1024) } catch { $rejected++ }
 if ($rejected -ne 2) { throw 'BOUNDS' }
 [Console]::WriteLine('RUNNER=PASS')
@@ -261,7 +261,7 @@ $paths = @(""" + ",".join(fixtures) + """)
 $accepted = 0; $rejected = 0
 for ($i = 0; $i -lt $paths.Count; $i++) {
     try {
-        $safe = [FlopR1027.Guards]::ValidateReport([IO.File]::ReadAllBytes($paths[$i]))
+        $safe = [FlopR1036.Guards]::ValidateReport([IO.File]::ReadAllBytes($paths[$i]))
         if ($i -ne 0 -or -not $safe.Contains('STRICT_NO_GO')) { throw 'BAD_ACCEPT' }
         $accepted++
     } catch { $rejected++ }
@@ -413,13 +413,13 @@ def test_r1036_pin_and_schema_reject_forgery(tmp_path):
     bad = tmp_path / "route-bad.json"
     bad.write_bytes(encoded(forged))
     output = ps_run(tmp_path, rf"""
-[FlopR1027.Guards]::VerifySource([IO.File]::ReadAllBytes({literal(canonical_route)}),
-    [FlopR1027.Guards]::GuestRouteBlob)
-$valid = [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(fixture)}))
+[FlopR1036.Guards]::VerifySource([IO.File]::ReadAllBytes({literal(canonical_route)}),
+    [FlopR1036.Guards]::GuestRouteBlob)
+$valid = [FlopR1036.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(fixture)}))
 if (-not $valid.Contains('STRICT_NO_GO')) {{ throw 'ROUTE_REJECT' }}
 $rejected = $false
 try {{
-    [FlopR1027.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(bad)})) | Out-Null
+    [FlopR1036.Guards]::ValidateRoutes([IO.File]::ReadAllBytes({literal(bad)})) | Out-Null
 }} catch {{ $rejected = $true }}
 if (-not $rejected) {{ throw 'ROUTE_FORGERY' }}
 [Console]::WriteLine('R1036_JSON=PASS')
@@ -467,3 +467,29 @@ if ($script:calls -ne 1 -or $script:clean -ne 1) {{ throw 'CALL_COUNT_OR_CLEANUP
     assert "SENSITIVE_BAD_ERROR" not in output
     if exit_code == 0:
         assert "FLOP_R1036_ALL_WRITERS_FENCED=NO" in output
+
+
+@WINDOWS
+def test_r1036_legacy_clr_guard_already_loaded_cannot_shadow_new_guard(tmp_path):
+    """Models an existing R1034 session where Add-Type has no unload/reset."""
+    output = ps_run(tmp_path, r"""
+if ('FlopR1027.Guards' -as [type]) { throw 'OLD_GUARD_PREEXISTS_IN_FRESH_SYNTHETIC_PROCESS' }
+Add-Type -TypeDefinition @'
+namespace FlopR1027 {
+    public static class Guards {
+        public const string GuestBlob = "LEGACY_ONLY";
+    }
+}
+'@
+Initialize-R1027
+if (-not ('FlopR1027.Guards' -as [type])) { throw 'LEGACY_NOT_LOADED' }
+if (-not ('FlopR1036.Guards' -as [type])) { throw 'R1036_NOT_LOADED' }
+if ([FlopR1036.Guards]::GuestRouteBlob -cne '4921bfca59abed4cb744d0a0ca1c05c31291f877') {
+    throw 'WRONG_NEW_GUEST_PIN'
+}
+if ([FlopR1027.Guards]::GuestBlob -cne 'LEGACY_ONLY') {
+    throw 'OLD_GUARD_MUTATED'
+}
+[Console]::WriteLine('R1036_CLR_SESSION_ISOLATION=PASS')
+""", initialize=False)
+    assert output.strip() == "R1036_CLR_SESSION_ISOLATION=PASS"
