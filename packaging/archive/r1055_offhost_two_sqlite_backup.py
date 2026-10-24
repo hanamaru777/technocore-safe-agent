@@ -2,7 +2,7 @@
 """R1055: make and audit two SQLite online-backup images on an OFFHOST copy.
 
 SOURCE-ONLY DRAFT. Never an Oracle/K137 production backup or common writer
-epoch proof. No host services, credentials, signer, wallet or network.
+epoch proof. No host services, credentials, signing actions or network.
 Any application writer fence is an EXTERNAL prerequisite, not implemented here.
 """
 from __future__ import annotations
