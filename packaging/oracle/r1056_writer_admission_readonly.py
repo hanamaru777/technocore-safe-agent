@@ -30,7 +30,7 @@ MAX_CRON_FILES = 240
 MAX_CRON_CONTENT = 1024 * 1024
 MAX_UNIT_BYTES = 1024 * 1024
 MAX_SECONDS = 30.0
-UNIT_NAME = re.compile(r"^[A-Za-z0-9_.@\\:-]+\\.(?:service|timer)$")
+UNIT_NAME = re.compile(r"^[A-Za-z0-9_.@:-]+\.(?:service|timer)$")
 FIXED_TIMERS = 8
 FIXED_TEMPLATES = 27
 
