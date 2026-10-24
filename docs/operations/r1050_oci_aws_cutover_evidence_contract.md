@@ -59,7 +59,7 @@ is NOT an independently authenticated original source claim. The verifier
 refuses extra files, WAL/SHM sidecars, symlinks (including pin-map ancestor directories), hardlinks, non-private files,
 wrong ownership and hashes; it runs both R1005 real SQLite schema/integrity
 checks. It only hashes the four private JSON ledgers and does NOT claim their
-schemas/cross-file provenance or print their contents. No file is modified.
+schemas/cross-file provenance or print their contents. It performs no explicit content or metadata write operations. Depending on Linux mount and SQLite open behavior, a read can still change access-time metadata; unchanged atime is NOT proven. Never use this against originals that require byte-for-byte or metadata-forensic immutability.
 
 Even after all six byte/pin checks pass the output is UNCONDITIONALLY:
 ・PIN_MAP_SOURCE_AUTHENTICITY=NOT_PROVEN
