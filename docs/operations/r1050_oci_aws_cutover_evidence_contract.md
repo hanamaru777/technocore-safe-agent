@@ -47,10 +47,16 @@ Exactly six permitted flat regular filenames:
 ・nonces.json
 ・verified-did.json
 
+These SIX files are a deliberately narrow audited subset, NOT a complete Flop
+state archive. Observer/Resident cursor state, activity/health logs,
+Close1/TCLK artifacts, and additional original metadata still need an
+independent whole-state inventory and authenticated preservation.
+Passing this subset NEVER establishes whole-state restore.
+
 The independently supplied private pin-map JSON must contain schema_version=1
 and pins with exactly these six lowercase SHA256 entries. The pin map itself
 is NOT an independently authenticated original source claim. The verifier
-refuses extra files, WAL/SHM sidecars, symlinks, hardlinks, non-private files,
+refuses extra files, WAL/SHM sidecars, symlinks (including pin-map ancestor directories), hardlinks, non-private files,
 wrong ownership and hashes; it runs both R1005 real SQLite schema/integrity
 checks. It only hashes the four private JSON ledgers and does NOT claim their
 schemas/cross-file provenance or print their contents. No file is modified.
@@ -70,6 +76,14 @@ identity, writer freeze, in-flight POST, common epoch or restored provenance.
 ## Architecture gates, in strict dependency order
 
 ### 1. Same DID / Vault custody — NOT PROVEN
+
+Current AWS Phase03C installed only the ten core locked runtime wheels plus
+a pinned pip wheel. The OCI Python SDK dependency for the signer was NOT
+staged on AWS. Original pyproject.toml declares optional signer-only
+oracle-signer extra (oci>=2.0,<3), and the original Oracle prepare-signer.sh
+installs it via frozen uv sync. Thus core-dependencies PASS cannot be
+misreported as AWS signer-runtime PASS. Do not install the signer SDK or
+reuse Oracle signer install scripts on K137 without a separate safe gate.
 
 Original signer retrieves OCI Vault secret using OCI VM-only
 InstancePrincipalsSecurityTokenSigner in oracle_signer.py. This does not
