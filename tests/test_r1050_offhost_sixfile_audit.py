@@ -67,6 +67,8 @@ def test_offhost_contract_retirement_is_always_strict_no_go():
     assert "FLOP_R1050_EXTERNAL_SIGNER_POST_AND_NONCE=NOT_PROVEN" in source
     assert "FLOP_R1050_ALL_WRITERS_FENCED=NO" in source
     assert "FLOP_R1050_PRIVATE_LEDGER_SCHEMA=NOT_VERIFIED" in source
+    assert "FLOP_R1050_NO_EXPLICIT_FILE_WRITES=YES" in source
+    assert "FLOP_R1050_ARCHIVE_ATIME_UNCHANGED=NOT_PROVEN" in source
     assert "systemctl start" not in source
     assert "core.post_signed" not in source
 
