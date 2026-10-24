@@ -79,18 +79,27 @@ def pin_map(value: bytes) -> dict[str, str]:
 def read_private_pin_map(path: Path) -> dict[str, str]:
     need(path.is_absolute() and ".." not in path.parts,
          "PIN_MAP_PATH_STOP")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    # R1005's fd-relative root walk blocks ancestor symlinks. O_NOFOLLOW
+    # alone on the last leaf would NOT protect a symlinked parent directory.
+    parent_fd = R1005.opened_dir(path.parent)
     try:
-        meta = os.fstat(fd)
-        need(stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1
-             and meta.st_uid == os.geteuid()
-             and meta.st_mode & 0o077 == 0
-             and 1 <= meta.st_size <= MAX_PINMAP, "PIN_MAP_CUSTODY_STOP")
-        data = os.read(fd, MAX_PINMAP + 1)
-        need(len(data) == meta.st_size, "PIN_MAP_READ_STOP")
-        return pin_map(data)
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     dir_fd=parent_fd)
+        try:
+            before = os.fstat(fd)
+            need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                 and before.st_uid == os.geteuid()
+                 and before.st_mode & 0o077 == 0
+                 and 1 <= before.st_size <= MAX_PINMAP, "PIN_MAP_CUSTODY_STOP")
+            data = os.read(fd, MAX_PINMAP + 1)
+            need(len(data) == before.st_size
+                 and fingerprint(os.fstat(fd)) == fingerprint(before),
+                 "PIN_MAP_READ_OR_DRIFT_STOP")
+            return pin_map(data)
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        os.close(parent_fd)
 
 
 def fingerprint(meta):
