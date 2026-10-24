@@ -4,7 +4,7 @@
 Set-StrictMode -Version 2.0
 
 function Initialize-R1027 {
-    if (-not ('FlopR1027.Guards' -as [type])) {
+    if (-not ('FlopR1036.Guards' -as [type])) {
         Add-Type -ReferencedAssemblies 'System.dll','System.Core.dll','System.Security.dll','System.Web.Extensions.dll' -TypeDefinition @'
 using System;
 using System.Collections;
@@ -19,7 +19,7 @@ using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 
-namespace FlopR1027 {
+namespace FlopR1036 {
     public sealed class Captured {
         public int ExitCode;
         public byte[] Output;
@@ -472,8 +472,8 @@ function Get-R1027Source([bool]$RouteProbe = $false) {
             $memory.Write($buffer, 0, $count)
         }
         $bytes = $memory.ToArray()
-        if ($RouteProbe) { [FlopR1027.Guards]::VerifySource($bytes, [FlopR1027.Guards]::GuestRouteBlob) }
-        else { [FlopR1027.Guards]::VerifySource($bytes) }
+        if ($RouteProbe) { [FlopR1036.Guards]::VerifySource($bytes, [FlopR1036.Guards]::GuestRouteBlob) }
+        else { [FlopR1036.Guards]::VerifySource($bytes) }
         return ,$bytes
     } finally {
         if ($stream) { $stream.Dispose() }
@@ -518,16 +518,16 @@ function Read-R1027Backup {
             $offset += $count
         }
     } finally { $stream.Dispose() }
-    if ([FlopR1027.Guards]::Sha256($encrypted) -cne [FlopR1027.Guards]::EXPECTED_SHA256) { throw 'BACKUP_HASH_STOP' }
+    if ([FlopR1036.Guards]::Sha256($encrypted) -cne [FlopR1036.Guards]::EXPECTED_SHA256) { throw 'BACKUP_HASH_STOP' }
     return ,$encrypted
 }
 
 function Unprotect-R1027([byte[]]$Encrypted, [Security.SecureString]$Code) {
-    return ,([FlopR1027.Guards]::Decrypt($Encrypted, [FlopR1027.Guards]::EXPECTED_SHA256, $Code))
+    return ,([FlopR1036.Guards]::Decrypt($Encrypted, [FlopR1036.Guards]::EXPECTED_SHA256, $Code))
 }
 
 function Invoke-R1027Ssh([string]$Ssh, [string[]]$Arguments, [byte[]]$Source) {
-    return [FlopR1027.Guards]::Run($Ssh, $Arguments, $Source, 58000, 65536)
+    return [FlopR1036.Guards]::Run($Ssh, $Arguments, $Source, 58000, 65536)
 }
 
 # Fixed public stage codes only; no native stderr, raw stdout, key, or path.
@@ -578,7 +578,7 @@ function Invoke-R1027([bool]$RouteProbe = $false) {
         $directory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Temp\flop-r1027-' + [Guid]::NewGuid().ToString('N'))
         New-R1027Custody $directory
         try { $key = Write-R1027Key $directory $plain }
-        finally { [FlopR1027.Guards]::Clear($plain); $plain = $null }
+        finally { [FlopR1036.Guards]::Clear($plain); $plain = $null }
         $stage = 'SSH_INVOKE_STOP'
         $arguments = Get-R1027SshArguments $key $context.Hosts
         $result = Invoke-R1027Ssh $context.Ssh $arguments $source
@@ -589,18 +589,18 @@ function Invoke-R1027([bool]$RouteProbe = $false) {
         }
         $stage = 'RESPONSE_STOP'
         $summary = if ($RouteProbe) {
-            [FlopR1027.Guards]::ValidateRoutes($result.Output)
-        } else { [FlopR1027.Guards]::ValidateReport($result.Output) }
+            [FlopR1036.Guards]::ValidateRoutes($result.Output)
+        } else { [FlopR1036.Guards]::ValidateReport($result.Output) }
         $ok = $true
     } catch {
         # Never format the exception, native output, code, key, paths, or environment.
         $ok = $false
     } finally {
         if ($code) { $code.Dispose() }
-        if ('FlopR1027.Guards' -as [type]) {
-            [FlopR1027.Guards]::Clear($plain)
-            [FlopR1027.Guards]::Clear($encrypted)
-            if ($result) { [FlopR1027.Guards]::Clear($result.Output) }
+        if ('FlopR1036.Guards' -as [type]) {
+            [FlopR1036.Guards]::Clear($plain)
+            [FlopR1036.Guards]::Clear($encrypted)
+            if ($result) { [FlopR1036.Guards]::Clear($result.Output) }
         }
         if ($directory) {
             try { Remove-R1027Custody $directory }
