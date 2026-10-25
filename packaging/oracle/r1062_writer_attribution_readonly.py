@@ -312,6 +312,7 @@ def proc_census(root=Path("/proc")):
     entries = [p for p in root.iterdir() if p.name.isdecimal()]
     need(len(entries) <= MAX_PROC, "PROC_COUNT_STOP")
     matched = writable = unknown = 0
+    race = permission = other_unknown = 0
     writer_categories = {"SIGNER": 0, "CAPTURE": 0, "TCLK": 0,
                          "CLOSE1": 0, "OTHER": 0}
     for path in entries:
@@ -319,6 +320,7 @@ def proc_census(root=Path("/proc")):
             raw = (path / "cmdline").read_bytes()[:4097]
             if len(raw) > 4096:
                 unknown += 1
+                other_unknown += 1
                 continue
             if b"technocore-safe-agent" in raw or b"flop_agent" in raw:
                 matched += 1
@@ -326,6 +328,7 @@ def proc_census(root=Path("/proc")):
             fds = list(fdpath.iterdir())
             if len(fds) > MAX_FD:
                 unknown += 1
+                other_unknown += 1
                 continue
             for leaf in fds:
                 try:
@@ -340,10 +343,24 @@ def proc_census(root=Path("/proc")):
                     elif state:
                         writable += 1
                         writer_categories[classify_state_fd_target(target)] += 1
-                except (PermissionError, FileNotFoundError, ProcessLookupError, OSError):
+                except PermissionError:
                     unknown += 1
-        except (PermissionError, FileNotFoundError, ProcessLookupError, OSError):
+                    permission += 1
+                except (FileNotFoundError, ProcessLookupError):
+                    unknown += 1
+                    race += 1
+                except OSError:
+                    unknown += 1
+                    other_unknown += 1
+        except PermissionError:
             unknown += 1
+            permission += 1
+        except (FileNotFoundError, ProcessLookupError):
+            unknown += 1
+            race += 1
+        except OSError:
+            unknown += 1
+            other_unknown += 1
     return {"scanned_pids": len(entries), "flop_commandline_matches": matched,
             "open_flop_state_write_file_descriptors": writable,
             "writable_fd_signer": writer_categories["SIGNER"],
@@ -352,6 +369,9 @@ def proc_census(root=Path("/proc")):
             "writable_fd_close1": writer_categories["CLOSE1"],
             "writable_fd_other": writer_categories["OTHER"],
             "unknown_or_raced_process_fd_objects": unknown,
+            "proc_unknown_race": race,
+            "proc_unknown_permission": permission,
+            "proc_unknown_other": other_unknown,
             "fd_snapshot_is_durable_fence": "NO"}
 
 
@@ -395,6 +415,9 @@ def run():
                      "writable_fd_tclk": 0, "writable_fd_close1": 0,
                      "writable_fd_other": 0,
                      "unknown_or_raced_process_fd_objects": 1,
+                     "proc_unknown_race": 0,
+                     "proc_unknown_permission": 0,
+                     "proc_unknown_other": 1,
                      "fd_snapshot_is_durable_fence": "NO"}
     STAGE = "REPORT"
     report = {"schema_version": 1, "original_source_head": HEAD,
