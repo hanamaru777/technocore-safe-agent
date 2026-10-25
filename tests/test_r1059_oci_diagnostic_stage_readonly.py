@@ -16,7 +16,7 @@ spec.loader.exec_module(m)
 
 def test_guest_pin_blob_matches_windows_pinned_blob_and_commit():
     raw = GUEST.read_bytes()
-    blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\\0" + raw).hexdigest()
+    blob = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
     ps = WIN.read_text(encoding="utf8")
     assert f'public const string GuestBlob = "{blob}"' in ps
     assert ("742b81367ff31c20791f89b7b85c5c925a9e24f7/packaging/oracle/"
