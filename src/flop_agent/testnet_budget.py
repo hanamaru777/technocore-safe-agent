@@ -53,7 +53,7 @@ def valid_job(job):
          "JOB_ID_STOP")
     need(type(job["payload_sha256"]) is str and
          HEX64.fullmatch(job["payload_sha256"]), "JOB_HASH_STOP")
-    need(job["task_class"] in TASKS and type(job["task_class"]) is str,
+    need(type(job["task_class"]) is str and job["task_class"] in TASKS,
          "JOB_CLASS_STOP")
     need(type(job["data_class"]) is str and job["data_class"] == "PUBLIC",
          "PRIVATE_INPUT_STOP")
