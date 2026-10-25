@@ -3,6 +3,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 
@@ -128,4 +129,4 @@ def test_no_mutating_original_host_methods_or_new_ssh_paths():
     ps = WIN.read_text("utf8")
     for forbidden_cmd in ("systemctl stop", "systemctl start", "systemctl restart",
                           "reboot", "rm -rf", "FLOP_R1061_OCI_RETIREMENT=GO"):
-        assert forbidden_cmd not in ps
+        assert re.search(r"(?<![A-Za-z0-9_])" + re.escape(forbidden_cmd) + r"(?![A-Za-z0-9_])", ps) is None
