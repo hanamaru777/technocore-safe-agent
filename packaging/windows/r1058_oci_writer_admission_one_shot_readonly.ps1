@@ -287,16 +287,16 @@ namespace FlopR1058 {
             int cronDirect = (int)cron["cron_direct_flop_line_matches"];
             int procMatch = (int)proc["flop_commandline_matches"];
             Need(dynamicCount <= prefixed);
-            return "FLOP_R1058_READONLY=PASS\\n" +
-                   "FLOP_R1058_FLOP_UNITS=" + prefixed + "\\n" +
-                   "FLOP_R1058_DYNAMIC_TCLK=" + dynamicCount + "\\n" +
-                   "FLOP_R1058_DIRECT_CRON=" + cronDirect + "\\n" +
-                   "FLOP_R1058_CRON_UNVERIFIED=" + cronUnknown + "\\n" +
-                   "FLOP_R1058_MATCHING_PROCESSES=" + procMatch + "\\n" +
-                   "FLOP_R1058_WRITABLE_STATE_FDS=" + fdWriters + "\\n" +
-                   "FLOP_R1058_PROC_FD_UNKNOWN=" + processUnknown + "\\n" +
-                   "FLOP_R1058_ALL_WRITERS_FENCED=NO\\n" +
-                   "FLOP_R1058_SIGNER_EXTERNAL_POST_RESOLVED=NO\\n" +
+            return "FLOP_R1058_READONLY=PASS\n" +
+                   "FLOP_R1058_FLOP_UNITS=" + prefixed + "\n" +
+                   "FLOP_R1058_DYNAMIC_TCLK=" + dynamicCount + "\n" +
+                   "FLOP_R1058_DIRECT_CRON=" + cronDirect + "\n" +
+                   "FLOP_R1058_CRON_UNVERIFIED=" + cronUnknown + "\n" +
+                   "FLOP_R1058_MATCHING_PROCESSES=" + procMatch + "\n" +
+                   "FLOP_R1058_WRITABLE_STATE_FDS=" + fdWriters + "\n" +
+                   "FLOP_R1058_PROC_FD_UNKNOWN=" + processUnknown + "\n" +
+                   "FLOP_R1058_ALL_WRITERS_FENCED=NO\n" +
+                   "FLOP_R1058_SIGNER_EXTERNAL_POST_RESOLVED=NO\n" +
                    "FLOP_R1058_OCI_RETIREMENT=STRICT_NO_GO";
         }
         public static string ValidateCombined(byte[] raw) {
