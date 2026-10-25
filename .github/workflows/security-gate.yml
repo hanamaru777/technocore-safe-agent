@@ -290,3 +290,90 @@ jobs:
           try { $null = [FlopR1058.Guards]::ValidateR1058($bad) } catch { $blocked = $true }
           if (-not $blocked) { throw 'R1058_FAKE_FENCE_ACCEPTED' }
           Write-Host 'WINDOWS_PS51_R1058_OFFLINE=PASS'
+
+      - name: Validate R1059 immutable R987 Windows witness offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'PS51_REQUIRED' }
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1059_oci_writer_stage_one_shot_readonly.ps1'
+          $tokens = $null
+          $parseErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            $path, [ref]$tokens, [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) { throw 'R1059_PS_PARSE_STOP' }
+          $text = [IO.File]::ReadAllText($path)
+          $pattern = "-TypeDefinition @'\r?\n(?<src>.*?)\r?\n'@"
+          $match = [Text.RegularExpressions.Regex]::Match(
+            $text, $pattern, [Text.RegularExpressions.RegexOptions]::Singleline
+          )
+          if (-not $match.Success) { throw 'R1059_CSHARP_SOURCE_STOP' }
+          Add-Type -ReferencedAssemblies 'System.dll','System.Core.dll','System.Security.dll','System.Web.Extensions.dll' -TypeDefinition $match.Groups['src'].Value
+          $original = 'ec4bc4892d40cdd2a03e102faa44d72c89e01b99'
+          $sample = @{
+            schema_version = 1
+            original_source_head = $original
+            units = @{
+              loaded_unit_names = 3
+              unitfile_names = 4
+              flop_prefixed_total = 3
+              flop_dynamic_instance_or_template_names = 1
+              dynamic_or_manual_instance_proven_absent = 'NO'
+              unprefixed_unit_exec_targets_proven_exhaustive = 'NO'
+              unit_restart_or_reboot_fence = 'NOT_PROVEN'
+            }
+            cron = @{
+              cron_regular_read = 4
+              cron_unverified_entries = 1
+              cron_direct_flop_line_matches = 0
+              cron_indirect_launch_exhaustively_proven = 'NO'
+            }
+            processes = @{
+              scanned_pids = 100
+              flop_commandline_matches = 3
+              open_flop_state_write_file_descriptors = 2
+              unknown_or_raced_process_fd_objects = 1
+              fd_snapshot_is_durable_fence = 'NO'
+            }
+            writer_snapshot_complete_and_future_proof = 'NO'
+            all_writers_fenced = 'NO'
+            external_signer_post_resolved = 'NO'
+            both_sqlite_common_epoch = 'NOT_PROVEN'
+            no_service_file_or_network_mutation = 'YES'
+            oci_retirement = 'STRICT_NO_GO'
+          }
+          $bytes = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $summary = [FlopR1059.Guards]::ValidateR1059($bytes)
+          if (-not $summary.Contains('FLOP_R1059_READONLY=PASS')) { throw 'R1059_ACCEPT_STOP' }
+          if (-not $summary.Contains('FLOP_R1059_WRITABLE_STATE_FDS=2')) { throw 'R1059_FD_RESULT_STOP' }
+          if (-not $summary.Contains('FLOP_R1059_OCI_RETIREMENT=STRICT_NO_GO')) { throw 'R1059_RETIRED_STOP' }
+          $sample.all_writers_fenced = 'YES'
+          $bad = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $blocked = $false
+          try { $null = [FlopR1059.Guards]::ValidateR1059($bad) } catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1059_FAKE_FENCE_ACCEPTED' }
+          Write-Host 'WINDOWS_PS51_R1059_OFFLINE=PASS'
+
+          $fn = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Get-R1059GuestStop'
+          }, $true)
+          if ($null -eq $fn) { throw 'R1059_GUEST_STOP_FUNCTION_MISSING' }
+          Invoke-Expression $fn.Extent.Text
+          foreach ($item in @('PREFLIGHT_SCOPE', 'PREFLIGHT_HEAD', 'UNITS',
+                               'CRON', 'PROCESS', 'REPORT', 'GUARD')) {
+            $raw = [Text.Encoding]::ASCII.GetBytes("FLOP_R1059_STOP=$($item)_STOP" + [char]10)
+            $seen = Get-R1059GuestStop $raw
+            if ($seen -cne ('GUEST_' + $item + '_STOP')) { throw 'R1059_ENUM_REJECTED' }
+          }
+          $bad = [Text.Encoding]::ASCII.GetBytes("FLOP_R1059_STOP=UNITS_STOP" + [char]10 + "private")
+          if ((Get-R1059GuestStop $bad) -cne 'GUEST_UNRECOGNIZED_STOP') {
+            throw 'R1059_STOP_CONTENT_LEAK'
+          }
+          $bad = [Text.Encoding]::ASCII.GetBytes("FLOP_R1059_STOP=FENCE_GO_STOP" + [char]10)
+          if ((Get-R1059GuestStop $bad) -cne 'GUEST_UNRECOGNIZED_STOP') {
+            throw 'R1059_UNRECOGNIZED_ACCEPT'
+          }
+          Write-Host 'WINDOWS_PS51_R1059_FIXED_STAGE_DIAGNOSTIC=PASS'
