@@ -299,7 +299,7 @@ jobs:
           $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1059_oci_writer_stage_one_shot_readonly.ps1'
           $tokens = $null
           $parseErrors = $null
-          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
             $path, [ref]$tokens, [ref]$parseErrors
           )
           if ($parseErrors.Count -ne 0) { throw 'R1059_PS_PARSE_STOP' }
