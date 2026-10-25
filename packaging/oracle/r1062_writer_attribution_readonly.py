@@ -249,13 +249,24 @@ def cron_census():
             candidates += entries
         else:
             unknown += 1
+            if stat.S_ISLNK(meta.st_mode):
+                unverified_links += 1
+            else:
+                unverified_special += 1
     need(len(candidates) <= MAX_CRON_FILES, "CRON_COUNT_STOP")
     regular = matches = bytes_read = 0
+    unverified_links = unverified_special = unverified_regular = 0
     for path in candidates:
         try:
             before = path.lstat()
             if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 65536:
                 unknown += 1
+                if stat.S_ISLNK(before.st_mode):
+                    unverified_links += 1
+                elif not stat.S_ISREG(before.st_mode):
+                    unverified_special += 1
+                else:
+                    unverified_regular += 1
                 continue
             flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | getattr(os, "O_NOATIME", 0)
             f = os.open(path, flags)
@@ -274,7 +285,11 @@ def cron_census():
             regular += 1
         except (PermissionError, FileNotFoundError, NotADirectoryError):
             unknown += 1
+            unverified_regular += 1
     return {"cron_regular_read": regular, "cron_unverified_entries": unknown,
+            "cron_unverified_links": unverified_links,
+            "cron_unverified_specials": unverified_special,
+            "cron_unverified_regulars": unverified_regular,
             "cron_direct_flop_line_matches": matches,
             "cron_indirect_launch_exhaustively_proven": "NO"}
 
@@ -297,6 +312,8 @@ def proc_census(root=Path("/proc")):
     entries = [p for p in root.iterdir() if p.name.isdecimal()]
     need(len(entries) <= MAX_PROC, "PROC_COUNT_STOP")
     matched = writable = unknown = 0
+    writer_categories = {"SIGNER": 0, "CAPTURE": 0, "TCLK": 0,
+                         "CLOSE1": 0, "OTHER": 0}
     for path in entries:
         try:
             raw = (path / "cmdline").read_bytes()[:4097]
@@ -322,12 +339,18 @@ def proc_census(root=Path("/proc")):
                         unknown += 1
                     elif state:
                         writable += 1
+                        writer_categories[classify_state_fd_target(target)] += 1
                 except (PermissionError, FileNotFoundError, ProcessLookupError, OSError):
                     unknown += 1
         except (PermissionError, FileNotFoundError, ProcessLookupError, OSError):
             unknown += 1
     return {"scanned_pids": len(entries), "flop_commandline_matches": matched,
             "open_flop_state_write_file_descriptors": writable,
+            "writable_fd_signer": writer_categories["SIGNER"],
+            "writable_fd_capture": writer_categories["CAPTURE"],
+            "writable_fd_tclk": writer_categories["TCLK"],
+            "writable_fd_close1": writer_categories["CLOSE1"],
+            "writable_fd_other": writer_categories["OTHER"],
             "unknown_or_raced_process_fd_objects": unknown,
             "fd_snapshot_is_durable_fence": "NO"}
 
@@ -361,11 +384,16 @@ def run():
     # Missing evidence stays distinguishable and NEVER implies zero findings.
     if cron is None:
         cron = {"cron_regular_read": 0, "cron_unverified_entries": 1,
+                "cron_unverified_links": 0, "cron_unverified_specials": 0,
+                "cron_unverified_regulars": 1,
                 "cron_direct_flop_line_matches": 0,
                 "cron_indirect_launch_exhaustively_proven": "NO"}
     if processes is None:
         processes = {"scanned_pids": 0, "flop_commandline_matches": 0,
                      "open_flop_state_write_file_descriptors": 0,
+                     "writable_fd_signer": 0, "writable_fd_capture": 0,
+                     "writable_fd_tclk": 0, "writable_fd_close1": 0,
+                     "writable_fd_other": 0,
                      "unknown_or_raced_process_fd_objects": 1,
                      "fd_snapshot_is_durable_fence": "NO"}
     STAGE = "REPORT"
