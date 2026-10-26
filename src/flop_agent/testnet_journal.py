@@ -38,7 +38,7 @@ def _pairs(pairs):
 
 
 def _directory(path):
-    _need(os.name == "posix" and type(path) is Path and path.is_absolute()
+    _need(os.name == "posix" and isinstance(path, Path) and path.is_absolute()
           and ".." not in path.parts, "JOURNAL_PLATFORM_OR_PATH_STOP")
     try:
         _need(path.resolve(strict=True) == path,
