@@ -119,3 +119,15 @@ def test_explicit_public_provenance_pinned_and_no_real_io_or_signature_verificat
     assert "SR25519" in source
     assert "NOT Ed25519" in source
     assert "PRIVATE KEY" not in source
+
+
+def test_legacy_undomained_receipt_bytes_cannot_substitute_versioned_preimage():
+    # FLOP public Yellow Paper Appendix F explicitly separates legacy and V1.
+    channel, root = b"a"*32, b"b"*32
+    v1 = m.receipt_signable_v1(channel, root, 42, 1000)
+    legacy = channel + root + (42).to_bytes(16, "little") + (1000).to_bytes(16, "little")
+    assert len(v1) == len(legacy) + len(m.RECEIPT_DOMAIN) + 1
+    assert v1 != legacy
+    assert v1.endswith(legacy)
+    # Matching these offline bytes never verifies sr25519 or chain finality.
+    assert m.draft_safety_status()["settled_receipt_finality_verified"] == "NO"
