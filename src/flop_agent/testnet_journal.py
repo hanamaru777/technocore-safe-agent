@@ -40,15 +40,21 @@ def _pairs(pairs):
 def _directory(path):
     _need(os.name == "posix" and type(path) is Path and path.is_absolute()
           and ".." not in path.parts, "JOURNAL_PLATFORM_OR_PATH_STOP")
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     try:
+        _need(path.resolve(strict=True) == path,
+              "JOURNAL_DIRECTORY_CUSTODY_STOP")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
         fd = os.open(path, flags)
-        s = os.fstat(fd)
-        _need(stat.S_ISDIR(s.st_mode) and stat.S_IMODE(s.st_mode) == 0o700
-              and s.st_uid == os.geteuid(), "JOURNAL_DIRECTORY_CUSTODY_STOP")
-        return fd
     except OSError:
         raise Stop("JOURNAL_DIRECTORY_IO_STOP") from None
+    try:
+        info = os.fstat(fd)
+        _need(stat.S_ISDIR(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o700
+              and info.st_uid == os.geteuid(), "JOURNAL_DIRECTORY_CUSTODY_STOP")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _lock(fd, exclusive):
