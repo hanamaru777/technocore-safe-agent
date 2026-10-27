@@ -225,7 +225,12 @@ def relay_file(src, dst, guest, root, aid, row, *, timeout=900):
                 proc.wait()
                 for stream in (proc.stdin, proc.stdout):
                     if stream is not None:
-                        stream.close()
+                        try:
+                            stream.close()
+                        except (OSError, ValueError):
+                            # A failed receiver may close its pipe before the
+                            # controller's finally block. Preserve STOP.
+                            pass
 
 def relay(src, dst, guest, root, aid):
     inv = inventory(src, guest, root, aid)
