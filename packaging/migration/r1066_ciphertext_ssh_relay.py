@@ -232,8 +232,16 @@ def relay_file(src, dst, guest, root, aid, row, *, timeout=900):
                             # controller's finally block. Preserve STOP.
                             pass
 
-def relay(src, dst, guest, root, aid):
+def relay(src, dst, guest, root, aid, *, k137_free_bytes=None):
     inv = inventory(src, guest, root, aid)
+    if k137_free_bytes is not None:
+        need(type(k137_free_bytes) is int and k137_free_bytes >= 0,
+             "DISK_EVIDENCE_STOP")
+        encrypted_bytes = sum(row["bytes"] for row in inv["files"])
+        # Conservative bound for BOTH ciphertext and later DISARMED restore,
+        # plus 10 GiB reserved for the protected colocated TradeBot.
+        need(k137_free_bytes >= encrypted_bytes * 2 + 10 * 1024**3,
+             "K137_PROTECTED_DISK_HEADROOM_STOP")
     ack = control(dst, guest, ["init", "--archive-id", aid])
     need(ack.get("operation") == "CIPHERTEXT_QUARANTINE_ONLY"
          and ack.get("cutover") == "NO_GO", "INIT_STOP")
@@ -258,6 +266,7 @@ def main(args=None):
               "k137-user", "k137-identity", "k137-known-hosts",
               "k137-known-hosts-sha256"):
         parser.add_argument("--" + k, required=True)
+    parser.add_argument("--k137-free-bytes", type=int, required=True)
     parser.add_argument("--allow-disarmed-ciphertext-transfer",
                         action="store_true")
     opts = parser.parse_args(args)
@@ -271,7 +280,8 @@ def main(args=None):
                        opts.k137_identity, opts.k137_known_hosts,
                        opts.k137_known_hosts_sha256)
         print(json.dumps(relay(src, dst, guest, opts.source_root,
-                               opts.archive_id), sort_keys=True))
+                               opts.archive_id, k137_free_bytes=opts.k137_free_bytes),
+                         sort_keys=True))
         return 0
     except Exception:
         print(json.dumps({"result": "STOP", "cutover": "NO_GO",
