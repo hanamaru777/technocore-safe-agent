@@ -164,19 +164,34 @@ Write-Output 'PASS'
 @WINDOWS
 def test_ps51_binary_timeout_bound_and_environment(tmp_path):
     output = run_ps(tmp_path, """
-$exe=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\\v1.0\\powershell.exe'
+# Test the transport itself, not cold-start latency of a second PowerShell host.
+$exe=Join-Path $PSScriptRoot 'synthetic-binary-child.exe'
+Add-Type -OutputAssembly $exe -OutputType ConsoleApplication -TypeDefinition @'
+using System;
+using System.Threading;
+public class SyntheticBinaryChild {
+    public static int Main(string[] args) {
+        if (Environment.GetEnvironmentVariable("R1066_CANARY") != null) return 3;
+        if (args.Length > 0 && args[0] == "sleep") { Thread.Sleep(30000); return 0; }
+        var output = Console.OpenStandardOutput();
+        if (args.Length > 0 && args[0] == "large") { output.Write(new byte[17000],0,17000); return 0; }
+        Console.Error.Write("PRIVATE_STDERR_CANARY");
+        var input = Console.OpenStandardInput(); byte[] b = new byte[256]; int n;
+        while ((n = input.Read(b,0,b.Length)) > 0) output.Write(b,0,n);
+        return 0;
+    }
+}
+'@
 $env:R1066_CANARY='PRIVATE_CANARY'
-$command='if ($env:R1066_CANARY) { exit 3 }; $s=[Console]::OpenStandardInput(); $o=[Console]::OpenStandardOutput(); $b=New-Object byte[] 256; $n=$s.Read($b,0,256); $o.Write($b,0,$n)'
-$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
 $bytes=[byte[]](0..255)
-$r=[FlopR1066.Transport]::Run($exe,('-NoProfile -NonInteractive -EncodedCommand '+$encoded),$bytes,10000)
+$r=[FlopR1066.Transport]::Run($exe,'',$bytes,10000)
 Need ($r.ExitCode -eq 0 -and $r.Output.Length -eq 256)
 for ($i=0; $i -lt 256; $i++) { Need ($r.Output[$i] -eq $i) }
 $blocked=$false
-try { $null=[FlopR1066.Transport]::Run($exe,'-NoProfile -Command "Start-Sleep 30"',([byte[]]@()),200) } catch { $blocked=$true }
+try { $null=[FlopR1066.Transport]::Run($exe,'sleep',([byte[]]@()),200) } catch { $blocked=$true }
 Need $blocked
 $blocked=$false
-try { $null=[FlopR1066.Transport]::Run($exe,'-NoProfile -Command "[Console]::Write((''x''*17000))"',([byte[]]@()),10000) } catch { $blocked=$true }
+try { $null=[FlopR1066.Transport]::Run($exe,'large',([byte[]]@()),10000) } catch { $blocked=$true }
 Need $blocked
 Write-Output 'PASS'
 """)
