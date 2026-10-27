@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import struct
 import sys
 
 # Real K137's private landing directory must be separately approved/created.
@@ -85,12 +86,13 @@ def hash_fd(fd):
         h.update(data)
     return h.hexdigest()
 
-def send_part(archive, name, expected_size, expected_sha, offset, output):
+def send_part(archive, name, expected_size, expected_sha, offset, output, *, archive_id):
     """Write only a PINNED ciphertext file suffix as raw binary bytes."""
     archive = private_dir(archive)
     name_validate(name); positive_size(expected_size); sha_validate(expected_sha)
     need(type(offset) is int and 0 <= offset < expected_size, "OFFSET_STOP")
     need((archive / "commit.bin").is_file(), "ARCHIVE_UNCOMMITTED")
+    need(archive_id_from_header(archive) == id_validate(archive_id), "ARCHIVE_ID_MISMATCH")
     fd, original = exact_file(archive / name, expected_size=expected_size)
     try:
         need(hash_fd(fd) == expected_sha, "SOURCE_HASH_STOP")
@@ -106,6 +108,29 @@ def send_part(archive, name, expected_size, expected_sha, offset, output):
              "SOURCE_DRIFT")
     finally:
         os.close(fd)
+
+def archive_id_from_header(archive):
+    with os.fdopen(exact_file(Path(archive) / "header.bin")[0], "rb") as stream:
+        blob = stream.read(HEADER.size + 1)
+    need(len(blob) == HEADER.size, "HEADER_SIZE_STOP")
+    magic, salt, archive_id, prefix, iterations, chunk = HEADER.unpack(blob)
+    need(magic == b"FLOPENV1" and iterations == 600000 and chunk == CHUNK,
+         "HEADER_FORMAT_STOP")
+    return archive_id.hex()
+
+def init(landing, archive_id):
+    private_dir(landing)
+    id_validate(archive_id)
+    parent = landing / "incoming"
+    if not parent.exists():
+        parent.mkdir(mode=0o700)
+    private_dir(parent)
+    child = parent / archive_id
+    if not child.exists():
+        child.mkdir(mode=0o700)
+    private_dir(child)
+    return {"operation":"CIPHERTEXT_QUARANTINE_ONLY", "live_restore":"NOT_PERFORMED",
+            "cutover":"NO_GO", "oci_retirement":"STRICT_NO_GO"}
 
 def _stage_root(landing, archive_id):
     private_dir(landing)
@@ -174,6 +199,8 @@ def receive_part(landing, archive_id, name, expected_size, expected_sha,
         os.fsync(fd)
     finally:
         os.close(fd)
+    if name == "header.bin":
+        need(archive_id_from_header(root) == archive_id, "ARCHIVE_ID_MISMATCH")
     # Commit is explicitly LAST, after all expected parts are already present.
     # This is still staging, NOT proof of a decrypted R1001 archive.
     if name == "commit.bin":
@@ -191,10 +218,10 @@ def receive_part(landing, archive_id, name, expected_size, expected_sha,
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="action", required=True)
-    for action in ("status","receive","send"):
+    for action in ("init","status","receive","send"):
         q = sub.add_parser(action)
         q.add_argument("--archive-id",required=True)
-        q.add_argument("--file",required=True)
+        if action != "init": q.add_argument("--file",required=True)
         if action == "send":
             q.add_argument("--source",required=True)
         if action in ("receive","send"):
@@ -205,11 +232,14 @@ def main():
             q.add_argument("--prefix-sha256",required=True)
     a = p.parse_args()
     try:
-        id_validate(a.archive_id); name_validate(a.file)
-        if a.action == "status":
+        id_validate(a.archive_id)
+        if a.action != "init": name_validate(a.file)
+        if a.action == "init":
+            print(json.dumps(init(LANDING, a.archive_id),sort_keys=True))
+        elif a.action == "status":
             print(json.dumps(status(LANDING,a.archive_id,a.file),sort_keys=True))
         elif a.action == "send":
-            send_part(Path(a.source),a.file,a.bytes,a.sha256,a.offset,sys.stdout.buffer)
+            send_part(Path(a.source),a.file,a.bytes,a.sha256,a.offset,sys.stdout.buffer,archive_id=a.archive_id)
         else:
             print(json.dumps(receive_part(LANDING,a.archive_id,a.file,a.bytes,a.sha256,
                                           a.offset,a.prefix_sha256,sys.stdin.buffer),
