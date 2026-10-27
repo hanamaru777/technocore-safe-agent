@@ -311,7 +311,14 @@ def test_manifest_does_not_authorize_source_or_wallet_automatic_actions():
     assert "subprocess" not in source
     assert "--source" in source
     tree = ast.parse(source)
-    banned = {"system", "Popen", "urlopen", "connect", "unlink", "rmtree"}
+    banned = {"system", "Popen", "urlopen", "connect", "rmtree"}
+    # The existing ciphertext receiver intentionally unlinks *only* its own
+    # verified .partial file after atomic hardlink-commit; forbid broad delete.
+    unlink_calls = [ast.unparse(node) for node in ast.walk(tree)
+                    if isinstance(node, ast.Call) and
+                    isinstance(node.func, ast.Attribute) and
+                    node.func.attr == "unlink"]
+    assert unlink_calls == ["os.unlink(partial)"]
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             name = node.func.id if isinstance(node.func, ast.Name) else (
