@@ -356,8 +356,8 @@ def test_k137_source_guard_does_not_accept_unverified_release_head(host, monkeyp
 
 def test_stage_relay_source_is_exactly_blob_pinned_in_windows_owner_controller():
     content = (FILES / "r1066_owner_workflow.ps1").read_text()
-    source = (FILES / "r1066_ciphertext_ssh_relay.py").read_bytes().replace(b"\\r\\n", b"\\n")
-    blob = hashlib.sha1(b"blob " + str(len(source)).encode() + b"\\0" + source).hexdigest()
+    source = (FILES / "r1066_ciphertext_ssh_relay.py").read_bytes().replace(b"\r\n", b"\n")
+    blob = hashlib.sha1(b"blob " + str(len(source)).encode() + b"\0" + source).hexdigest()
     assert blob in content
     assert "Invoke-R1066CiphertextStage" in content
     assert "Assert-R1066StageIntent $PerformStage" in content
