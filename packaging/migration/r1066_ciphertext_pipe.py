@@ -109,14 +109,17 @@ def send_part(archive, name, expected_size, expected_sha, offset, output, *, arc
     finally:
         os.close(fd)
 
-def archive_id_from_header(archive):
-    with os.fdopen(exact_file(Path(archive) / "header.bin")[0], "rb") as stream:
+def archive_id_from_file(path):
+    with os.fdopen(exact_file(Path(path))[0], "rb") as stream:
         blob = stream.read(HEADER.size + 1)
     need(len(blob) == HEADER.size, "HEADER_SIZE_STOP")
     magic, salt, archive_id, prefix, iterations, chunk = HEADER.unpack(blob)
     need(magic == b"FLOPENV1" and iterations == 600000 and chunk == CHUNK,
          "HEADER_FORMAT_STOP")
     return archive_id.hex()
+
+def archive_id_from_header(archive):
+    return archive_id_from_file(Path(archive) / "header.bin")
 
 def init(landing, archive_id):
     private_dir(landing)
@@ -150,6 +153,12 @@ def status(landing, archive_id, name):
     existing = final if final.exists() else partial
     if not existing.exists():
         return {"state":"ABSENT", "offset":0, "sha256":hashlib.sha256(b"").hexdigest()}
+    if existing == partial and existing.stat().st_size == 0:
+        entry = existing.lstat()
+        need(stat.S_ISREG(entry.st_mode) and entry.st_nlink == 1
+             and entry.st_uid == os.geteuid() and stat.S_IMODE(entry.st_mode) == 0o600,
+             "PARTIAL_CUSTODY_STOP")
+        return {"state":"PARTIAL", "offset":0, "sha256":hashlib.sha256(b"").hexdigest()}
     fd, meta = exact_file(existing)
     try:
         return {"state":"COMPLETE" if existing == final else "PARTIAL",
@@ -164,6 +173,9 @@ def receive_part(landing, archive_id, name, expected_size, expected_sha,
     sha_validate(expected_prefix_sha)
     need(type(offset) is int and 0 <= offset < expected_size, "OFFSET_STOP")
     root = _stage_root(landing, archive_id)
+    if name == "commit.bin":
+        need((root / "header.bin").is_file() and
+             any(root.glob("part-[0-9][0-9][0-9][0-9].bin")), "COMMIT_ORDER_STOP")
     final, partial = root / name, root / (name + ".partial")
     need(not final.exists() and not final.is_symlink(), "ALREADY_COMPLETE_STOP")
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os,"O_CLOEXEC",0)
@@ -200,7 +212,7 @@ def receive_part(landing, archive_id, name, expected_size, expected_sha,
     finally:
         os.close(fd)
     if name == "header.bin":
-        need(archive_id_from_header(root) == archive_id, "ARCHIVE_ID_MISMATCH")
+        need(archive_id_from_file(partial) == archive_id, "ARCHIVE_ID_MISMATCH")
     # Commit is explicitly LAST, after all expected parts are already present.
     # This is still staging, NOT proof of a decrypted R1001 archive.
     if name == "commit.bin":
