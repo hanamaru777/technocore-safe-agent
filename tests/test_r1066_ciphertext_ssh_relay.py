@@ -27,7 +27,9 @@ def test_pipe_guest_exact_git_blob_pin():
     with pytest.raises(relay.Stop, match="GUEST_PIN_STOP"):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
-            relay.pinned_guest(Path(d) / "fake.py")
+            fake = Path(d) / "fake.py"
+            fake.write_text("print(42)", encoding="utf-8")
+            relay.pinned_guest(fake)
 
 def test_real_local_binary_subprocess_pair_without_network(monkeypatch):
     payload = bytes.fromhex("00ff80a500fe")
