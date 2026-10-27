@@ -1,6 +1,9 @@
 # Windows PowerShell 5.1: owner-run READ-ONLY two-host preflight, not migration.
 # Independent enrollment must exist BEFORE any escrow prompt or SSH operation.
-param([string]$EnrollmentFile = '', [string]$EnrollmentSha256 = '')
+param([string]$EnrollmentFile = '', [string]$EnrollmentSha256 = '',
+    [switch]$StageCiphertext,
+    [string]$SealedArchiveRoot = '',
+    [string]$ArchiveId = '')
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $script:R1066Root = $PSScriptRoot
@@ -193,9 +196,110 @@ function Invoke-R1066Ssh([string]$Executable, [string[]]$Arguments, [byte[]]$Inp
     return [FlopR1066.Transport]::Run($Executable, ($quoted -join ' '), $InputBytes, 58000)
 }
 
-function Invoke-R1066Workflow([string]$Path, [string]$Digest) {
+
+function Assert-R1066StageIntent([bool]$Enabled, [string]$Source, [string]$Id) {
+    if (-not $Enabled) {
+        if ($Source -or $Id) { throw 'STAGE_OPT_IN_REQUIRED' }
+        return
+    }
+    if ($Id -cnotmatch '\\A[0-9a-f]{32}\\z' -or
+        $Source.Length -gt 256 -or $Source -cnotmatch '\\A/[A-Za-z0-9_.@/-]+\\z' -or
+        $Source.Contains('//') -or $Source.EndsWith('/') -or
+        @($Source.Substring(1).Split('/') | Where-Object { $_ -ceq '.' -or $_ -ceq '..' -or $_ -ceq '' }).Count -gt 0 -or
+        $Source -ceq '/var/lib/technocore-safe-agent' -or
+        $Source -ceq '/opt/technocore-safe-agent') { throw 'ARCHIVE_SCOPE_STOP' }
+}
+
+function Invoke-R1066CiphertextStage([string]$Ssh, [string]$OciKey, $Enrollment,
+                                  [string]$Custody, $Reports,
+                                  [string]$SourceRoot, [string]$Id) {
+    Assert-R1066StageIntent $true $SourceRoot $Id
+    if ($Reports.Count -ne 2 -or $Reports[0].role -cne 'oci' -or
+        $Reports[1].role -cne 'k137' -or
+        $Reports[0].read_only -ne $true -or $Reports[1].read_only -ne $true) {
+        throw 'PREFLIGHT_BINDING_STOP'
+    }
+    # A staging attempt is NOT approved live-state collection or cutover.
+    # This consumes only a previously sealed immutable R1001 archive.
+    $program = Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1066_ciphertext_ssh_relay.py') '0514e5d65c4236dfda83dfc2997e1bba14c6f8bd'
+    $pythonCommand = Get-Command 'python.exe' -ErrorAction SilentlyContinue
+    if ($null -eq $pythonCommand -or $pythonCommand.CommandType -ne 'Application' -or
+        -not [IO.File]::Exists($pythonCommand.Source)) { throw 'OWNER_PYTHON_REQUIRED' }
+    $python = $pythonCommand.Source
+    $version = @(& $python -I -B -c 'import sys; print(int(sys.version_info >= (3, 9)))' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $version.Count -ne 1 -or $version[0] -cne '1') {
+        throw 'OWNER_PYTHON_REQUIRED'
+    }
+    $relay = Join-Path $Custody 'r1066_ciphertext_ssh_relay.py'
+    [IO.File]::WriteAllText($relay, $program, (New-Object Text.UTF8Encoding($false)))
+    Assert-R1027Acl $relay
+    $ociHosts = Join-Path $Custody 'oci-known-hosts'
+    $k137Hosts = Join-Path $Custody 'k137-known-hosts'
+    $argsForRelay = @('-I', '-B', $relay,
+        '--ssh', $Ssh, '--source-root', $SourceRoot, '--archive-id', $Id,
+        '--oci-identity', $OciKey, '--oci-known-hosts', $ociHosts,
+        '--oci-known-hosts-sha256', (Get-R1066FileDigest $ociHosts),
+        '--k137-host', $Enrollment.k137.host, '--k137-user', $Enrollment.k137.user,
+        '--k137-identity', $Enrollment.k137.identity_file,
+        '--k137-known-hosts', $k137Hosts,
+        '--k137-known-hosts-sha256', (Get-R1066FileDigest $k137Hosts),
+        '--k137-free-bytes', ([string]$Reports[1].disk_free_bytes),
+        '--allow-disarmed-ciphertext-transfer')
+    $quoted = @($argsForRelay | ForEach-Object { [FlopR1062.Guards]::Quote($_) })
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $python
+    $start.Arguments = ($quoted -join ' ')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.EnvironmentVariables.Clear()
+    $start.EnvironmentVariables.Add('SystemRoot', $env:SystemRoot)
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw 'CIPHERTEXT_STAGE_STOP' }
+        $outputTask = $process.StandardOutput.ReadToEndAsync()
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(10800000)) { throw 'CIPHERTEXT_STAGE_TIMEOUT' }
+        $output = $outputTask.Result
+        if ($process.ExitCode -ne 0 -or $output.Length -gt 4096) {
+            throw 'CIPHERTEXT_STAGE_STOP'
+        }
+        $receipt = $output | ConvertFrom-Json
+        Assert-R1066Keys $receipt @('result', 'files', 'source_epoch',
+            'plaintext_restore', 'did_signer', 'cutover', 'oci_retirement')
+        if ($receipt.result -cne 'CIPHERTEXT_MIRROR_BYTES_EQUAL_ONLY' -or
+            $receipt.source_epoch -cne 'NOT_PROVEN' -or
+            $receipt.plaintext_restore -cne 'NOT_PERFORMED' -or
+            $receipt.did_signer -cne 'NOT_PROVEN' -or
+            $receipt.cutover -cne 'NO_GO' -or
+            $receipt.oci_retirement -cne 'STRICT_NO_GO' -or
+            -not (Test-R1066Integer $receipt.files 3 258)) {
+            throw 'CIPHERTEXT_STAGE_RECEIPT_STOP'
+        }
+        return $receipt
+    } finally {
+        if ($null -ne $process) {
+            if (-not $process.HasExited) {
+                # Terminate this process tree on Windows; do not leave an
+                # unbounded network writer after an interrupted operation.
+                $taskkill = Join-Path ([Environment]::GetFolderPath('System')) 'taskkill.exe'
+                try { & $taskkill '/PID' ([string]$process.Id) '/T' '/F' *> $null } catch {}
+                if (-not $process.HasExited) { $process.Kill() }
+                $null = $process.WaitForExit(10000)
+            }
+            $process.Dispose()
+        }
+    }
+}
+
+function Invoke-R1066Workflow([string]$Path, [string]$Digest,
+                              [bool]$PerformStage = $false,
+                              [string]$StageRoot = '', [string]$StageId = '') {
     $directory = $null; $plain = $null; $code = $null; $result = $null; $failure = 'PREFLIGHT_UNVERIFIED'
     try {
+        Assert-R1066StageIntent $PerformStage $StageRoot $StageId
         if (-not $Path -or -not $Digest) { throw 'K137_INDEPENDENT_ENROLLMENT_REQUIRED' }
         Initialize-R1066
         $e = Read-R1066Enrollment $Path $Digest
@@ -226,12 +330,22 @@ function Invoke-R1066Workflow([string]$Path, [string]$Digest) {
             if ($response.ExitCode -ne 0) { throw 'SSH_OR_REMOTE_PREFLIGHT_STOP' }
             $reports += Read-R1066Response $response.Output $request
         }
+        if ($PerformStage) {
+            $stageReceipt = Invoke-R1066CiphertextStage $ssh $ociKey $e $directory $reports $StageRoot $StageId
+            $result = [ordered]@{task='R1066'; phase='B'; operation='ciphertext_staged_only';
+                receipt=$stageReceipt; source_epoch='NOT_PROVEN'; restore='NOT_PERFORMED';
+                cutover='NO_GO'; oci_retirement='STRICT_NO_GO'}
+        } else {
         $result = [ordered]@{task='R1066'; phase='A'; operation='preflight_verified';
             code='WRITER_ADMISSION_AUTHORIZATION_REQUIRED'; hosts=$reports;
             encrypted_transfer='NOT_PERFORMED'; restore='NOT_PERFORMED'; cutover='NO_GO'; oci_retirement='STRICT_NO_GO'}
+        }
     } catch {
         $fixed = @('K137_INDEPENDENT_ENROLLMENT_REQUIRED', 'ENROLLMENT_PIN_STOP', 'HOST_DOMAIN_STOP',
             'K137_CREDENTIAL_STOP', 'OCI_CREDENTIAL_STOP', 'SOURCE_PIN_STOP', 'SSH_UNAVAILABLE',
+            'STAGE_OPT_IN_REQUIRED', 'ARCHIVE_SCOPE_STOP', 'PREFLIGHT_BINDING_STOP',
+            'OWNER_PYTHON_REQUIRED', 'CIPHERTEXT_STAGE_STOP', 'CIPHERTEXT_STAGE_TIMEOUT',
+            'CIPHERTEXT_STAGE_RECEIPT_STOP',
             'SSH_OR_REMOTE_PREFLIGHT_STOP', 'RESPONSE_STOP')
         if ($fixed -ccontains $_.Exception.Message) { $failure = $_.Exception.Message }
     } finally {
@@ -239,7 +353,7 @@ function Invoke-R1066Workflow([string]$Path, [string]$Digest) {
         if ($null -ne $code) { $code.Dispose() }
         if ($null -ne $directory) {
             try {
-                foreach ($name in @('oci-known-hosts', 'k137-known-hosts')) {
+                foreach ($name in @('r1066_ciphertext_ssh_relay.py', 'oci-known-hosts', 'k137-known-hosts')) {
                     $file = Join-Path $directory $name
                     if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) }
                 }
@@ -257,7 +371,7 @@ if ($args.Count -ne 0) {
     Write-Output '{"operation":"blocked","code":"ARGUMENTS_STOP","oci_retirement":"STRICT_NO_GO"}'
     exit 42
 }
-$report = Invoke-R1066Workflow $EnrollmentFile $EnrollmentSha256
+$report = Invoke-R1066Workflow $EnrollmentFile $EnrollmentSha256 ([bool]$StageCiphertext) $SealedArchiveRoot $ArchiveId
 Write-Output ($report | ConvertTo-Json -Depth 5 -Compress)
-if ($report.operation -eq 'preflight_verified') { exit 0 }
+if ($report.operation -eq 'preflight_verified' -or $report.operation -eq 'ciphertext_staged_only') { exit 0 }
 exit 42
