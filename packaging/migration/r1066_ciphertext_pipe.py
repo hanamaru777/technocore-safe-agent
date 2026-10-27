@@ -228,14 +228,126 @@ def receive_part(landing, archive_id, name, expected_size, expected_sha,
             "live_restore":"NOT_PERFORMED", "cutover":"NO_GO",
             "oci_retirement":"STRICT_NO_GO"}
 
+MAX_ARCHIVE_PARTS = 256
+MAX_INVENTORY_BYTES = 64 * 1024
+
+
+def archive_inventory(source, archive_id):
+    """Ciphertext-only manifest from an existing committed sealed archive.
+
+    Caller must independently authenticate which source host produced this
+    unsigned inventory. Equality does NOT authenticate the original plaintext.
+    """
+    source = private_dir(source)
+    id_validate(archive_id)
+    need(archive_id_from_header(source) == archive_id, "ARCHIVE_ID_MISMATCH")
+    names = set()
+    for leaf in source.iterdir():
+        need(not leaf.is_symlink() and leaf.name not in names, "SOURCE_ENTRY_STOP")
+        name_validate(leaf.name)
+        names.add(leaf.name)
+    parts = sorted(n for n in names if n.startswith("part-"))
+    need(1 <= len(parts) <= MAX_ARCHIVE_PARTS, "PART_COUNT_STOP")
+    need(parts == [f"part-{i:04d}.bin" for i in range(len(parts))],
+         "PART_SEQUENCE_STOP")
+    order = ["header.bin", *parts, "commit.bin"]
+    need(names == set(order), "SOURCE_ARCHIVE_SET_STOP")
+    entries = []
+    for name in order:
+        fd, before = exact_file(source / name)
+        try:
+            digest = hash_fd(fd)
+            after = os.fstat(fd)
+            need((after.st_dev, after.st_ino, after.st_size,
+                  after.st_mtime_ns, after.st_ctime_ns) == before,
+                 "SOURCE_DRIFT")
+            entries.append({"name": name, "bytes": before[2], "sha256": digest})
+        finally:
+            os.close(fd)
+    result = {"schema_version": 1, "archive_id": archive_id, "files": entries}
+    need(len(json.dumps(result, separators=(",", ":"))) <= MAX_INVENTORY_BYTES,
+         "INVENTORY_BOUND")
+    return result
+
+
+def _no_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        need(key not in result, "DUPLICATE_JSON_KEY")
+        result[key] = value
+    return result
+
+
+def parse_inventory(data, archive_id):
+    """Strict syntax and exact ordered archive set; no fake 'settled' proof."""
+    need(type(data) is bytes and 0 < len(data) <= MAX_INVENTORY_BYTES,
+         "INVENTORY_BOUND")
+    try:
+        inventory = json.loads(data.decode("utf-8", "strict"),
+                               object_pairs_hook=_no_duplicate_keys)
+    except (UnicodeError, ValueError, TypeError) as error:
+        raise Stop("INVENTORY_FORMAT_STOP") from error
+    need(type(inventory) is dict and set(inventory) ==
+         {"schema_version", "archive_id", "files"} and
+         type(inventory["schema_version"]) is int and
+         inventory["schema_version"] == 1 and
+         inventory["archive_id"] == id_validate(archive_id) and
+         type(inventory["files"]) is list, "INVENTORY_SCHEMA_STOP")
+    rows = inventory["files"]
+    need(3 <= len(rows) <= MAX_ARCHIVE_PARTS + 2,
+         "INVENTORY_PART_COUNT_STOP")
+    names = [row.get("name") if type(row) is dict else None for row in rows]
+    need(names == ["header.bin", *[f"part-{i:04d}.bin"
+                                  for i in range(len(rows) - 2)], "commit.bin"],
+         "INVENTORY_SEQUENCE_STOP")
+    for row in rows:
+        need(type(row) is dict and set(row) == {"name", "bytes", "sha256"},
+             "INVENTORY_ROW_STOP")
+        name_validate(row["name"])
+        positive_size(row["bytes"])
+        sha_validate(row["sha256"])
+    return inventory
+
+
+def verify_ciphertext_mirror(landing, archive_id, inventory):
+    """All encrypted shard bytes match a separately authenticated source listing.
+
+    NO AEAD decryption, original source epoch, K137 live restore or signer check.
+    """
+    id_validate(archive_id)
+    need(type(inventory) is dict and inventory.get("archive_id") == archive_id,
+         "MIRROR_SCOPE_STOP")
+    root = _stage_root(landing, archive_id)
+    expected = {row["name"] for row in inventory["files"]}
+    present = {entry.name for entry in root.iterdir()}
+    need(present == expected, "MIRROR_EXTRA_MISSING_OR_PARTIAL_STOP")
+    need(archive_id_from_header(root) == archive_id, "ARCHIVE_ID_MISMATCH")
+    for row in inventory["files"]:
+        fd, meta = exact_file(root / row["name"], expected_size=row["bytes"])
+        try:
+            need(hash_fd(fd) == row["sha256"], "MIRROR_HASH_STOP")
+            end = os.fstat(fd)
+            need((end.st_dev, end.st_ino, end.st_size,
+                  end.st_mtime_ns, end.st_ctime_ns) == meta,
+                 "MIRROR_DRIFT_STOP")
+        finally:
+            os.close(fd)
+    return {"operation": "CIPHERTEXT_MIRROR_BYTES_EQUAL_ONLY",
+            "files": len(expected), "plaintext_verified": "NO",
+            "common_sqlite_epoch": "NOT_PROVEN",
+            "same_did_signer": "NOT_PROVEN",
+            "live_restore": "NOT_PERFORMED", "cutover": "NO_GO",
+            "oci_retirement": "STRICT_NO_GO"}
+
+
 def main():
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="action", required=True)
-    for action in ("init","status","receive","send"):
+    for action in ("init","status","receive","send","inventory","verify"):
         q = sub.add_parser(action)
         q.add_argument("--archive-id",required=True)
-        if action != "init": q.add_argument("--file",required=True)
-        if action == "send":
+        if action in ("status", "receive", "send"): q.add_argument("--file",required=True)
+        if action in ("send", "inventory"):
             q.add_argument("--source",required=True)
         if action in ("receive","send"):
             q.add_argument("--bytes",type=int,required=True)
@@ -246,9 +358,17 @@ def main():
     a = p.parse_args()
     try:
         id_validate(a.archive_id)
-        if a.action != "init": name_validate(a.file)
+        if a.action in ("status", "receive", "send"): name_validate(a.file)
         if a.action == "init":
             print(json.dumps(init(LANDING, a.archive_id),sort_keys=True))
+        elif a.action == "inventory":
+            print(json.dumps(archive_inventory(Path(a.source),a.archive_id),
+                             sort_keys=True, separators=(",",":")))
+        elif a.action == "verify":
+            raw = sys.stdin.buffer.read(MAX_INVENTORY_BYTES + 1)
+            inventory = parse_inventory(raw, a.archive_id)
+            print(json.dumps(verify_ciphertext_mirror(LANDING,a.archive_id,inventory),
+                             sort_keys=True, separators=(",",":")))
         elif a.action == "status":
             print(json.dumps(status(LANDING,a.archive_id,a.file),sort_keys=True))
         elif a.action == "send":
