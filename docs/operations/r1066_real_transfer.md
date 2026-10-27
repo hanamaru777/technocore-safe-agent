@@ -235,3 +235,37 @@ the no-argument pre-credential STOP. No production credentials or cloud endpoint
 contacted. Broad full-suite/security/history coverage is provided once by the
 existing draft-PR workflow; the standard Windows job additionally runs the focused
 v2 tests only. No paid resources, caches or artifact uploads are added.
+
+## R1066 Phase B SSH ciphertext relay (2026-10-27) — code only, NOT run
+
+New `packaging/migration/r1066_ciphertext_ssh_relay.py` now implements the actual
+two-process SSH ciphertext data plane. It streams bounded encrypted bytes from
+an ALREADY sealed root-private OCI archive into an ALREADY provisioned K137
+quarantine, uses verified remote offsets for interrupted-file resume, transfers
+header and consecutive parts before commit, and verifies the entire exact mirror.
+The remote Python helper is the exact Git-blob-pinned r1066_ciphertext_pipe.py
+executed in memory, not an installation or arbitrary shell deployment.
+Two existing host credentials and independently pinned exact known-hosts lines
+are required; agent/TOFU/proxy/forwarding/password fallbacks are disabled.
+The controller rejects malformed inventories and remote offset discrepancies;
+stdout is bounded, streaming subprocesses have kill-on-timeout guards, and
+completion never authorizes plaintext restoration, DID signing or cutover.
+
+THIS SCRIPT IS NOT YET AN APPROVED PRODUCTION INVOCATION: original sealed archive,
+host enrollment, source writer-admission fence, full two-SQLite coherent epoch,
+five POST final verdicts, target cgroup/private landing/TradeBot capacity,
+and independent offhost recovery are still unverified. It is deliberately NOT
+automatically called from the PowerShell read-only owner preflight, and it does
+not acquire credentials from R987, open active SQLite, produce raw Vault keys,
+restore K137 or terminate any Oracle resources. Do not guess host fingerprints
+or archive IDs, or point it at active source directories. Do not run on live
+hosts until a reviewed owner controller bridges actual authenticated preflight
+and an approved immutable archive. Python availability on owner Windows also
+remains unverified; the existing PS5.1 preflight path is unchanged.
+
+CI subprocess tests prove the binary streaming controller's success/fail-closed
+semantics with synthetic local child processes, NOT an actual cloud transfer.
+Result always carries cutover=NO_GO and oci_retirement=STRICT_NO_GO.
+Remaining deliverable: integrate single Windows owner flow with existing
+R987 custody and approved durable original archive; then separate independent
+restore, same-DID signer continuity, protected TradeBot and rollback approval.
