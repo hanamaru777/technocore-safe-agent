@@ -30,7 +30,8 @@ try:
     assert ip.is_global and str(ip)==a["ipAddress"]
     user=a["username"]
     assert re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",user) and user!="root"
-    assert a["privateKey"].startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+    assert a["privateKey"].startswith(("-----BEGIN OPENSSH PRIVATE KEY-----",
+                                              "-----BEGIN RSA PRIVATE KEY-----"))
     assert a["certKey"].startswith(("ssh-ed25519-cert-v01@openssh.com ","ssh-rsa-cert-v01@openssh.com "))
     assert a.get("expiresAt")
     candidates=[h for h in a["hostKeys"] if h.get("algorithm")=="ssh-ed25519"]
