@@ -352,3 +352,44 @@ def test_k137_source_guard_does_not_accept_unverified_release_head(host, monkeyp
     monkeypatch.setattr(m, "git_head", lambda _: "c" * 40)
     with pytest.raises(m.Stop):
         m.probe(request)
+
+
+def test_stage_relay_source_is_exactly_blob_pinned_in_windows_owner_controller():
+    content = (FILES / "r1066_owner_workflow.ps1").read_text()
+    source = (FILES / "r1066_ciphertext_ssh_relay.py").read_bytes().replace(b"\\r\\n", b"\\n")
+    blob = hashlib.sha1(b"blob " + str(len(source)).encode() + b"\\0" + source).hexdigest()
+    assert blob in content
+    assert "Invoke-R1066CiphertextStage" in content
+    assert "Assert-R1066StageIntent $PerformStage" in content
+    assert "Get-R1066FileDigest $k137Hosts" in content
+    assert "--k137-free-bytes" in content
+    assert "STRICT_NO_GO" in content
+
+
+@WINDOWS
+def test_ps51_stage_intent_fails_before_remote_or_escrow(tmp_path):
+    output = run_ps(tmp_path, """
+$valid = 'aa' * 16
+Assert-R1066StageIntent $false '' ''
+Assert-R1066StageIntent $true '/private/immutable-sealed' $valid
+foreach ($case in @(
+    @($false,'/private/immutable-sealed',$valid),
+    @($true,'/var/lib/technocore-safe-agent',$valid),
+    @($true,'/private/../live',$valid),
+    @($true,'/private/immutable-sealed','abc'),
+    @($true,'/private//sealed',$valid),
+    @($true,'/private/immutable-sealed;whoami',$valid)
+)) {
+    $rejected = $false
+    try { Assert-R1066StageIntent ([bool]$case[0]) ([string]$case[1]) ([string]$case[2]) }
+    catch { $rejected = $true }
+    Need $rejected
+}
+function Read-R1027Backup { throw 'MUST_NOT_READ' }
+function Invoke-R1066Ssh { throw 'MUST_NOT_CONNECT' }
+$r=Invoke-R1066Workflow '' '' $true '/private/../live' $valid
+Need ($r.operation -ceq 'blocked')
+Need ($r.code -ceq 'ARCHIVE_SCOPE_STOP')
+Write-Output 'PASS'
+""")
+    assert output.strip() == "PASS"
