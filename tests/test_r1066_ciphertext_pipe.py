@@ -202,3 +202,118 @@ def test_ciphertext_pipe_has_no_secrets_production_unlock_or_generic_destination
     assert "InstancePrincipalsSecurityTokenSigner" not in source
     for marker in ("--password", "--key", "--host", "--command", "ssh-keyscan", "cutover=GO", "shell=True"):
         assert marker not in source
+
+
+@LINUX
+def test_ciphertext_inventory_staged_mirror_all_bytes_match_but_no_finality(paths):
+    src, landing, aid, files = paths
+    manifest = m.archive_inventory(src, aid)
+    assert manifest["archive_id"] == aid
+    assert [x["name"] for x in manifest["files"]] == [
+        "header.bin", "part-0000.bin", "commit.bin"]
+    import json
+    checked = m.parse_inventory(json.dumps(manifest).encode(), aid)
+    m.init(landing, aid)
+    for name in ("header.bin", "part-0000.bin", "commit.bin"):
+        receive(landing, aid, name, files[name])
+    report = m.verify_ciphertext_mirror(landing, aid, checked)
+    assert report == {
+        "operation": "CIPHERTEXT_MIRROR_BYTES_EQUAL_ONLY", "files": 3,
+        "plaintext_verified": "NO", "common_sqlite_epoch": "NOT_PROVEN",
+        "same_did_signer": "NOT_PROVEN", "live_restore": "NOT_PERFORMED",
+        "cutover": "NO_GO", "oci_retirement": "STRICT_NO_GO"}
+
+
+@LINUX
+@pytest.mark.parametrize("mode", ["missing", "extra", "partial", "changed",
+                                  "wrong_archive", "forged_source_digest"])
+def test_mirror_never_accepts_partial_extra_or_mismatched_files(paths, mode):
+    src, landing, aid, files = paths
+    manifest = m.archive_inventory(src, aid)
+    m.init(landing, aid)
+    for name in ("header.bin", "part-0000.bin", "commit.bin"):
+        receive(landing, aid, name, files[name])
+    root = landing / "incoming" / aid
+    if mode == "missing":
+        (root / "part-0000.bin").unlink()
+    elif mode == "extra":
+        (root / "extra.bin").write_bytes(b"unknown")
+    elif mode == "partial":
+        (root / "part-0000.bin.partial").write_bytes(b"partial")
+    elif mode == "changed":
+        target = root / "part-0000.bin"
+        target.write_bytes(b"X" * len(files["part-0000.bin"]))
+    elif mode == "wrong_archive":
+        header = root / "header.bin"
+        header.write_bytes(files["header.bin"].replace(bytes([0x36])*16,
+                                                     bytes([0x35])*16))
+    else:
+        manifest["files"][1]["sha256"] = get_sha(b"forged")
+    with pytest.raises((m.Stop, OSError)):
+        m.verify_ciphertext_mirror(landing, aid, manifest)
+
+
+@pytest.mark.parametrize("mode", ["wrong_id", "duplicate", "unknown_field",
+                                  "missing_part", "reorder", "noninteger",
+                                  "bool_size", "too_many", "oversized", "nonutf8"])
+def test_custody_inventory_schema_requires_single_ordered_archive(paths, mode):
+    src, _, aid, _ = paths
+    manifest = m.archive_inventory(src, aid)
+    import json
+    if mode == "wrong_id":
+        manifest["archive_id"] = "0" * 32
+    elif mode == "unknown_field":
+        manifest["filename"] = "ignored"
+    elif mode == "missing_part":
+        manifest["files"].pop(1)
+    elif mode == "reorder":
+        manifest["files"].reverse()
+    elif mode == "noninteger":
+        manifest["files"][0]["bytes"] = "48"
+    elif mode == "bool_size":
+        manifest["files"][0]["bytes"] = True
+    elif mode == "too_many":
+        manifest["files"] = [manifest["files"][0]] + [
+            {"name":f"part-{i:04d}.bin","bytes":1,"sha256":get_sha(b"x")}
+            for i in range(m.MAX_ARCHIVE_PARTS + 1)] + [manifest["files"][-1]]
+    if mode == "nonutf8":
+        payload = b"\xff"
+    elif mode == "oversized":
+        payload = b" " * (m.MAX_INVENTORY_BYTES + 1)
+    elif mode == "duplicate":
+        payload = json.dumps(manifest).replace('"schema_version": 1,',
+                                                '"schema_version": 1, "schema_version": 1,').encode()
+    else:
+        payload = json.dumps(manifest).encode()
+    with pytest.raises((m.Stop, ValueError)):
+        m.parse_inventory(payload, aid)
+
+
+@LINUX
+def test_source_inventory_rejects_extra_unknown_or_missing_part(paths):
+    src, _, aid, files = paths
+    (src / "extra.bin").write_bytes(b"x")
+    with pytest.raises(m.Stop):
+        m.archive_inventory(src, aid)
+    (src / "extra.bin").unlink()
+    (src / "part-0000.bin").unlink()
+    with pytest.raises(m.Stop):
+        m.archive_inventory(src, aid)
+
+
+def test_manifest_does_not_authorize_source_or_wallet_automatic_actions():
+    import ast
+    source = FILE.read_text(encoding="utf-8")
+    assert '"plaintext_verified": "NO"' in source
+    assert '"same_did_signer": "NOT_PROVEN"' in source
+    assert '"live_restore": "NOT_PERFORMED"' in source
+    assert '"oci_retirement": "STRICT_NO_GO"' in source
+    assert "subprocess" not in source
+    assert "--source" in source
+    tree = ast.parse(source)
+    banned = {"system", "Popen", "urlopen", "connect", "unlink", "rmtree"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else (
+                node.func.attr if isinstance(node.func, ast.Attribute) else "")
+            assert name not in banned
