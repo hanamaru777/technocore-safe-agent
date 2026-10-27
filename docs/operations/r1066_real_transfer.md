@@ -269,3 +269,44 @@ Result always carries cutover=NO_GO and oci_retirement=STRICT_NO_GO.
 Remaining deliverable: integrate single Windows owner flow with existing
 R987 custody and approved durable original archive; then separate independent
 restore, same-DID signer continuity, protected TradeBot and rollback approval.
+
+## R1066 Phase A to ciphertext Phase B owner integration — source-only
+
+The existing Windows PowerShell 5.1 `r1066_owner_workflow.ps1` now optionally
+invokes the SSH ciphertext relay IN THE SAME ephemeral R987 V2 OCI custody
+session after BOTH separately authenticated read-only host preflights succeed.
+Default execution remains Phase A READ-ONLY. Opt-in Phase B requires all of:
+
+- `-StageCiphertext` explicitly set; otherwise an archive path/ID is rejected
+- independently authenticated unmodified two-host enrollment and known-hosts
+- `-SealedArchiveRoot` identifying an ALREADY committed immutable R1001 archive
+  on the authenticated OCI source (never live state/app roots)
+- `-ArchiveId` exact 32 lowercase hex characters matching sealed header
+- local Python 3.9+ availability in addition to Windows PowerShell 5.1
+- existing K137 private SSH credential and private landing/cgroup identity
+- K137 observed disk free at the preflight snapshot >= 2 x total sealed
+  ciphertext bytes + 10 GiB for both ciphertext, planned restore and TradeBot
+
+This only preserves ciphertext and never makes an original complete coherent
+backup or restores/starts the K137 FLOP agent. No actual original OCI sealed
+archive currently exists as verified evidence; do NOT execute Phase B on the
+live host and DO NOT invent archive path/ID/host enrollment. The K137 statvfs
+figure may change between preflight and transfer, so these reserve checks
+cannot substitute for fresh disarmed restore capacity and rollback evidence.
+Transfer failure leaves staged `.partial` ciphertext under K137 private root
+and does not grant deletion rights. The stage command's Python process tree
+is terminated on explicit timeout where Windows allows, with failure marked
+STOP. Relay/process termination under abrupt OS crash is NOT guaranteed.
+The preflight's original already-audited R987 key handling is preserved;
+the extra on-disk transient controller Python copy is pinned, ACL-checked
+and explicitly deleted before custody cleanup.
+
+Oracle cleanup status: NO deletion or cache pruning performed. Without a
+complete live file/owner/process census and independently restored full archive
+there is no proven SAFE_TO_DELETE inventory. On K137 the live TradeBot and
+the versioned FLOP shadow release are both protected and must not be pruned.
+Only ephemeral files created for this invocation are eligible for automatic
+owned-temp cleanup; state, logs, SQLite/WAL, encrypted manifests, keys,
+rollback archives and unknown directories are never safe to infer as unused.
+
+Current release authority: cutover=NO_GO, OCI_RETIREMENT=STRICT_NO_GO.
