@@ -21,45 +21,110 @@ if ! aws lightsail get-instance-access-details \
 fi
 export R1067_DIR="$d"
 if ! python3 -I -B - <<'PY'
-import base64,hashlib,ipaddress,json,os,pathlib,re,sys
+import base64
+import datetime
+import hashlib
+import ipaddress
+import json
+import os
+import pathlib
+import re
+import struct
+import sys
+
+class Reject(Exception):
+    pass
+
+def require(ok, code):
+    if not ok:
+        raise Reject(code)
+
+def read_ssh_host_key(record):
+    require(type(record) is dict, "HOSTKEY_SCHEMA_STOP")
+    algorithm=record.get("algorithm")
+    require(algorithm in ("ssh-ed25519","ecdsa-sha2-nistp256"), "HOSTKEY_ALGORITHM_STOP")
+    value=record.get("publicKey")
+    require(type(value) is str and len(value)<=4096, "HOSTKEY_BLOB_STOP")
+    parts=value.strip().split()
+    if len(parts)==2:
+        require(parts[0]==algorithm, "HOSTKEY_ALGORITHM_STOP")
+        value=parts[1]
+    else:
+        require(len(parts)==1, "HOSTKEY_BLOB_STOP")
+        value=parts[0]
+    require(bool(re.fullmatch(r"[A-Za-z0-9+/]+={0,2}",value)), "HOSTKEY_BLOB_STOP")
+    raw=base64.b64decode(value,validate=True)
+    require(40<=len(raw)<=2048, "HOSTKEY_BLOB_STOP")
+    n=struct.unpack(">I",raw[:4])[0]
+    require(0<n<=64 and len(raw)>=4+n, "HOSTKEY_BLOB_STOP")
+    require(raw[4:4+n].decode("ascii")==algorithm, "HOSTKEY_ALGORITHM_STOP")
+    sha="SHA256:"+base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
+    require(record.get("fingerprintSHA256")==sha, "HOSTKEY_FINGERPRINT_STOP")
+    return algorithm,value
+
 try:
     d=pathlib.Path(os.environ["R1067_DIR"])
-    a=json.loads((d/"access.json").read_text(encoding="utf-8"))["accessDetails"]
-    assert a["instanceName"]=="tradebot-k137" and a["protocol"]=="ssh"
-    ip=ipaddress.IPv4Address(a["ipAddress"])
-    assert ip.is_global and str(ip)==a["ipAddress"]
-    user=a["username"]
-    assert re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",user) and user!="root"
-    assert a["privateKey"].startswith(("-----BEGIN OPENSSH PRIVATE KEY-----",
-                                              "-----BEGIN RSA PRIVATE KEY-----"))
-    assert a["certKey"].startswith(("ssh-ed25519-cert-v01@openssh.com ","ssh-rsa-cert-v01@openssh.com "))
-    assert a.get("expiresAt")
-    candidates=[h for h in a["hostKeys"] if h.get("algorithm")=="ssh-ed25519"]
-    assert len(candidates)==1
-    h=candidates[0]
-    key=base64.b64decode(h["publicKey"],validate=True)
-    sha=base64.b64encode(hashlib.sha256(key).digest()).decode().rstrip("=")
-    assert h["fingerprintSHA256"]=="SHA256:"+sha and 32<=len(key)<=2048
+    response=json.loads((d/"access.json").read_text(encoding="utf-8"))
+    require(type(response) is dict and type(response.get("accessDetails")) is dict,
+            "RESPONSE_SCHEMA_STOP")
+    a=response["accessDetails"]
+    require(a.get("instanceName")=="tradebot-k137" and a.get("protocol")=="ssh",
+            "INSTANCE_IDENTITY_STOP")
+    ip=ipaddress.IPv4Address(a.get("ipAddress"))
+    require(ip.is_global and str(ip)==a["ipAddress"], "INSTANCE_IP_STOP")
+    user=a.get("username")
+    require(type(user) is str and bool(re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",user))
+            and user!="root", "INSTANCE_USER_STOP")
+    private=a.get("privateKey")
+    require(type(private) is str and private.startswith((
+        "-----BEGIN OPENSSH PRIVATE KEY-----","-----BEGIN RSA PRIVATE KEY-----")),
+        "TEMP_PRIVATE_KEY_FORMAT_STOP")
+    cert=a.get("certKey")
+    require(type(cert) is str and cert.startswith((
+        "ssh-ed25519-cert-v01@openssh.com ",
+        "ssh-rsa-cert-v01@openssh.com ",
+        "ecdsa-sha2-nistp256-cert-v01@openssh.com ")),
+        "TEMP_CERTIFICATE_FORMAT_STOP")
+    require(bool(a.get("expiresAt")), "TEMP_CREDENTIAL_EXPIRY_STOP")
+    keys=a.get("hostKeys")
+    require(type(keys) is list, "HOSTKEY_SCHEMA_STOP")
+    selected=None
+    # Never fall back from an advertised ed25519 key with a bad fingerprint.
+    for algorithm in ("ssh-ed25519","ecdsa-sha2-nistp256"):
+        matches=[k for k in keys if type(k) is dict and k.get("algorithm")==algorithm]
+        require(len(matches)<=1, "HOSTKEY_DUPLICATE_STOP")
+        if matches:
+            selected=read_ssh_host_key(matches[0])
+            break
+    require(selected is not None,"HOSTKEY_SUPPORTED_ALGORITHM_MISSING")
+    algorithm,public_blob=selected
     def put(name,value):
         fd=os.open(d/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-        with os.fdopen(fd,"w",encoding="ascii",newline="\n") as f:
-            f.write(value)
-    put("identity",a["privateKey"].strip()+"\n")
-    put("identity-cert.pub",a["certKey"].strip()+"\n")
-    put("known_hosts",str(ip)+" ssh-ed25519 "+h["publicKey"]+"\n")
-    put("metadata.json",json.dumps({"ip":str(ip),"user":user},separators=(",",":")))
+        with os.fdopen(fd,"w",encoding="ascii",newline="\n") as stream:
+            stream.write(value)
+    put("identity",private.strip()+"\n")
+    put("identity-cert.pub",cert.strip()+"\n")
+    put("known_hosts",str(ip)+" "+algorithm+" "+public_blob+"\n")
+    put("metadata.json",json.dumps({"ip":str(ip),"user":user,
+                                    "algorithm":algorithm},separators=(",",":")))
+except Reject as error:
+    # Fixed allow-listed status only. Never show privateKey, certKey or AWS JSON.
+    print(json.dumps({"phase":"R1067","result":"STOP","code":str(error),
+                      "cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}))
+    sys.exit(42)
 except Exception:
+    print('{"phase":"R1067","result":"STOP","code":"RESPONSE_PARSE_OR_CUSTODY_STOP","cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}')
     sys.exit(42)
 PY
 then
-    die AWS_RESPONSE_AUTHORITY_STOP
+    exit 42
 fi
-read -r k137_ip k137_user < <(python3 -I -B -c 'import json,os;d=json.load(open(os.environ["R1067_DIR"]+"/metadata.json"));print(d["ip"],d["user"])') || die METADATA_STOP
+read -r k137_ip k137_user k137_algorithm < <(python3 -I -B -c 'import json,os;d=json.load(open(os.environ["R1067_DIR"]+"/metadata.json"));print(d["ip"],d["user"],d["algorithm"])') || die METADATA_STOP
 if ! ssh -F /dev/null -T -i "$d/identity" \
     -o "CertificateFile=$d/identity-cert.pub" \
     -o "UserKnownHostsFile=$d/known_hosts" \
     -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes \
-    -o HostKeyAlgorithms=ssh-ed25519 \
+    -o "HostKeyAlgorithms=$k137_algorithm" \
     -o IdentityAgent=none -o IdentitiesOnly=yes -o BatchMode=yes \
     -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \
     -o GSSAPIAuthentication=no -o HostbasedAuthentication=no \
