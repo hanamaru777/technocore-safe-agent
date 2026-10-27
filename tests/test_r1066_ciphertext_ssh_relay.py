@@ -124,3 +124,39 @@ def test_no_implicit_owner_action_or_secret_handling_in_code():
                       "ssh-keyscan", "R987 V2 recovery code"):
         assert forbidden not in text
     assert "--allow-disarmed-ciphertext-transfer" in text
+
+
+def test_protected_tradebot_disk_headroom_blocks_before_quarantine(monkeypatch):
+    source_inventory = samples()
+    calls = []
+    def stage_control(base, guest, args, *, source=False, data=None):
+        calls.append(args[0])
+        if args[0] != "inventory":
+            pytest.fail("K137 mutation attempted despite insufficient headroom")
+        return source_inventory
+    monkeypatch.setattr(relay, "control", stage_control)
+    with pytest.raises(relay.Stop, match="K137_PROTECTED_DISK_HEADROOM_STOP"):
+        relay.relay(["source"], ["destination"], "GUEST", "/private/sealed", AID,
+                    k137_free_bytes=10 * 1024**3)
+    assert calls == ["inventory"]
+
+
+def test_protected_disk_headroom_allows_bounded_full_mirror(monkeypatch):
+    source_inventory = samples()
+    total = sum(x["bytes"] for x in source_inventory["files"])
+    calls = []
+    def stage_control(base, guest, args, *, source=False, data=None):
+        calls.append(args[0])
+        if args[0] == "inventory": return source_inventory
+        if args[0] == "init":
+            return {"operation":"CIPHERTEXT_QUARANTINE_ONLY","cutover":"NO_GO"}
+        if args[0] == "verify":
+            return {"operation":"CIPHERTEXT_MIRROR_BYTES_EQUAL_ONLY", "files":3,
+                    "cutover":"NO_GO", "oci_retirement":"STRICT_NO_GO"}
+        pytest.fail("unexpected control")
+    monkeypatch.setattr(relay, "control", stage_control)
+    monkeypatch.setattr(relay, "relay_file", lambda *a, **kw: None)
+    result = relay.relay(["source"],["destination"],"GUEST","/private/sealed",AID,
+                         k137_free_bytes=2 * total + 10 * 1024**3)
+    assert calls == ["inventory","init","verify"]
+    assert result["oci_retirement"] == "STRICT_NO_GO"
