@@ -202,8 +202,8 @@ function Assert-R1066StageIntent([bool]$Enabled, [string]$Source, [string]$Id) {
         if ($Source -or $Id) { throw 'STAGE_OPT_IN_REQUIRED' }
         return
     }
-    if ($Id -cnotmatch '\\A[0-9a-f]{32}\\z' -or
-        $Source.Length -gt 256 -or $Source -cnotmatch '\\A/[A-Za-z0-9_.@/-]+\\z' -or
+    if ($Id -cnotmatch '\A[0-9a-f]{32}\z' -or
+        $Source.Length -gt 256 -or $Source -cnotmatch '\A/[A-Za-z0-9_.@/-]+\z' -or
         $Source.Contains('//') -or $Source.EndsWith('/') -or
         @($Source.Substring(1).Split('/') | Where-Object { $_ -ceq '.' -or $_ -ceq '..' -or $_ -ceq '' }).Count -gt 0 -or
         $Source -ceq '/var/lib/technocore-safe-agent' -or
