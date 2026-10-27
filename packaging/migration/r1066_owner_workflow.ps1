@@ -1,37 +1,263 @@
-# Windows PowerShell 5.1. This entrypoint never replays consumed witnesses.
-[CmdletBinding()]
-param()
+# Windows PowerShell 5.1: owner-run READ-ONLY two-host preflight, not migration.
+# Independent enrollment must exist BEFORE any escrow prompt or SSH operation.
+param([string]$EnrollmentFile = '', [string]$EnrollmentSha256 = '')
+Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+$script:R1066Root = $PSScriptRoot
+
+function Read-R1066PinnedSource([string]$Path, [string]$Blob) {
+    if ((Get-Item -LiteralPath $Path).Length -gt 65536) { throw 'SOURCE_PIN_STOP' }
+    $raw = [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8).Replace("`r`n", "`n")
+    $bytes = [Text.Encoding]::UTF8.GetBytes($raw)
+    $prefix = [Text.Encoding]::ASCII.GetBytes(('blob ' + $bytes.Length + [char]0))
+    $sha = [Security.Cryptography.SHA1]::Create()
+    try {
+        $null = $sha.TransformBlock($prefix, 0, $prefix.Length, $prefix, 0)
+        $null = $sha.TransformFinalBlock($bytes, 0, $bytes.Length)
+        $seen = [BitConverter]::ToString($sha.Hash).Replace('-', '').ToLowerInvariant()
+        if ($seen -cne $Blob) { throw 'SOURCE_PIN_STOP' }
+    } finally { $sha.Dispose() }
+    return $raw
+}
+
+function Initialize-R1066 {
+    # Import ONLY pinned R987 custody/ACL helpers. Never execute the consumed
+    # R1062 entrypoint or its Get-R1027Source/SSH/witness functions.
+    $path = Join-Path $script:R1066Root '..\windows\r1062_writer_attribution_one_shot_readonly.ps1'
+    $text = Read-R1066PinnedSource $path '7ad3432b89b2aa2fe4a5e6b0142ec7578554baaa'
+    $tokens = $null; $errors = $null
+    $ast = [Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errors)
+    if ($errors.Count) { throw 'SOURCE_PIN_STOP' }
+    foreach ($name in @('Initialize-R1027', 'Assert-R1027LocalPath', 'New-R1027Custody',
+        'Assert-R1027Acl', 'Write-R1027Key', 'Remove-R1027Custody',
+        'Find-R1027Backup', 'Read-R1027Backup', 'Unprotect-R1027')) {
+        $nodes = @($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]}, $true) |
+            Where-Object { $_.Name -ceq $name })
+        if ($nodes.Count -ne 1) { throw 'SOURCE_PIN_STOP' }
+        $parameters = @($nodes[0].Parameters | Where-Object { $null -ne $_ } | ForEach-Object { $_.Extent.Text }) -join ','
+        $body = $nodes[0].Body.Extent.Text
+        $block = [scriptblock]::Create(('param(' + $parameters + ")`n" + $body.Substring(1, $body.Length - 2)))
+        Set-Item -Path ('Function:script:' + $name) -Value $block
+    }
+    Initialize-R1027
+    $carrier = Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1066_preflight_transport.cs') '9e4f771df0172fe6f51d4e72eb6e93ab02069e8e'
+    if (-not ('FlopR1066.Transport' -as [type])) { Add-Type -TypeDefinition $carrier }
+}
+
+function Assert-R1066Keys($Object, [string[]]$Expected) {
+    if ($null -eq $Object -or $Object -isnot [Management.Automation.PSCustomObject]) { throw 'SCHEMA_STOP' }
+    $keys = @($Object.PSObject.Properties.Name)
+    if ($keys.Count -ne $Expected.Count) { throw 'SCHEMA_STOP' }
+    foreach ($key in $keys) { if ($Expected -cnotcontains $key) { throw 'SCHEMA_STOP' } }
+}
+
+function Test-R1066Integer($Value, [long]$Min, [long]$Max) {
+    return (($Value -is [int] -or $Value -is [long]) -and $Value -ge $Min -and $Value -le $Max)
+}
+
+function Get-R1066FileDigest([string]$Path) {
+    $stream = [IO.File]::Open($Path, 'Open', 'Read', 'Read')
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try {
+        if ($stream.Length -lt 1 -or $stream.Length -gt 65536) { throw 'FILE_BOUND_STOP' }
+        return [BitConverter]::ToString($hash.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+    } finally { $hash.Dispose(); $stream.Dispose() }
+}
+
+function Assert-R1066Endpoint($Endpoint, [string]$Role) {
+    Assert-R1066Keys $Endpoint @('host', 'user', 'host_key', 'host_key_sha256',
+        'credential_sha256', 'identity_file', 'machine_sha256', 'uid', 'head',
+        'cgroup_sha256', 'minimum_free_bytes')
+    $ip = $null
+    if ($Endpoint.host -isnot [string] -or -not [Net.IPAddress]::TryParse($Endpoint.host, [ref]$ip) -or
+        $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or $ip.ToString() -cne $Endpoint.host -or
+        $Endpoint.host -match '^(0|127|169\.254|224|255)\.') { throw 'HOST_ENROLLMENT_STOP' }
+    if ($Endpoint.user -isnot [string] -or $Endpoint.user -cnotmatch '\A[a-z][a-z0-9_-]{0,31}\z') { throw 'HOST_ENROLLMENT_STOP' }
+    foreach ($key in @('host_key_sha256', 'credential_sha256', 'machine_sha256', 'cgroup_sha256')) {
+        if ($Endpoint.$key -isnot [string] -or $Endpoint.$key -cnotmatch '\A[0-9a-f]{64}\z') { throw 'HOST_ENROLLMENT_STOP' }
+    }
+    if ($Endpoint.head -isnot [string] -or $Endpoint.head -cnotmatch '\A[0-9a-f]{40}\z' -or
+        -not (Test-R1066Integer $Endpoint.uid 0 2147483647) -or
+        -not (Test-R1066Integer $Endpoint.minimum_free_bytes 1073741824 1125899906842624)) { throw 'HOST_ENROLLMENT_STOP' }
+    if ($Endpoint.host_key -isnot [string] -or $Endpoint.host_key.Length -gt 1024 -or
+        $Endpoint.host_key -cnotmatch '\A(ssh-ed25519|ecdsa-sha2-nistp256) ([A-Za-z0-9+/]+={0,2})\z') { throw 'HOST_KEY_STOP' }
+    $keyBytes = [Convert]::FromBase64String($Endpoint.host_key.Split(' ')[1])
+    if ($keyBytes.Length -lt 32 -or [FlopR1062.Guards]::Sha256($keyBytes) -cne $Endpoint.host_key_sha256) { throw 'HOST_KEY_STOP' }
+    if ($Role -ceq 'oci') {
+        if ($Endpoint.host -cne '140.238.55.171' -or $Endpoint.user -cne 'ubuntu' -or
+            $Endpoint.uid -ne 0 -or $Endpoint.identity_file -cne 'R987_V2_ESCROW' -or
+            -not $Endpoint.host_key.StartsWith('ecdsa-sha2-nistp256 ') -or
+            $Endpoint.head -cne 'ec4bc4892d40cdd2a03e102faa44d72c89e01b99') { throw 'OCI_BINDING_STOP' }
+    } else {
+        if ($Role -cne 'k137' -or $Endpoint.host -ceq '140.238.55.171' -or $Endpoint.user -ceq 'root' -or $Endpoint.uid -eq 0 -or
+            $Endpoint.identity_file -isnot [string] -or $Endpoint.identity_file -match '["\r\n]' -or
+            -not [IO.File]::Exists($Endpoint.identity_file)) { throw 'K137_CREDENTIAL_STOP' }
+        Assert-R1027LocalPath $Endpoint.identity_file
+        Assert-R1027Acl $Endpoint.identity_file
+        if ((Get-R1066FileDigest $Endpoint.identity_file) -cne $Endpoint.credential_sha256) {
+            throw 'K137_CREDENTIAL_STOP'
+        }
+    }
+}
+
+function Read-R1066Enrollment([string]$Path, [string]$Digest) {
+    if (-not $Path -or $Digest -cnotmatch '\A[0-9a-f]{64}\z') { throw 'K137_INDEPENDENT_ENROLLMENT_REQUIRED' }
+    Assert-R1027LocalPath $Path
+    Assert-R1027Acl $Path
+    $stream = [IO.File]::Open($Path, 'Open', 'Read', 'Read')
+    try {
+        if ($stream.Length -lt 50 -or $stream.Length -gt 16384) { throw 'ENROLLMENT_STOP' }
+        $bytes = New-Object byte[] ([int]$stream.Length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $n = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($n -le 0) { throw 'ENROLLMENT_STOP' }; $offset += $n
+        }
+    } finally { $stream.Dispose() }
+    if ([FlopR1062.Guards]::Sha256($bytes) -cne $Digest) { throw 'ENROLLMENT_PIN_STOP' }
+    $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($bytes)
+    $e = $text | ConvertFrom-Json
+    Assert-R1066Keys $e @('schema_version', 'purpose', 'oci', 'k137')
+    # Exact property-token count additionally rejects duplicate JSON keys.
+    if ([regex]::Matches($text, '"[a-z0-9_]+"\s*:').Count -ne 26 -or
+        -not (Test-R1066Integer $e.schema_version 1 1) -or $e.purpose -cne 'R1066_READONLY_PREFLIGHT') { throw 'ENROLLMENT_STOP' }
+    Assert-R1066Endpoint $e.oci 'oci'
+    Assert-R1066Endpoint $e.k137 'k137'
+    if ($e.oci.credential_sha256 -ceq $e.k137.credential_sha256 -or
+        $e.oci.machine_sha256 -ceq $e.k137.machine_sha256 -or
+        $e.oci.host_key_sha256 -ceq $e.k137.host_key_sha256) { throw 'HOST_DOMAIN_STOP' }
+    return $e
+}
+
+function Get-R1066Arguments($Endpoint, [string]$Role, [string]$Key, [string]$KnownHosts) {
+    # No command/path/env override from enrollment. The roles are not interchangeable.
+    $command = '/usr/bin/python3 -I -B -'
+    if ($Role -ceq 'oci') { $command = 'sudo -n /usr/bin/python3 -I -B -' }
+    elseif ($Role -cne 'k137') { throw 'ROLE_STOP' }
+    return @('-F', 'NUL', '-T', '-i', $Key, '-o', ('UserKnownHostsFile="' + $KnownHosts.Replace('\', '/') + '"'),
+        '-o', 'GlobalKnownHostsFile=NUL', '-o', 'StrictHostKeyChecking=yes',
+        '-o', ('HostKeyAlgorithms=' + $Endpoint.host_key.Split(' ')[0]),
+        '-o', 'PasswordAuthentication=no', '-o', 'KbdInteractiveAuthentication=no',
+        '-o', 'PreferredAuthentications=publickey', '-o', 'HostbasedAuthentication=no',
+        '-o', 'GSSAPIAuthentication=no', '-o', 'UpdateHostKeys=no',
+        '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'IdentityAgent=none',
+        '-o', 'ClearAllForwardings=yes', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no',
+        '-o', 'PermitLocalCommand=no', '-o', 'KnownHostsCommand=none',
+        '-o', 'ProxyCommand=none', '-o', 'ProxyJump=none', '-o', 'CanonicalizeHostname=no',
+        '-o', 'ConnectionAttempts=1', '-o', 'ConnectTimeout=7',
+        '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=2',
+        ($Endpoint.user + '@' + $Endpoint.host), $command)
+}
+
+function New-R1066Request($Endpoint, [string]$Role) {
+    $bytes = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return [ordered]@{role=$Role; machine_sha256=$Endpoint.machine_sha256; uid=$Endpoint.uid;
+        head=$Endpoint.head; cgroup_sha256=$Endpoint.cgroup_sha256; minimum_free_bytes=$Endpoint.minimum_free_bytes;
+        challenge=([BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant())}
+}
+
+function Read-R1066Response([byte[]]$Bytes, $Request) {
+    if ($Bytes.Length -lt 100 -or $Bytes.Length -gt 4096) { throw 'RESPONSE_STOP' }
+    foreach ($b in $Bytes) { if ($b -ne 10 -and ($b -lt 32 -or $b -gt 126)) { throw 'RESPONSE_STOP' } }
+    $text = [Text.Encoding]::ASCII.GetString($Bytes)
+    $r = $text | ConvertFrom-Json
+    $keys = @('schema_version', 'role', 'challenge', 'host_identity', 'head', 'scope', 'disk_free_bytes',
+        'disk_required_bytes', 'resources', 'memory_max_bytes', 'pids_max', 'protected_tradebot', 'read_only',
+        'writer_admission', 'five_post_finality', 'common_sqlite_epoch', 'signer_portability',
+        'restore_authority', 'cutover', 'oci_retirement')
+    Assert-R1066Keys $r $keys
+    if ([regex]::Matches($text, '"[a-z0-9_]+"\s*:').Count -ne $keys.Count -or
+        -not (Test-R1066Integer $r.schema_version 1 1) -or $r.role -cne $Request.role -or $r.challenge -cne $Request.challenge -or
+        $r.read_only -isnot [bool] -or -not $r.read_only) { throw 'RESPONSE_STOP' }
+    foreach ($key in @('host_identity', 'head', 'scope')) { if ($r.$key -cne 'MATCH') { throw 'RESPONSE_STOP' } }
+    foreach ($key in @('writer_admission', 'five_post_finality', 'common_sqlite_epoch', 'signer_portability', 'restore_authority')) {
+        if ($r.$key -cne 'NOT_PROVEN') { throw 'RESPONSE_STOP' }
+    }
+    if ($r.cutover -cne 'NO_GO' -or $r.oci_retirement -cne 'STRICT_NO_GO' -or
+        -not (Test-R1066Integer $r.disk_free_bytes $Request.minimum_free_bytes 1152921504606846976) -or
+        -not (Test-R1066Integer $r.disk_required_bytes $Request.minimum_free_bytes $Request.minimum_free_bytes)) { throw 'RESPONSE_STOP' }
+    if ($Request.role -ceq 'k137') {
+        if ($r.resources -cne 'BOUNDED_SCOPE_OBSERVED' -or $r.protected_tradebot -cne 'DIRECTORY_WRITE_DENIED_ONLY' -or
+            -not (Test-R1066Integer $r.memory_max_bytes 1 268435456) -or
+            -not (Test-R1066Integer $r.pids_max 1 64)) { throw 'RESPONSE_STOP' }
+    } elseif ($r.resources -cne 'NOT_ASSESSED' -or $r.protected_tradebot -cne 'NOT_PRESENT' -or
+              $r.memory_max_bytes -ne 0 -or $r.pids_max -ne 0) { throw 'RESPONSE_STOP' }
+    $r.PSObject.Properties.Remove('challenge')
+    return $r
+}
+
+function Invoke-R1066Ssh([string]$Executable, [string[]]$Arguments, [byte[]]$InputBytes) {
+    $quoted = @($Arguments | ForEach-Object { [FlopR1062.Guards]::Quote($_) })
+    return [FlopR1066.Transport]::Run($Executable, ($quoted -join ' '), $InputBytes, 58000)
+}
+
+function Invoke-R1066Workflow([string]$Path, [string]$Digest) {
+    $directory = $null; $plain = $null; $code = $null; $result = $null; $failure = 'PREFLIGHT_UNVERIFIED'
+    try {
+        if (-not $Path -or -not $Digest) { throw 'K137_INDEPENDENT_ENROLLMENT_REQUIRED' }
+        Initialize-R1066
+        $e = Read-R1066Enrollment $Path $Digest
+        $guest = Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1066_preflight_readonly.py') 'a43db8d51b16b287504abd211a8dcd5aa444a1bb'
+        $ssh = Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\ssh.exe'
+        if (-not [IO.File]::Exists($ssh)) { throw 'SSH_UNAVAILABLE' }
+        Assert-R1027LocalPath $ssh
+        $encrypted = Read-R1027Backup
+        $code = Read-Host 'R987 V2 recovery code (OCI only)' -AsSecureString
+        try { $plain = Unprotect-R1027 $encrypted $code } finally { $code.Dispose(); $code = $null }
+        if ([FlopR1062.Guards]::Sha256($plain) -cne $e.oci.credential_sha256) { throw 'OCI_CREDENTIAL_STOP' }
+        $directory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Temp\flop-r1066-' + [Guid]::NewGuid().ToString('N'))
+        New-R1027Custody $directory
+        $ociKey = Write-R1027Key $directory $plain
+        [FlopR1062.Guards]::Clear($plain); $plain = $null
+        $reports = @()
+        foreach ($role in @('oci', 'k137')) {
+            $endpoint = $e.$role
+            $known = Join-Path $directory ($role + '-known-hosts')
+            [IO.File]::WriteAllText($known, ($endpoint.host + ' ' + $endpoint.host_key + "`n"), [Text.Encoding]::ASCII)
+            $request = New-R1066Request $endpoint $role
+            $hex = [BitConverter]::ToString([Text.Encoding]::ASCII.GetBytes(($request | ConvertTo-Json -Compress))).Replace('-', '')
+            $payload = [Text.Encoding]::UTF8.GetBytes(($guest + "`nrun(json.loads(bytes.fromhex('" + $hex + "')))`n"))
+            $key = $ociKey
+            if ($role -ceq 'k137') { $key = $endpoint.identity_file }
+            $arguments = Get-R1066Arguments $endpoint $role $key $known
+            $response = Invoke-R1066Ssh $ssh $arguments $payload
+            if ($response.ExitCode -ne 0) { throw 'SSH_OR_REMOTE_PREFLIGHT_STOP' }
+            $reports += Read-R1066Response $response.Output $request
+        }
+        $result = [ordered]@{task='R1066'; phase='A'; operation='preflight_verified';
+            code='WRITER_ADMISSION_AUTHORIZATION_REQUIRED'; hosts=$reports;
+            encrypted_transfer='NOT_PERFORMED'; restore='NOT_PERFORMED'; cutover='NO_GO'; oci_retirement='STRICT_NO_GO'}
+    } catch {
+        $fixed = @('K137_INDEPENDENT_ENROLLMENT_REQUIRED', 'ENROLLMENT_PIN_STOP', 'HOST_DOMAIN_STOP',
+            'K137_CREDENTIAL_STOP', 'OCI_CREDENTIAL_STOP', 'SOURCE_PIN_STOP', 'SSH_UNAVAILABLE',
+            'SSH_OR_REMOTE_PREFLIGHT_STOP', 'RESPONSE_STOP')
+        if ($fixed -ccontains $_.Exception.Message) { $failure = $_.Exception.Message }
+    } finally {
+        if ($null -ne $plain) { [Array]::Clear($plain, 0, $plain.Length) }
+        if ($null -ne $code) { $code.Dispose() }
+        if ($null -ne $directory) {
+            try {
+                foreach ($name in @('oci-known-hosts', 'k137-known-hosts')) {
+                    $file = Join-Path $directory $name
+                    if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) }
+                }
+                Remove-R1027Custody $directory
+            } catch { $result = $null; $failure = 'CLEANUP_STOP' }
+        }
+    }
+    if ($null -eq $result) {
+        return [ordered]@{task='R1066'; phase='A'; operation='blocked'; code=$failure; cutover='NO_GO'; oci_retirement='STRICT_NO_GO'}
+    }
+    return $result
+}
+
 if ($args.Count -ne 0) {
-    Write-Output '{"phase":"A","operation":"failed","code":"ARGUMENTS_STOP"}'
+    Write-Output '{"operation":"blocked","code":"ARGUMENTS_STOP","oci_retirement":"STRICT_NO_GO"}'
     exit 42
 }
-# No destination key, credential or writer-admission proof has been enrolled.
-# Do not decrypt R987 or contact either host merely to discover those absences.
-$report = [ordered]@{
-    task = 'R1066'
-    phase = 'A'
-    operation = 'blocked'
-    code = 'LIVE_TRANSPORT_AND_ADMISSION_NOT_ENROLLED'
-    source_integrity = 'unknown'
-    destination_integrity = 'unknown'
-    common_sqlite_epoch = 'unknown'
-    encrypted_archive = 'unknown'
-    independent_restore = 'unknown'
-    signer_public_identity_match = 'unknown'
-    protected_tradebot = 'unknown'
-    five_post_routes = 'unknown'
-    owner_fence_approval = 'unknown'
-    owner_cutover_approval = 'unknown'
-    oci_alive = 'unknown'
-    oci_retirement = 'STRICT_NO_GO'
-    blockers = @(
-        'PINNED_K137_HOST_KEY_AND_EXISTING_CREDENTIAL'
-        'REAL_SOURCE_AUTHORITY_AND_CONTINUOUS_WRITER_ADMISSION'
-        'FIVE_INDEPENDENT_POST_FINALITY_PROOFS'
-        'K137_CAPACITY_AND_PROTECTED_CGROUP_APPROVAL'
-        'PORTABLE_ORIGINAL_DID_AUTHENTICATION'
-    )
-}
-Write-Output ($report | ConvertTo-Json -Depth 4 -Compress)
+$report = Invoke-R1066Workflow $EnrollmentFile $EnrollmentSha256
+Write-Output ($report | ConvertTo-Json -Depth 5 -Compress)
+if ($report.operation -eq 'preflight_verified') { exit 0 }
 exit 42

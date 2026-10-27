@@ -56,6 +56,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Test R1066 two-host preflight with synthetic metadata and mocked SSH only
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --disable-pip-version-check pytest==9.1.1
+          if ($LASTEXITCODE -ne 0) { throw 'PYTEST_INSTALL_STOP' }
+          python -m pytest -q tests/test_r1066_preflight.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1066_TEST_STOP' }
+
       - name: Prove bootstrap remote shell source is LF-only
         shell: powershell
         run: |

@@ -198,9 +198,9 @@ def test_reused_cipher_source_git_blob_is_exact():
 def test_windows_owner_entrypoint_no_secret_or_remote_action():
     script = FILE.with_name("r1066_owner_workflow.ps1")
     text = script.read_text()
-    assert "LIVE_TRANSPORT_AND_ADMISSION_NOT_ENROLLED" in text
-    assert "Strict" not in text  # no pretend SSH setup/credential custody
-    assert "Invoke-Expression" not in text and "ssh.exe" not in text and "Read-Host" not in text
+    assert "K137_INDEPENDENT_ENROLLMENT_REQUIRED" in text
+    assert "StrictHostKeyChecking=yes" in text
+    assert "Invoke-Expression" not in text
     if os.name == "nt":
         p = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(script)],
                            capture_output=True, timeout=20)

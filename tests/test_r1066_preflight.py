@@ -1,0 +1,312 @@
+"""Synthetic host metadata and mocked SSH only. Never read real credentials."""
+import ast
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+from types import SimpleNamespace
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+FILES = ROOT / "packaging/migration"
+spec = importlib.util.spec_from_file_location("r1066_probe_test", FILES / "r1066_preflight_readonly.py")
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+WINDOWS = pytest.mark.skipif(os.name != "nt", reason="actual Windows PowerShell 5.1/ACL fixture")
+
+
+@pytest.fixture
+def host(monkeypatch):
+    request = dict(role="k137", machine_sha256=hashlib.sha256(b"a" * 32).hexdigest(),
+                   uid=1234, head="b" * 40, cgroup_sha256=hashlib.sha256(b"0::/test.scope").hexdigest(),
+                   minimum_free_bytes=1024**3, challenge="c" * 64)
+    reads = {"/etc/machine-id": b"a" * 32, "/proc/self/cgroup": b"0::/test.scope\n",
+             "/sys/fs/cgroup/test.scope/memory.max": b"134217728\n",
+             "/sys/fs/cgroup/test.scope/pids.max": b"32\n",
+             "/sys/fs/cgroup/test.scope/cpu.max": b"10000 100000\n"}
+    monkeypatch.setattr(m.sys, "platform", "linux")
+    monkeypatch.setattr(m.os, "geteuid", lambda: request["uid"], raising=False)
+    monkeypatch.setattr(m, "read_small", lambda p, limit=4096: reads[p])
+    monkeypatch.setattr(m, "directory", lambda p: SimpleNamespace(
+        st_uid=1234 if p == m.LANDING else 0, st_mode=stat.S_IFDIR | 0o700))
+    monkeypatch.setattr(m.os, "access", lambda p, flags: p == m.LANDING)
+    monkeypatch.setattr(m.os, "statvfs", lambda p: SimpleNamespace(f_bavail=2**30, f_frsize=4096), raising=False)
+    monkeypatch.setattr(m.os.path, "lexists", lambda p: False)
+    monkeypatch.setattr(m, "git_head", lambda p: request["head"])
+    return request, reads
+
+
+def test_both_host_proofs_redacted_and_never_admit_restore(host):
+    request, _ = host
+    for role in ("k137", "oci"):
+        request["role"] = role
+        if role == "oci":
+            request.update(uid=0, head=m.HEAD)
+        result = m.probe(request)
+        assert result["host_identity"] == result["head"] == result["scope"] == "MATCH"
+        assert result["read_only"] is True
+        for name in ("writer_admission", "five_post_finality", "common_sqlite_epoch", "signer_portability", "restore_authority"):
+            assert result[name] == "NOT_PROVEN"
+        assert result["oci_retirement"] == "STRICT_NO_GO" and result["cutover"] == "NO_GO"
+        text = json.dumps(result)
+        assert request["machine_sha256"] not in text and "/opt/" not in text
+
+
+@pytest.mark.parametrize("field,value", [("machine_sha256", "f" * 64), ("head", "bad"),
+    ("cgroup_sha256", "f" * 64), ("uid", 0), ("minimum_free_bytes", True),
+    ("role", "other"), ("challenge", "injection")])
+def test_wrong_binding_is_rejected(host, field, value):
+    request, _ = host
+    request[field] = value
+    with pytest.raises(m.Stop):
+        m.probe(request)
+
+
+@pytest.mark.parametrize("path,value", [("memory.max", b"max"), ("pids.max", b"1000"),
+    ("cpu.max", b"max 100000"), ("cpu.max", b"200000 100000")])
+def test_resource_scope_not_assumed_safe(host, path, value):
+    request, reads = host
+    reads["/sys/fs/cgroup/test.scope/" + path] = value
+    with pytest.raises(m.Stop):
+        m.probe(request)
+
+
+def test_protected_writability_insufficient_disk_and_source_drift(host, monkeypatch):
+    request, _ = host
+    monkeypatch.setattr(m.os, "access", lambda *a: True)
+    with pytest.raises(m.Stop):
+        m.probe(request)
+    monkeypatch.setattr(m.os, "access", lambda p, f: p == m.LANDING)
+    monkeypatch.setattr(m.os, "statvfs", lambda p: SimpleNamespace(f_bavail=0, f_frsize=4096))
+    with pytest.raises(m.Stop):
+        m.probe(request)
+    request.update(role="oci", uid=0, head=m.HEAD)
+    monkeypatch.setattr(m, "git_head", lambda p: "f" * 40)
+    with pytest.raises(m.Stop):
+        m.probe(request)
+
+
+def test_guest_error_never_discloses_raw_content(monkeypatch, capsys):
+    def fail(_):
+        raise RuntimeError("PRIVATE_CANARY /private/path")
+    monkeypatch.setattr(m, "probe", fail)
+    with pytest.raises(SystemExit) as e:
+        m.run({})
+    assert e.value.code == 42
+    assert capsys.readouterr().out == '{"code":"PREFLIGHT_UNVERIFIED"}\n'
+
+
+def test_probe_and_transport_pinned_and_read_only():
+    text = (FILES / "r1066_owner_workflow.ps1").read_text()
+    for name in ("r1066_preflight_readonly.py", "r1066_preflight_transport.cs"):
+        raw = (FILES / name).read_bytes().replace(b"\r\n", b"\n")
+        blob = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+        assert blob in text
+    tree = ast.parse((FILES / "r1066_preflight_readonly.py").read_text())
+    calls = [ast.unparse(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    assert not any(x in calls for x in ("os.system", "os.chmod", "os.unlink", "os.rename", "shutil.copy", "sqlite3.connect"))
+    assert "shell=True" not in ast.unparse(tree)
+    assert "'/usr/bin/git'" in ast.unparse(tree)
+    assert "Get-R1027Source $" not in text and "Invoke-R1062" not in text
+    for option in ("StrictHostKeyChecking=yes", "IdentityAgent=none", "ProxyCommand=none", "ProxyJump=none",
+                   "KnownHostsCommand=none", "BatchMode=yes", "ClearAllForwardings=yes", "GlobalKnownHostsFile=NUL"):
+        assert option in text
+
+
+def ps_script(body):
+    # Extract function definitions ONLY, not an operator invocation. No dot source.
+    script = str(FILES / "r1066_owner_workflow.ps1").replace("'", "''")
+    root = str(FILES).replace("'", "''")
+    return f"""
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
+$tokens=$null; $errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('{script}',[ref]$tokens,[ref]$errors)
+if ($errors.Count) {{ throw 'SYNTAX' }}
+foreach ($n in $ast.FindAll({{param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]}},$true)) {{
+    $p=@($n.Parameters | Where-Object {{ $null -ne $_ }} | ForEach-Object {{ $_.Extent.Text }}) -join ','
+    $b=$n.Body.Extent.Text
+    Set-Item ('Function:'+$n.Name) ([scriptblock]::Create(('param('+$p+")`n"+$b.Substring(1,$b.Length-2))))
+}}
+$script:R1066Root='{root}'
+Initialize-R1066
+function Need($v) {{ if (-not $v) {{ throw ('ASSERT_LINE_'+$MyInvocation.ScriptLineNumber) }} }}
+{body}
+"""
+
+
+def run_ps(tmp_path, body):
+    fixture = tmp_path / "synthetic-test.ps1"
+    fixture.write_text(ps_script(body), encoding="utf-8-sig")
+    result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(fixture)],
+                            capture_output=True, timeout=90)
+    assert result.returncode == 0, (result.stdout.decode(errors="replace"), result.stderr.decode(errors="replace"))
+    return result.stdout.decode(errors="replace")
+
+
+@WINDOWS
+def test_ps51_missing_enrollment_never_prompts_or_connects(tmp_path):
+    output = run_ps(tmp_path, """
+function Read-R1027Backup { throw 'MUST_NOT_READ' }
+function Invoke-R1066Ssh { throw 'MUST_NOT_CONNECT' }
+$r=Invoke-R1066Workflow '' ''
+Need ($r.code -ceq 'K137_INDEPENDENT_ENROLLMENT_REQUIRED')
+Need ($r.operation -ceq 'blocked')
+Write-Output 'PASS'
+""")
+    assert output.strip() == "PASS"
+
+
+@WINDOWS
+def test_ps51_binary_timeout_bound_and_environment(tmp_path):
+    output = run_ps(tmp_path, """
+$exe=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\\v1.0\\powershell.exe'
+$env:R1066_CANARY='PRIVATE_CANARY'
+$command='if ($env:R1066_CANARY) { exit 3 }; $s=[Console]::OpenStandardInput(); $o=[Console]::OpenStandardOutput(); $b=New-Object byte[] 256; $n=$s.Read($b,0,256); $o.Write($b,0,$n)'
+$encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+$bytes=[byte[]](0..255)
+$r=[FlopR1066.Transport]::Run($exe,('-NoProfile -NonInteractive -EncodedCommand '+$encoded),$bytes,10000)
+Need ($r.ExitCode -eq 0 -and $r.Output.Length -eq 256)
+for ($i=0; $i -lt 256; $i++) { Need ($r.Output[$i] -eq $i) }
+$blocked=$false
+try { $null=[FlopR1066.Transport]::Run($exe,'-NoProfile -Command "Start-Sleep 30"',([byte[]]@()),200) } catch { $blocked=$true }
+Need $blocked
+$blocked=$false
+try { $null=[FlopR1066.Transport]::Run($exe,'-NoProfile -Command "[Console]::Write((''x''*17000))"',([byte[]]@()),10000) } catch { $blocked=$true }
+Need $blocked
+Write-Output 'PASS'
+""")
+    assert output.strip() == "PASS"
+
+
+@WINDOWS
+def test_ps51_response_schema_forgery_and_replay(tmp_path):
+    request = dict(role="k137", minimum_free_bytes=1024**3, challenge="c" * 64)
+    # Response from actual synthetic probe, not an invented alternate schema.
+    result = dict(schema_version=1, role="k137", challenge="c" * 64, host_identity="MATCH", head="MATCH", scope="MATCH",
+                  disk_free_bytes=2**40, disk_required_bytes=1024**3, resources="BOUNDED_SCOPE_OBSERVED", memory_max_bytes=2**27,
+                  pids_max=32, protected_tradebot="DIRECTORY_WRITE_DENIED_ONLY", read_only=True,
+                  writer_admission="NOT_PROVEN", five_post_finality="NOT_PROVEN", common_sqlite_epoch="NOT_PROVEN",
+                  signer_portability="NOT_PROVEN", restore_authority="NOT_PROVEN", cutover="NO_GO", oci_retirement="STRICT_NO_GO")
+    output = run_ps(tmp_path, f"""
+$q=('{json.dumps(request)}' | ConvertFrom-Json)
+$raw='{json.dumps(result)}'
+$r=Read-R1066Response ([Text.Encoding]::ASCII.GetBytes($raw)) $q
+Need ($r.cutover -ceq 'NO_GO')
+foreach ($bad in @($raw.Replace('NOT_PROVEN','PASS'),$raw.Replace(([char]123+'"schema_version"'),([char]123+'"schema_version":1,"schema_version"')),
+    $raw.Replace(('c'*64),('d'*64)),($raw+'PRIVATE_CANARY'))) {{
+    $blocked=$false
+    try {{ $null=Read-R1066Response ([Text.Encoding]::ASCII.GetBytes($bad)) $q }} catch {{ $blocked=$true }}
+    Need $blocked
+}}
+Write-Output 'PASS'
+""")
+    assert output.strip() == "PASS"
+
+
+@WINDOWS
+def test_ps51_enrollment_workflow_cleanup_and_failure(tmp_path):
+    fixture = str(tmp_path / "custody").replace("'", "''")
+    output = run_ps(tmp_path, f"""
+$d='{fixture}'
+New-R1027Custody $d
+try {{
+    $key=Write-R1027Key $d ([Text.Encoding]::ASCII.GetBytes('SYNTHETIC-K137-FIXTURE'))
+    $script:fixtureK137Key=$key
+    $e=[pscustomobject]@{{schema_version=1; purpose='R1066_READONLY_PREFLIGHT';
+        oci=[pscustomobject]@{{host='140.238.55.171';user='ubuntu';host_key=('ecdsa-sha2-nistp256 '+[Convert]::ToBase64String([byte[]](1..32)));
+            host_key_sha256=[FlopR1062.Guards]::Sha256([byte[]](1..32));credential_sha256=[FlopR1062.Guards]::Sha256([Text.Encoding]::ASCII.GetBytes('SYNTHETIC-OCI-FIXTURE'));
+            identity_file='R987_V2_ESCROW'; machine_sha256=('a'*64);uid=0;head='ec4bc4892d40cdd2a03e102faa44d72c89e01b99';cgroup_sha256=('b'*64);minimum_free_bytes=1073741824}};
+        k137=[pscustomobject]@{{host='192.0.2.10';user='quarantine';host_key=('ssh-ed25519 '+[Convert]::ToBase64String([byte[]](2..33)));
+            host_key_sha256=[FlopR1062.Guards]::Sha256([byte[]](2..33));credential_sha256=(Get-R1066FileDigest $key);
+            identity_file=$key;machine_sha256=('c'*64);uid=1234;head=('d'*40);cgroup_sha256=('e'*64);minimum_free_bytes=1073741824}}
+    }}
+    $profile=Join-Path $d 'enrollment.json'
+    [IO.File]::WriteAllText($profile,($e | ConvertTo-Json -Depth 5 -Compress),[Text.Encoding]::ASCII)
+    $acl=[IO.File]::GetAccessControl($profile)
+    $acl.SetOwner([Security.Principal.WindowsIdentity]::GetCurrent().User)
+    [IO.File]::SetAccessControl($profile,$acl)
+    $digest=Get-R1066FileDigest $profile
+    $valid=Read-R1066Enrollment $profile $digest
+    Need ($valid.k137.uid -eq 1234)
+    foreach ($bad in @('wrong',[string]('f'*64))) {{
+        $blocked=$false
+        try {{ $null=Read-R1066Enrollment $profile $bad }} catch {{ $blocked=$true }}
+        Need $blocked
+    }}
+    $valid.k137.host='host;evil'
+    $blocked=$false
+    try {{ Assert-R1066Endpoint $valid.k137 'k137' }} catch {{ $blocked=$true }}
+    Need $blocked
+    $valid.k137.host='192.0.2.10'
+    $valid.oci.host='192.0.2.10'
+    $blocked=$false
+    try {{ Assert-R1066Endpoint $valid.oci 'oci' }} catch {{ $blocked=$true }}
+    Need $blocked
+    function Initialize-R1066 {{}}
+    function Read-R1027Backup {{ return ,([byte[]]@(0)) }}
+    function Read-Host {{ return (New-Object Security.SecureString) }}
+    function Unprotect-R1027 {{ return ,([Text.Encoding]::ASCII.GetBytes('SYNTHETIC-OCI-FIXTURE')) }}
+    $script:calls=0; $script:remoteFailure=$false; $script:lastTemp=$null
+    function Invoke-R1066Ssh($Executable,$Arguments,$InputBytes) {{
+        $script:calls++
+        Need ($Arguments -ccontains 'StrictHostKeyChecking=yes')
+        Need ($Arguments -ccontains 'ProxyCommand=none')
+        $i=[Array]::IndexOf($Arguments,'-i')
+        $used=$Arguments[$i+1]
+        if ($Arguments[-2] -ceq 'ubuntu@140.238.55.171') {{
+            Need ($Arguments[-1] -ceq 'sudo -n /usr/bin/python3 -I -B -')
+            $script:lastTemp=[IO.Path]::GetDirectoryName($used)
+            Need ($used -cne $script:fixtureK137Key)
+        }} else {{
+            Need ($Arguments[-2] -ceq 'quarantine@192.0.2.10')
+            Need ($Arguments[-1] -ceq '/usr/bin/python3 -I -B -')
+            Need ($used -ceq $script:fixtureK137Key)
+        }}
+        if ($script:remoteFailure) {{ throw 'PRIVATE-SSH-ERROR-CANARY' }}
+        $text=[Text.Encoding]::UTF8.GetString($InputBytes)
+        $hex=[regex]::Match($text,"fromhex\\('([A-F0-9]+)'\\)").Groups[1].Value
+        $bytes=New-Object byte[] ($hex.Length/2)
+        for ($i=0; $i -lt $bytes.Length; $i++) {{ $bytes[$i]=[Convert]::ToByte($hex.Substring(2*$i,2),16) }}
+        $q=[Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json
+        $r=[ordered]@{{schema_version=1;role=$q.role;challenge=$q.challenge;host_identity='MATCH';head='MATCH';scope='MATCH';
+            disk_free_bytes=1099511627776;disk_required_bytes=$q.minimum_free_bytes;resources='NOT_ASSESSED';memory_max_bytes=0;pids_max=0;
+            protected_tradebot='NOT_PRESENT';read_only=$true;writer_admission='NOT_PROVEN';five_post_finality='NOT_PROVEN';
+            common_sqlite_epoch='NOT_PROVEN';signer_portability='NOT_PROVEN';restore_authority='NOT_PROVEN';cutover='NO_GO';oci_retirement='STRICT_NO_GO'}}
+        if ($q.role -ceq 'k137') {{
+            $r.resources='BOUNDED_SCOPE_OBSERVED';$r.memory_max_bytes=134217728;$r.pids_max=32;$r.protected_tradebot='DIRECTORY_WRITE_DENIED_ONLY'
+        }}
+        return [pscustomobject]@{{ExitCode=0;Output=[Text.Encoding]::ASCII.GetBytes(($r | ConvertTo-Json -Compress))}}
+    }}
+    $r=Invoke-R1066Workflow $profile $digest
+    if ($r.operation -cne 'preflight_verified') {{ throw ('RESULT_'+$r.code+'_'+$script:calls+'_'+$Error[0].Exception.Message) }}
+    Need ($r.operation -ceq 'preflight_verified' -and $script:calls -eq 2)
+    Need ($r.code -ceq 'WRITER_ADMISSION_AUTHORIZATION_REQUIRED')
+    Need (-not [IO.Directory]::Exists($script:lastTemp))
+    Need ([IO.File]::Exists($key))
+    $script:remoteFailure=$true
+    $r=Invoke-R1066Workflow $profile $digest
+    Need ($r.operation -ceq 'blocked' -and $script:calls -eq 3)
+    Need (-not (($r | ConvertTo-Json) -match 'CANARY'))
+    Need (-not [IO.Directory]::Exists($script:lastTemp))
+    $script:remoteFailure=$false
+    # A simulated cleanup failure must invalidate an otherwise successful proof.
+    $realCleanup=${{function:Remove-R1027Custody}}
+    function Remove-R1027Custody($Directory) {{ & $realCleanup $Directory; throw 'SYNTHETIC' }}
+    # Prevent initialization re-importing the intentionally replaced helper.
+    function Initialize-R1066 {{}}
+    $r=Invoke-R1066Workflow $profile $digest
+    Need ($r.operation -ceq 'blocked' -and $r.code -ceq 'CLEANUP_STOP')
+    Need (-not [IO.Directory]::Exists($script:lastTemp))
+    Write-Output 'PASS'
+}} finally {{
+    [IO.File]::Delete((Join-Path $d 'enrollment.json'))
+    [IO.File]::Delete((Join-Path $d 'recovered-v2'))
+    [IO.Directory]::Delete($d,$false)
+}}
+""")
+    assert output.strip() == "PASS"

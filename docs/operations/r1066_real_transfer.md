@@ -3,7 +3,10 @@
 Issue #905. Base `f2244967c6d0e0079ddd95eb38fd33baef3839f7`.
 This package performs real encrypted file preservation, ciphertext copying and
 independent disarmed restoration on an authorized **offhost Linux copy**.
-It does not yet implement the requested complete Windows-to-OCI-to-K137 run.
+V2 adds a runnable Windows PowerShell 5.1 two-host read-only preflight, the
+fallback authorized by Issue #905's v2 comment when independent K137 enrollment
+and restore authority are unavailable. It does not implement the complete
+Windows-to-OCI-to-K137 migration run.
 Do not describe its CI success as a completed migration or a live-host test.
 
 ## Capabilities that execute actual I/O
@@ -79,17 +82,82 @@ component operations; this does not replace R1063's conservative full K137
 capacity/rollback budget. Unknown original logical bytes must be measured by an
 authorized acquisition, not inferred from historical 19.5GiB allocated counts.
 
-The only Windows invocation currently safe to provide is:
+## Windows v2: executable read-only two-host preflight
+
+Without an independent owner enrollment this stops before escrow or network I/O:
 
 ```powershell
 .\packaging\migration\r1066_owner_workflow.ps1
 ```
 
-It returns a structured Phase-A STOP (exit42) before decryption or any connection.
-It is explicitly a blocked coordinator, not a fake completed one-run migration.
-Windows NTFS custody and binary transport need a reviewed integration with the
-existing R987 custody functions; POSIX mode bits are never accepted as NTFS ACLs.
-Consumed R1058–R1065 witnesses are not invoked. No existing carrier was changed.
+The single immediate blocker is `K137_INDEPENDENT_ENROLLMENT_REQUIRED`: an
+independently verified owner enrollment for the existing K137 endpoint, host key,
+credential and isolated user/scope. No such enrollment is supplied in this PR.
+Do not infer an IP from an internal hostname or opportunistic keyscan. No new
+server, key, user, landing directory or cgroup is created by this workflow.
+
+After separate owner authorization and authentic enrollment, the runnable command is:
+
+```powershell
+.\packaging\migration\r1066_owner_workflow.ps1 -EnrollmentFile C:\PRIVATE\r1066-enrollment.json -EnrollmentSha256 INDEPENDENTLY_CONFIRMED_ENROLLMENT_SHA256
+```
+
+Neither command has been run against production. The supplied enrollment digest
+is an out-of-band operator trust anchor, not a digest accepted from the host being
+verified. The owner and local administrators remain trusted. Enrollment and K137
+credential must have current-user-only ACLs accepted by the audited R987 helpers.
+
+Strict enrollment schema (no extra/duplicate fields):
+
+- Root: `schema_version: 1`, `purpose: R1066_READONLY_PREFLIGHT`, `oci`, `k137`.
+- Each endpoint: `host` (canonical numeric IPv4), `user`, `host_key` (exact OpenSSH
+  public key without comment), `host_key_sha256` (lowercase hex SHA256 of decoded
+  public-key blob), `credential_sha256` (independently enrolled SHA256 of exact
+  existing credential bytes), `identity_file`, `machine_sha256` (SHA256 of stripped
+  `/etc/machine-id`), `uid`, `head`, `cgroup_sha256`, `minimum_free_bytes`.
+- OCI host/user and original source HEAD are fixed by the carrier. `identity_file`
+  must be `R987_V2_ESCROW`, uid=0, host-key algorithm=`ecdsa-sha2-nistp256`.
+  Its unused cgroup digest must still be 64 lowercase hex characters; source
+  resource isolation is explicitly `NOT_ASSESSED`.
+- K137 requires a different endpoint, machine identity, host key and credential,
+  an existing non-root SSH user and private local existing credential path.
+  `head` binds the existing `/opt/flop-shadow` release. OCI escrow is never reused.
+- K137 `cgroup_sha256` binds the exact stripped `0::/...` line of this user's
+  existing cgroup v2 membership. Finite memory <=256MiB, pids<=64 and CPU quota
+  <=one core are required. An ordinary unbounded login fails; nothing configures
+  these limits. They are conservative probe ceilings, not restore capacity proof.
+- Existing landing root is fixed to `/var/lib/flop-migration-r1066`, non-symlink,
+  owned by that user, mode0700. Protected TradeBot/shadow directories must have
+  different ownership and deny directory write access. This is reported only as
+  `DIRECTORY_WRITE_DENIED_ONLY`, not complete filesystem isolation/restore approval.
+
+Both endpoint domains are checked before a hidden R987 V2 recovery prompt. Only
+pinned decryption/custody functions are imported; no consumed witness or source
+fetch executes. SecureString is disposed, plaintext bytes cleared, temporary
+current-user-only custody removed on success/error. Cleanup failure invalidates
+success. The existing K137 credential is not copied or deleted.
+
+SSH ignores user config, forwarding, proxies, agents, passwords and TOFU. Private
+temporary known-hosts contain only independently enrolled exact keys. The child
+environment contains only SystemRoot; stdout/stderr are bounded, stderr discarded,
+timeout kills/joins the child, and no retries occur. Pinned local guest source and
+a validated hex-encoded request go over stdin. The only remote commands are fixed
+Python `-I -B -` (OCI only adds `sudo -n`). No remote artifact is installed.
+
+The guest reads identity, HEAD, directory metadata, statvfs and cgroup limits,
+not SQLite, receipts, private configuration, Vault or application data. Responses
+must match a fresh per-run challenge and exact safe schema. Exit0 means **only**
+`operation=preflight_verified`; next authority is
+`WRITER_ADMISSION_AUTHORIZATION_REQUIRED`. POST finality, common epoch, signer
+portability and restore authority remain `NOT_PROVEN`, regardless of historical
+counts or synthetic tests.
+
+**Still not implemented:** remote archive acquisition/upload/resume, live epoch
+acquisition, authorized K137 quarantine restore or cutover. The new bounded binary
+carrier transports probe source/responses, not archives. Existing offhost encryption,
+ciphertext resume and Linux restore remain unchanged, including live-host guards.
+This is the runnable preflight fallback, not full v2 transfer/restore acceptance.
+Consumed R1058–R1065 witnesses and existing production carriers remain unchanged.
 
 ## Exact missing live integrations and evidence
 
@@ -130,8 +198,8 @@ Consumed R1058–R1065 witnesses are not invoked. No existing carrier was change
 
 The real migration is therefore **NOT COMPLETE**. All actual operation reports
 retain unknown authority/common epoch/protected TradeBot, blocked signer and
-cutover, and `OCI_RETIREMENT=STRICT_NO_GO`. The Windows report also shows every
-live prerequisite unknown rather than claiming OCI is still alive from no read.
+cutover, and `OCI_RETIREMENT=STRICT_NO_GO`. Windows only reports fresh host/scope
+observations after actual authenticated reads, never historical liveness or approval.
 No actual archive, original restore or host result is supplied in this PR.
 
 ## Verification
@@ -140,7 +208,10 @@ New synthetic integration tests create real binary data, over 3000 files,
 SQLite WAL, symlinks and hardlinks; test independent R1001 verification,
 interruption/partial-copy continuation, wrong key/hash/head, incomplete archive,
 quota/space, link escape, missing DB and refusal to overwrite.
-POSIX custody tests run in Linux CI; Windows runs the actual PS5.1 STOP path and
-cross-platform safety tests. No production credentials or cloud endpoints are
+POSIX custody tests run in Linux CI. V2 adds synthetic host metadata tests, actual
+PS5.1 binary/timeout/environment tests, strict response/enrollment checks and a
+fully mocked two-host coordinator success/failure/cleanup test. Windows also tests
+the no-argument pre-credential STOP. No production credentials or cloud endpoints are
 contacted. Broad full-suite/security/history coverage is provided once by the
-existing draft-PR workflow, with no new paid resources or workflow changes.
+existing draft-PR workflow; the standard Windows job additionally runs the focused
+v2 tests only. No paid resources, caches or artifact uploads are added.
