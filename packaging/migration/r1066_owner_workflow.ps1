@@ -40,7 +40,7 @@ function Initialize-R1066 {
         Set-Item -Path ('Function:script:' + $name) -Value $block
     }
     Initialize-R1027
-    $carrier = Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1066_preflight_transport.cs') '9e4f771df0172fe6f51d4e72eb6e93ab02069e8e'
+    $carrier = Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1066_preflight_transport.cs') '305530a86db7e5cc8812fbac57c3e2c7c089a7be'
     if (-not ('FlopR1066.Transport' -as [type])) { Add-Type -TypeDefinition $carrier }
 }
 

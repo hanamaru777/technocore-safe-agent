@@ -2,10 +2,12 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Threading;
 namespace FlopR1066 {
     public sealed class Result { public int ExitCode; public byte[] Output; }
     public static class Transport {
+        private static readonly object LaunchLock = new object();
         // No shell, inherited credentials, unbounded ReadToEnd, stderr disclosure
         // or automatic retries. Caller pins executable, arguments and source.
         public static Result Run(string executable, string arguments, byte[] input, int timeout) {
@@ -20,9 +22,20 @@ namespace FlopR1066 {
                 int failed = 0; bool started = false;
                 Thread writer = null, reader = null, errors = null;
                 try {
-                    started = p.Start(); if (!started) throw new Exception("START");
+                    // .NET Framework lacks StandardInputEncoding. Process.Start
+                    // initializes an AutoFlush StreamWriter using Console.InputEncoding
+                    // and can emit its BOM BEFORE any BaseStream write. Scope a no-BOM
+                    // encoding to this one-shot launch and always restore the caller.
+                    lock (LaunchLock) {
+                        var original = Console.InputEncoding;
+                        try { Console.InputEncoding = new UTF8Encoding(false); started = p.Start(); }
+                        finally { Console.InputEncoding = original; }
+                    }
+                    if (!started) throw new Exception("START");
                     writer = new Thread(delegate() {
-                        try { p.StandardInput.BaseStream.Write(input, 0, input.Length); p.StandardInput.Close(); }
+                        // Close the byte stream, NOT StreamWriter: Close() on
+                        // the latter can append a BOM under Windows UTF-8 locale.
+                        try { p.StandardInput.BaseStream.Write(input, 0, input.Length); p.StandardInput.BaseStream.Close(); }
                         catch { Interlocked.Exchange(ref failed, 1); }
                     });
                     reader = new Thread(delegate() {

@@ -183,9 +183,11 @@ public class SyntheticBinaryChild {
 }
 '@
 $env:R1066_CANARY='PRIVATE_CANARY'
+[Console]::InputEncoding=New-Object Text.UTF8Encoding($true)
 $bytes=[byte[]](0..255)
 $r=[FlopR1066.Transport]::Run($exe,'',$bytes,10000)
-Need ($r.ExitCode -eq 0 -and $r.Output.Length -eq 256)
+Need ([Console]::InputEncoding.GetPreamble().Length -eq 3)
+if ($r.ExitCode -ne 0 -or $r.Output.Length -ne 256) { throw ('BINARY_EXIT_'+$r.ExitCode+'_LENGTH_'+$r.Output.Length) }
 for ($i=0; $i -lt 256; $i++) { Need ($r.Output[$i] -eq $i) }
 $blocked=$false
 try { $null=[FlopR1066.Transport]::Run($exe,'sleep',([byte[]]@()),200) } catch { $blocked=$true }
