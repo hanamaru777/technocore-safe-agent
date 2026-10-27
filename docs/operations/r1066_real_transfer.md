@@ -122,6 +122,26 @@ Strict enrollment schema (no extra/duplicate fields):
 - K137 requires a different endpoint, machine identity, host key and credential,
   an existing non-root SSH user and private local existing credential path.
   `head` binds the existing `/opt/flop-shadow` release. OCI escrow is never reused.
+- K137 staged Git checkout is explicitly under
+  `/opt/flop-shadow/releases/3fb667837a8f01d17e97dabfd1a1bfe5ddc09e1e`
+  (owner-reported already staged source). The parent `/opt/flop-shadow` is
+  the isolation container, **not proven to be a Git checkout**. We verify the
+  versioned release HEAD at its own directory and STOP if that evidence has
+  changed or this particular release has no valid Git provenance. Never
+  synthesize a repository or re-run the earlier consumed installer to satisfy
+  the check.
+- Trusted K137 SSH host keys may be independently obtained from the
+  authenticated **AWS Lightsail control plane** via its official
+  `get-instance-access-details` API for the already existing
+  `tradebot-k137` instance in `ap-northeast-1`. The official API reports
+  `hostKeys` and `ipAddress`, but **also returns temporary SSH credentials**.
+  Therefore such a call is NOT run by this read-only preflight, and no
+  temporary private key may be logged, printed, saved to GitHub or sent to
+  ChatGPT. It requires separate owner authorization and a controlled
+  credential-handling path; an API response is no proof that an existing
+  Windows K137 credential or private landing/cgroup is installed. Do not use
+  TOFU (`ssh-keyscan` alone) or guess a host fingerprint.
+  Reference: https://docs.aws.amazon.com/cli/latest/reference/lightsail/get-instance-access-details.html
 - K137 `cgroup_sha256` binds the exact stripped `0::/...` line of this user's
   existing cgroup v2 membership. Finite memory <=256MiB, pids<=64 and CPU quota
   <=one core are required. An ordinary unbounded login fails; nothing configures

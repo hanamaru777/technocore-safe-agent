@@ -19,6 +19,10 @@ APP = "/opt/technocore-safe-agent"
 STATE = "/var/lib/technocore-safe-agent"
 LANDING = "/var/lib/flop-migration-r1066"
 PROTECTED = ("/opt/flop-shadow", "/opt/tradebot-k137", "/opt/tradebot-k137-private")
+# Actual K137 shadow stage was owner-evidenced as a versioned Git release.
+# /opt/flop-shadow is the container/owner boundary, not itself the Git checkout.
+K137_STAGE_SHA = "3fb667837a8f01d17e97dabfd1a1bfe5ddc09e1e"
+K137_STAGE = "/opt/flop-shadow/releases/" + K137_STAGE_SHA
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 FIELDS = {"role", "machine_sha256", "uid", "head", "cgroup_sha256", "minimum_free_bytes", "challenge"}
 
@@ -114,7 +118,9 @@ def probe(request):
         for path in PROTECTED:
             info = directory(path)
             need(info.st_uid != request["uid"] and not os.access(path, os.W_OK))
-        need(git_head(PROTECTED[0]) == request["head"])
+        need(request["head"] == K137_STAGE_SHA)
+        directory(K137_STAGE)
+        need(git_head(K137_STAGE) == K137_STAGE_SHA)
         info = directory(LANDING)
         need(info.st_uid == request["uid"] and stat.S_IMODE(info.st_mode) == 0o700)
         need(os.access(LANDING, os.R_OK | os.X_OK | os.W_OK))

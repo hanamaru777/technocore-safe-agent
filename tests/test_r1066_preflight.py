@@ -22,7 +22,7 @@ WINDOWS = pytest.mark.skipif(os.name != "nt", reason="actual Windows PowerShell 
 @pytest.fixture
 def host(monkeypatch):
     request = dict(role="k137", machine_sha256=hashlib.sha256(b"a" * 32).hexdigest(),
-                   uid=1234, head="b" * 40, cgroup_sha256=hashlib.sha256(b"0::/test.scope").hexdigest(),
+                   uid=1234, head=m.K137_STAGE_SHA, cgroup_sha256=hashlib.sha256(b"0::/test.scope").hexdigest(),
                    minimum_free_bytes=1024**3, challenge="c" * 64)
     reads = {"/etc/machine-id": b"a" * 32, "/proc/self/cgroup": b"0::/test.scope\n",
              "/sys/fs/cgroup/test.scope/memory.max": b"134217728\n",
@@ -327,3 +327,28 @@ try {{
 }}
 """)
     assert output.strip() == "PASS"
+
+
+def test_k137_stage_binding_uses_owner_evidenced_release_not_container(host, monkeypatch):
+    request, _ = host
+    seen = []
+    def git_at(path):
+        seen.append(path)
+        return request["head"]
+    monkeypatch.setattr(m, "git_head", git_at)
+    result = m.probe(request)
+    assert result["head"] == "MATCH"
+    assert seen == [m.K137_STAGE]
+    assert m.K137_STAGE == "/opt/flop-shadow/releases/" + m.K137_STAGE_SHA
+    assert m.K137_STAGE_SHA == "3fb667837a8f01d17e97dabfd1a1bfe5ddc09e1e"
+    request["head"] = "b" * 40
+    with pytest.raises(m.Stop):
+        m.probe(request)
+    assert seen == [m.K137_STAGE]  # rejection before untrusted Git lookup
+
+
+def test_k137_source_guard_does_not_accept_unverified_release_head(host, monkeypatch):
+    request, _ = host
+    monkeypatch.setattr(m, "git_head", lambda _: "c" * 40)
+    with pytest.raises(m.Stop):
+        m.probe(request)

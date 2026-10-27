@@ -199,7 +199,7 @@ function Invoke-R1066Workflow([string]$Path, [string]$Digest) {
         if (-not $Path -or -not $Digest) { throw 'K137_INDEPENDENT_ENROLLMENT_REQUIRED' }
         Initialize-R1066
         $e = Read-R1066Enrollment $Path $Digest
-        $guest = Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1066_preflight_readonly.py') 'a43db8d51b16b287504abd211a8dcd5aa444a1bb'
+        $guest = Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1066_preflight_readonly.py') '9f5f90ed6ad22a253b18c1510ec2651a117a01bc'
         $ssh = Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\ssh.exe'
         if (-not [IO.File]::Exists($ssh)) { throw 'SSH_UNAVAILABLE' }
         Assert-R1027LocalPath $ssh
