@@ -24,6 +24,7 @@ import sys
 LANDING = Path("/var/lib/flop-migration-r1066")
 MAX_PART = 128 * 1024 * 1024 + 4096
 CHUNK = 1024 * 1024
+HEADER = struct.Struct(">8s16s16s4sII")
 FILE = re.compile(r"(?:header\.bin|commit\.bin|part-[0-9]{4}\.bin)\Z")
 ID = re.compile(r"[0-9a-f]{32}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
