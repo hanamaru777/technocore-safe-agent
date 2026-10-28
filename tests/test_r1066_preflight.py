@@ -525,3 +525,42 @@ def test_r1072_ps51_ssh_nonzero_is_classified_without_raw_output(tmp_path):
                         "-File",str(script)],capture_output=True,timeout=30)
     assert out.returncode==0,(out.stdout,out.stderr)
     assert b"R1072_REDACTED_SSH_EXIT_CLASSES=PASS" in out.stdout
+
+
+@WINDOWS
+def test_r1073_exit_preserving_carrier_handles_early_remote_exit_without_secret(tmp_path):
+    carrier = ROOT / "packaging/migration/r1073_exit_preserving_transport.cs"
+    script = tmp_path / "test-r1073-safe-exit.ps1"
+    path = str(carrier).replace("'", "''")
+    script.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        "$c=[IO.File]::ReadAllText('" + path + "')\n"
+        "Add-Type -TypeDefinition $c\n"
+        "$synthetic=New-Object byte[] 32768\n"
+        "$result=[FlopR1073.Transport]::Run("
+        "$env:ComSpec, '/d /q /c exit /b 255', $synthetic, 12000)\n"
+        "if($result.ExitCode -ne 255){exit 42}\n"
+        "if($result.Output.Length -ne 0){exit 43}\n"
+        "Write-Output 'R1073_EARLY_EXIT_RETAINED=PASS'\n",
+        encoding="utf-8"
+    )
+    done = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(script)],
+        capture_output=True, timeout=30
+    )
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    assert b"R1073_EARLY_EXIT_RETAINED=PASS" in done.stdout
+
+
+def test_r1073_is_isolated_from_existing_r1066_transport():
+    new = (ROOT / "packaging/migration/r1073_exit_preserving_transport.cs").read_text()
+    old = (ROOT / "packaging/migration/r1066_preflight_transport.cs").read_text()
+    controller = (ROOT / "packaging/migration/r1072_oci_owner_capacity_readonly.ps1").read_text()
+    assert "namespace FlopR1073" in new
+    assert "namespace FlopR1066" in old
+    assert "int failed = 0, writerFailed = 0" in new
+    assert "(writerFailed != 0 && p.ExitCode == 0)" in new
+    assert "[FlopR1073.Transport]::Run" in controller
+    assert "[FlopR1066.Transport]::Run" not in controller
+    assert "SSH_CARRIER_UNCLASSIFIED" in controller
+    assert "SSH_AUTH_ROUTE_OR_PIN_STOP" in controller
