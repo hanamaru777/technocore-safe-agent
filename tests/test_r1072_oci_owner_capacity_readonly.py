@@ -62,7 +62,7 @@ def test_windows_wrapper_pins_existing_r1066_and_new_guest():
     src=OWNER.read_text()
     assert "r1066_owner_workflow.ps1" in src
     assert "7a7d9790ccd9bb464c254188096d85fb315ee550" in src
-    assert "cb05b793e0b8e04a99af4e7edc2b9a2206d54b1c" in src
+    assert "0ee105633366abe9e92d72eacc86e7be789aa851" in src
     assert "StrictHostKeyChecking=yes" in src
     assert "Remove-R1027Custody" in src
     assert "NOT_PROVEN" in src
