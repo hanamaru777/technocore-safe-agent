@@ -204,7 +204,19 @@ def do_prepare():
     st=os.statvfs("/var/lib")
     free=st.f_bavail*st.f_frsize
     check(free>=20*1024**3, "DISK_RESERVE_STOP")
-    check(not os.path.lexists(D),"LANDING_PREEXISTS_STOP")
+    if os.path.lexists(D):
+        s=os.lstat(D)
+        check(stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode)
+              and s.st_uid==who.pw_uid and s.st_gid==who.pw_gid
+              and stat.S_IMODE(s.st_mode)==0o700,
+              "LANDING_PREEXISTS_UNTRUSTED_STOP")
+        return {"phase":"R1069_K137_LANDING_PREPARE","result":"ALREADY_PREPARED",
+                "landing":"PRIVATE_0700_UID1000","stage_git_head":"MATCH",
+                "tradebot_paths":"UNCHANGED_BY_SCRIPT",
+                "free_bytes_preparation_snapshot":free,
+                "cgroup":"NOT_ENROLLED","archive":"NOT_ASSESSED",
+                "transfer":"NOT_PERFORMED","restore":"NOT_PERFORMED",
+                "cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}
     # No recursion or permission changes to existing data. Only this exact
     # previously absent name can be allocated.
     os.mkdir(D,0o700)
