@@ -155,11 +155,14 @@ function Invoke-R1072 {
         $guest=Read-R1066PinnedSource (
             Join-Path $PSScriptRoot '..\oracle\r1072_original_readonly_capacity.py'
         ) '0ee105633366abe9e92d72eacc86e7be789aa851'
-        $stage='LOCAL_ESCROW'
+        $stage='LOCAL_ESCROW_INTEGRITY'
         $encrypted=Read-R1027Backup
+        $stage='LOCAL_DECRYPT'
         $code=Read-Host 'R987 V2 local recovery code' -AsSecureString
         try { $plain=Unprotect-R1027 $encrypted $code }
         finally { $code.Dispose();$code=$null }
+        if ($null -eq $plain -or $plain.Length -lt 81 -or
+            $plain.Length -gt 32768) { throw 'DECRYPT_OUTPUT_STOP' }
         $stage='LOCAL_CUSTODY'
         $directory=Join-Path (
             [Environment]::GetFolderPath('LocalApplicationData')
@@ -212,7 +215,8 @@ function Invoke-R1072 {
         Write-Output '{"phase":"R1072","result":"STOP","code":"CLEANUP_STOP"}'
     } elseif ($null -eq $result) {
         $valid=@('PREPARE','LOCAL_LIB_PIN','GUEST_SOURCE_PIN','LOCAL_ESCROW',
-            'LOCAL_CUSTODY','SSH_CARRIER','RESPONSE_SCHEMA',
+            'LOCAL_ESCROW_INTEGRITY','LOCAL_DECRYPT','LOCAL_CUSTODY',
+            'SSH_CARRIER','RESPONSE_SCHEMA',
             'SSH_AUTH_ROUTE_OR_PIN_STOP','REMOTE_EXEC_STOP',
             'REMOTE_UNRECOGNIZED_STOP','GUEST_SOURCE_UNVERIFIED',
             'GUEST_ORIGINAL_PRIVILEGE_STOP','GUEST_WRONG_HOST_STOP',
