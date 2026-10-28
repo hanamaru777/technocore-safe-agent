@@ -564,3 +564,53 @@ def test_r1073_is_isolated_from_existing_r1066_transport():
     assert "[FlopR1066.Transport]::Run" not in controller
     assert "SSH_CARRIER_UNCLASSIFIED" in controller
     assert "SSH_AUTH_ROUTE_OR_PIN_STOP" in controller
+
+
+
+@WINDOWS
+def test_r1075_ps51_ssh_diagnostics_are_fixed_classes_only(tmp_path):
+    carrier = ROOT / "packaging/migration/r1073_exit_preserving_transport.cs"
+    script = tmp_path / "r1075_classify.ps1"
+    path = str(carrier).replace("'", "''")
+    script.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        "$carrier=[IO.File]::ReadAllText('" + path + "')\n"
+        "Add-Type -TypeDefinition $carrier\n"
+        "$pairs=@(\n"
+        "  @('Bad configuration option: KnownHostsCommand','SSH_OPTION_REJECTED'),\n"
+        "  @('Host key verification failed.','SSH_HOSTKEY_REJECTED'),\n"
+        "  @('Load key /private/fixture: invalid format','SSH_IDENTITY_UNREADABLE'),\n"
+        "  @('Permission denied (publickey).','SSH_PUBLIC_KEY_REJECTED'),\n"
+        "  @('Connection timed out','SSH_CONNECTIVITY_REJECTED'),\n"
+        "  @('Connection closed by UNKNOWN port 65535','SSH_REMOTE_CLOSED'),\n"
+        "  @('PRIVATE_TEST_CANARY','SSH_UNKNOWN')\n"
+        ")\n"
+        "foreach($pair in $pairs) {\n"
+        "  $bytes=[Text.Encoding]::ASCII.GetBytes($pair[0])\n"
+        "  $got=[FlopR1073.Transport]::Classify($bytes)\n"
+        "  if($got -cne $pair[1]){throw 'R1075_CLASSIFICATION_FAIL'}\n"
+        "  if($got.Contains('PRIVATE_') -or $got.Contains('/private/')){exit 43}\n"
+        "}\n"
+        "Write-Output 'R1075_REDACTED_CLASSES_PASS'\n",
+        encoding="utf-8"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(script)],
+        capture_output=True, timeout=40
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert b"R1075_REDACTED_CLASSES_PASS" in result.stdout
+
+
+def test_r1075_controller_accepts_only_known_ssh_failure_kinds():
+    root = ROOT / "packaging/migration"
+    source = (root / "r1072_oci_owner_capacity_readonly.ps1").read_text()
+    carrier = (root / "r1073_exit_preserving_transport.cs").read_text()
+    assert "public string FailureKind;" in carrier
+    assert "SSH_OPTION_REJECTED" in carrier
+    assert "SSH_PUBLIC_KEY_REJECTED" in carrier
+    assert "Array.Clear(backing, 0, backing.Length)" in carrier
+    assert "Get-R1072RemoteStop $reply.ExitCode $reply.Output $reply.FailureKind" in source
+    assert "SSH_PUBLIC_KEY_REJECTED" in source
+    assert "SSH_IDENTITY_UNREADABLE" in source
+    assert "SSH_HOSTKEY_REJECTED" in source
