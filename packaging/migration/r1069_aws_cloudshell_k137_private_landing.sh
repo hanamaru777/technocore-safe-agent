@@ -5,6 +5,8 @@
 set -Eeuo pipefail
 umask 077
 die() { printf '{"phase":"R1069","result":"STOP","code":"%s","cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}\n' "$1"; exit 42; }
+# Never modify the host without this exact, deliberate owner opt-in.
+[[ "$#" -eq 1 && "$1" == "--allow-one-private-landing-create" ]] || die OWNER_OPT_IN_REQUIRED
 for command_name in aws python3 ssh ssh-keygen mktemp; do
   command -v "$command_name" >/dev/null 2>&1 || die TOOL_UNAVAILABLE
 done
