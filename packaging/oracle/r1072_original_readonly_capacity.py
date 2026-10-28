@@ -23,19 +23,19 @@ TIME_LIMIT=35
 class Stop(ValueError):
     pass
 
-def require(v):
+def require(v, code="SOURCE_UNVERIFIED"):
     if not v:
-        raise Stop("SOURCE_UNVERIFIED")
+        raise Stop(code)
 
 def assert_original():
-    require(sys.platform=="linux" and os.geteuid()==0)
+    require(sys.platform=="linux" and os.geteuid()==0, "ORIGINAL_PRIVILEGE_STOP")
     for forbidden in ("/opt/flop-shadow","/opt/tradebot-k137",
                       "/opt/tradebot-k137-private"):
-        require(not os.path.lexists(forbidden))
+        require(not os.path.lexists(forbidden), "WRONG_HOST_STOP")
     for root in (APP,STATE):
         for part in (root,*root.parents):
             s=part.lstat()
-            require(stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode))
+            require(stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode), "ORIGINAL_ROOT_STOP")
     p=subprocess.run(["/usr/bin/git","-c","safe.directory="+str(APP),
         "-C",str(APP),"rev-parse","--verify","HEAD"],
         stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
@@ -43,7 +43,7 @@ def assert_original():
         env={"PATH":"/usr/bin:/bin","HOME":"/nonexistent",
              "GIT_CONFIG_NOSYSTEM":"1","GIT_CONFIG_GLOBAL":"/dev/null",
              "GIT_OPTIONAL_LOCKS":"0","GIT_TERMINAL_PROMPT":"0"})
-    require(p.returncode==0 and p.stdout.strip()==EXPECTED_SHA.encode())
+    require(p.returncode==0 and p.stdout.strip()==EXPECTED_SHA.encode(), "ORIGINAL_HEAD_STOP")
 
 def inventory():
     start=time.monotonic()
@@ -54,17 +54,17 @@ def inventory():
     seen=set()
     todo=[(APP,0),(STATE,0)]
     while todo:
-        require(time.monotonic()-start<=TIME_LIMIT)
+        require(time.monotonic()-start<=TIME_LIMIT, "INVENTORY_TIME_STOP")
         path,depth=todo.pop()
-        require(depth<=48 and len(os.fsencode(path))<=4096)
+        require(depth<=48 and len(os.fsencode(path))<=4096, "INVENTORY_PATH_STOP")
         info=path.lstat()
         totals["entries"]+=1
-        require(totals["entries"]<=MAX_OBJECTS)
+        require(totals["entries"]<=MAX_OBJECTS, "INVENTORY_ENTRY_STOP")
         if stat.S_ISDIR(info.st_mode):
             totals["directories"]+=1
             with os.scandir(path) as directory:
                 children=[Path(row.path) for row in directory]
-            require(len(children)<=MAX_OBJECTS)
+            require(len(children)<=MAX_OBJECTS, "INVENTORY_CHILD_STOP")
             todo.extend((item,depth+1) for item in children)
         elif stat.S_ISLNK(info.st_mode):
             totals["symlinks"]+=1
@@ -76,7 +76,7 @@ def inventory():
                 seen.add(inode)
                 totals["regular"]+=1
                 totals["regular_bytes"]+=info.st_size
-            require(totals["regular_bytes"]<=MAX_TOTAL)
+            require(totals["regular_bytes"]<=MAX_TOTAL, "INVENTORY_BYTES_STOP")
             for name in DB_FILES:
                 if path.name==name:
                     found.add(name)
@@ -87,7 +87,7 @@ def inventory():
                     totals["sqlite_shms"]+=1
         else:
             totals["special_objects"]+=1
-    require(found==DB_FILES)
+    require(found==DB_FILES, "TWO_SQLITE_STOP")
     return totals
 
 def main():
@@ -96,7 +96,7 @@ def main():
         totals=inventory()
         fs=os.statvfs(STATE)
         free=fs.f_bavail*fs.f_frsize
-        require(free>=0)
+        require(free>=0, "DISK_STATUS_STOP")
         print(json.dumps({"phase":"R1072_ORIGINAL_READONLY_CAPACITY",
             "result":"INVENTORY_ONLY","original_git":"MATCH",
             "tree":totals,"free_bytes":free,
@@ -106,8 +106,16 @@ def main():
             "oci_retirement":"STRICT_NO_GO"},
             sort_keys=True,separators=(",",":")))
         return 0
-    except Exception:
-        print('{"phase":"R1072_ORIGINAL_READONLY_CAPACITY","result":"STOP","code":"SOURCE_UNVERIFIED","cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}')
+    except Exception as exc:
+        allowed = {"SOURCE_UNVERIFIED", "ORIGINAL_PRIVILEGE_STOP", "WRONG_HOST_STOP",
+                   "ORIGINAL_ROOT_STOP", "ORIGINAL_HEAD_STOP", "INVENTORY_TIME_STOP",
+                   "INVENTORY_PATH_STOP", "INVENTORY_ENTRY_STOP",
+                   "INVENTORY_CHILD_STOP", "INVENTORY_BYTES_STOP",
+                   "TWO_SQLITE_STOP", "DISK_STATUS_STOP"}
+        code = str(exc) if type(exc) is Stop and str(exc) in allowed else "SOURCE_UNVERIFIED"
+        print(json.dumps({"phase":"R1072_ORIGINAL_READONLY_CAPACITY",
+            "result":"STOP","code":code,"cutover":"NO_GO",
+            "oci_retirement":"STRICT_NO_GO"},separators=(",",":"),sort_keys=True))
         return 42
 
 if __name__=="__main__":
