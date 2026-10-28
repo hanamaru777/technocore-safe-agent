@@ -69,22 +69,26 @@ def authenticated_config(path):
         key = owner_file(values["key_file"], max_size=16384)
         need(key != cfgfile, "AUTH_CONFIG_STOP")
         need(key.read_bytes().startswith((b"-----BEGIN ",)), "AUTH_KEY_HEADER_STOP")
-    except (OSError, UnicodeError, configparser.Error, KeyError, TypeError) as error:
-        raise Stop("AUTH_CONFIG_STOP") from error
+    except (OSError, UnicodeError, configparser.Error, KeyError, TypeError):
+        raise Stop("AUTH_CONFIG_STOP") from None
     return values
 
 
-def verify_existing_did(config_path, pinned_secret_id, pinned_did, derive_did):
-    """Remote Vault READ + one local public DID derivation, never POST or persist.
+def verify_existing_did(config_path, pinned_secret_id, pinned_did):
+    """Remote Vault READ + PINNED official signer 'did' only. Never POST or persist.
 
-    derive_did must be an independently reviewed local deterministic DID
-    derivation (e.g. core.current_did); no network/external signing is authorized.
+    The operation cannot accept an arbitrary callback, shell command, wallet
+    recipient, room, request body, or network destination.
     """
     need(type(pinned_secret_id) is str and OCID.fullmatch(pinned_secret_id),
          "VAULT_SCOPE_STOP")
     need(type(pinned_did) is str and DID.fullmatch(pinned_did), "DID_PIN_STOP")
-    need(callable(derive_did) and "SIGN_SEED" not in os.environ,
-         "SEED_ENV_SCOPE_STOP")
+    need("SIGN_SEED" not in os.environ, "SEED_ENV_SCOPE_STOP")
+    try:
+        from flop_agent import core
+        need(core.signer_matches_pinned(), "SIGNER_PIN_STOP")
+    except Exception:
+        raise Stop("SIGNER_PIN_STOP") from None
     config = authenticated_config(config_path)
     try:
         import oci
@@ -102,7 +106,10 @@ def verify_existing_did(config_path, pinned_secret_id, pinned_did, derive_did):
         need(SEED.fullmatch(seed), "SEED_SHAPE_STOP")
         os.environ["SIGN_SEED"] = seed.decode("ascii")
         try:
-            actual = derive_did()
+            # current_did invokes the unmodified, SHA-pinned official
+            # signer with the fixed single "did" argument. It does not
+            # submit an external POST.
+            actual = core.current_did()
         except Exception:
             raise Stop("LOCAL_DERIVATION_STOP") from None
         need(type(actual) is str and hmac.compare_digest(actual, pinned_did),
