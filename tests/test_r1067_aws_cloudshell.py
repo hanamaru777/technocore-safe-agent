@@ -49,11 +49,19 @@ def mock_env(tmp_path, *, tamper=False, algorithm="ssh-ed25519"):
         "publicKey":base64.b64encode(keydata).decode(),
         "fingerprintSHA256":"SHA256:"+("BAD" if tamper else fingerprint),
     }
+    # A real ephemeral valid OpenSSH-read RSA/EC PEM key avoids a fake-header
+    # fixture passing the test while the owner credential would fail.
+    seed=tmp_path/"synthetic-ssh-key"
+    subprocess.run(["ssh-keygen","-q","-t","ecdsa","-b","256","-m","PEM",
+                    "-N","","-f",str(seed)],check=True,
+                   stdin=subprocess.DEVNULL,capture_output=True,timeout=15)
+    private=seed.read_text(encoding="ascii")
+    assert private.startswith("-----BEGIN EC PRIVATE KEY-----")
     mock = {"accessDetails":{
         "instanceName":"tradebot-k137","protocol":"ssh",
         "ipAddress":"8.8.8.8","username":"ubuntu",
         "expiresAt":"2099-01-01T00:00:00Z",
-        "privateKey":"-----BEGIN RSA PRIVATE KEY-----\nSYNTHETIC_CANARY\n-----END RSA PRIVATE KEY-----\n",
+        "privateKey":private,
         "certKey":"ssh-rsa-cert-v01@openssh.com SYNTHETIC_PUBLIC_CERT",
         "hostKeys":[host]}}
     aws = cmd / "aws"
@@ -93,6 +101,7 @@ def test_synthetic_ephemeral_aws_key_trust_and_ssh_command(tmp_path):
         "phase":"R1067_K137_READONLY","result":"HOST_AUTHENTICATED",
         "cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}
     assert b"SYNTHETIC_CANARY" not in run.stdout + run.stderr
+    assert b"BEGIN EC PRIVATE KEY" not in run.stdout + run.stderr
 
 def test_wrong_aws_host_key_fingerprint_rejected_before_ssh(tmp_path):
     env = mock_env(tmp_path, tamper=True)
@@ -129,3 +138,34 @@ def test_bad_ecdsa_host_fingerprint_cannot_fallback_to_ssh_rsa(tmp_path):
     assert run.returncode == 42
     assert json.loads(run.stdout)["code"] == "HOSTKEY_FINGERPRINT_STOP"
     assert b"SYNTHETIC_CANARY" not in run.stdout + run.stderr
+
+def test_missing_temporary_credential_is_explicit_and_no_ssh(tmp_path):
+    env=mock_env(tmp_path)
+    details=json.loads(env["SYNTHETIC_AWS_DETAILS"])
+    details["accessDetails"]["privateKey"]=""
+    env["SYNTHETIC_AWS_DETAILS"]=json.dumps(details)
+    done=subprocess.run(["bash",str(SCRIPT)],env=env,capture_output=True,timeout=20)
+    assert done.returncode==42
+    assert json.loads(done.stdout)["code"]=="TEMP_PRIVATE_KEY_MISSING_STOP"
+    assert b"PRIVATE KEY" not in done.stdout+done.stderr
+
+
+def test_malformed_temporary_credential_is_rejected_by_real_openssh(tmp_path):
+    env=mock_env(tmp_path)
+    details=json.loads(env["SYNTHETIC_AWS_DETAILS"])
+    details["accessDetails"]["privateKey"]="-----BEGIN EC PRIVATE KEY-----\\nBAD\\n-----END EC PRIVATE KEY-----"
+    env["SYNTHETIC_AWS_DETAILS"]=json.dumps(details)
+    done=subprocess.run(["bash",str(SCRIPT)],env=env,capture_output=True,timeout=20)
+    assert done.returncode==42
+    assert json.loads(done.stdout)["code"]=="TEMP_PRIVATE_KEY_PARSE_STOP"
+    assert b"BAD" not in done.stdout+done.stderr
+
+
+def test_leading_whitespace_valid_pem_is_accepted_after_private_trim(tmp_path):
+    env=mock_env(tmp_path)
+    details=json.loads(env["SYNTHETIC_AWS_DETAILS"])
+    details["accessDetails"]["privateKey"]="  \\n"+details["accessDetails"]["privateKey"]
+    env["SYNTHETIC_AWS_DETAILS"]=json.dumps(details)
+    done=subprocess.run(["bash",str(SCRIPT)],env=env,capture_output=True,timeout=20)
+    assert done.returncode==0, (done.stdout,done.stderr)
+    assert json.loads(done.stdout)["result"]=="HOST_AUTHENTICATED"
