@@ -1,5 +1,6 @@
 """R1067: actual shell syntax and synthetic AWS temporary-key flow, NO cloud calls."""
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -60,7 +61,7 @@ def mock_env(tmp_path, *, tamper=False, algorithm="ssh-ed25519"):
     mock = {"accessDetails":{
         "instanceName":"tradebot-k137","protocol":"ssh",
         "ipAddress":"8.8.8.8","username":"ubuntu",
-        "expiresAt":"2099-01-01T00:00:00Z",
+        "expiresAt":(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30)).isoformat(),
         "privateKey":private,
         "certKey":"ssh-rsa-cert-v01@openssh.com SYNTHETIC_PUBLIC_CERT",
         "hostKeys":[host]}}
@@ -169,3 +170,33 @@ def test_leading_whitespace_valid_pem_is_accepted_after_private_trim(tmp_path):
     done=subprocess.run(["bash",str(SCRIPT)],env=env,capture_output=True,timeout=20)
     assert done.returncode==0, (done.stdout,done.stderr)
     assert json.loads(done.stdout)["result"]=="HOST_AUTHENTICATED"
+
+
+@pytest.mark.parametrize("expiry", [None, "", "ABSENT"])
+def test_missing_expiration_metadata_does_not_bypass_openssh_login(tmp_path, expiry):
+    env=mock_env(tmp_path)
+    detail=json.loads(env["SYNTHETIC_AWS_DETAILS"])
+    if expiry=="ABSENT":
+        detail["accessDetails"].pop("expiresAt")
+    else:
+        detail["accessDetails"]["expiresAt"]=expiry
+    env["SYNTHETIC_AWS_DETAILS"]=json.dumps(detail)
+    run=subprocess.run(["bash",str(SCRIPT)],env=env,capture_output=True,timeout=20)
+    assert run.returncode==0,(run.stdout,run.stderr)
+    assert json.loads(run.stdout)["result"]=="HOST_AUTHENTICATED"
+
+
+@pytest.mark.parametrize("expiry", [
+    "2000-01-01T00:00:00+00:00", 1, -5, False, "not-a-timestamp",
+    "2099-01-01T00:00:00Z"
+])
+def test_present_expired_or_invalid_expiration_fails_before_ssh(tmp_path, expiry):
+    env=mock_env(tmp_path)
+    detail=json.loads(env["SYNTHETIC_AWS_DETAILS"])
+    detail["accessDetails"]["expiresAt"]=expiry
+    env["SYNTHETIC_AWS_DETAILS"]=json.dumps(detail)
+    run=subprocess.run(["bash",str(SCRIPT)],env=env,capture_output=True,timeout=20)
+    assert run.returncode==42
+    assert json.loads(run.stdout)["code"] in (
+        "TEMP_CREDENTIAL_EXPIRED_OR_INVALID_STOP",
+        "TEMP_CREDENTIAL_EXPIRY_SCHEMA_STOP")
