@@ -164,7 +164,7 @@ def test_malformed_temporary_credential_is_rejected_by_real_openssh(tmp_path):
 def test_leading_whitespace_valid_pem_is_accepted_after_private_trim(tmp_path):
     env=mock_env(tmp_path)
     details=json.loads(env["SYNTHETIC_AWS_DETAILS"])
-    details["accessDetails"]["privateKey"]="  \\n"+details["accessDetails"]["privateKey"]
+    details["accessDetails"]["privateKey"]="  \n"+details["accessDetails"]["privateKey"]
     env["SYNTHETIC_AWS_DETAILS"]=json.dumps(details)
     done=subprocess.run(["bash",str(SCRIPT)],env=env,capture_output=True,timeout=20)
     assert done.returncode==0, (done.stdout,done.stderr)
