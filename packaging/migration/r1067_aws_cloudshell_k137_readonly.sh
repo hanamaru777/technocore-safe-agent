@@ -32,6 +32,7 @@ import re
 import struct
 import subprocess
 import sys
+import time
 
 class Reject(Exception):
     pass
@@ -89,7 +90,25 @@ try:
         "ssh-rsa-cert-v01@openssh.com ",
         "ecdsa-sha2-nistp256-cert-v01@openssh.com ")),
         "TEMP_CERTIFICATE_FORMAT_STOP")
-    require(bool(a.get("expiresAt")), "TEMP_CREDENTIAL_EXPIRY_STOP")
+    # AWS CLI documents expiresAt, but the user's authenticated Lightsail
+    # response may omit/null it. Absence is NOT proof of validity: OpenSSH
+    # independently validates the short-lived certificate at SSH login.
+    # If the service supplies an expiration, reject definitely expired values.
+    expiry=a.get("expiresAt")
+    if expiry not in (None, ""):
+        if type(expiry) in (int, float):
+            end=float(expiry)
+        elif type(expiry) is str:
+            try:
+                end=datetime.datetime.fromisoformat(
+                    expiry.strip().replace("Z","+00:00")
+                ).timestamp()
+            except (ValueError, OverflowError):
+                raise Reject("TEMP_CREDENTIAL_EXPIRY_SCHEMA_STOP")
+        else:
+            raise Reject("TEMP_CREDENTIAL_EXPIRY_SCHEMA_STOP")
+        require(end > time.time()+10 and end < time.time()+7*86400,
+                "TEMP_CREDENTIAL_EXPIRED_OR_INVALID_STOP")
     keys=a.get("hostKeys")
     require(type(keys) is list, "HOSTKEY_SCHEMA_STOP")
     selected=None
