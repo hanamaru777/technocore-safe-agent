@@ -63,7 +63,7 @@ function Check-R1072Result([byte[]]$Bytes) {
         'sqlite_bases','sqlite_wals','sqlite_shms')
     if (@($data.PSObject.Properties.Name).Count -ne $outer.Count -or
         @($data.tree.PSObject.Properties.Name).Count -ne $inner.Count -or
-        [regex]::Matches($raw,'"[a-z_]+"[ ]*:').Count -ne 22) {
+        [regex]::Matches($raw,'"[a-z0-9_]+"[ ]*:').Count -ne 22) {
         throw 'RESPONSE_STOP'
     }
     foreach ($key in @($data.PSObject.Properties.Name)) {
