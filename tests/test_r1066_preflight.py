@@ -432,3 +432,58 @@ def test_r1072_owner_public_bootstrap_parses_on_windows():
         ["powershell.exe", "-NoProfile", "-NonInteractive",
          "-Command", program], capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+
+@WINDOWS
+def test_r1072_ps51_accepts_actual_valid_metadata_receipt_and_rejects_cutover(tmp_path):
+    controller = ROOT / "packaging/migration/r1072_oci_owner_capacity_readonly.ps1"
+    receipt = {
+        "phase": "R1072_ORIGINAL_READONLY_CAPACITY",
+        "result": "INVENTORY_ONLY", "original_git": "MATCH",
+        "tree": {"entries": 3020, "regular": 2901, "directories": 99,
+                 "symlinks": 19, "hardlink_repeated": 1,
+                 "special_objects": 4, "regular_bytes": 20900000000,
+                 "sqlite_bases": 2, "sqlite_wals": 2, "sqlite_shms": 0},
+        "free_bytes": 4000000000,
+        "writer_admission": "NOT_PROVEN",
+        "common_sqlite_epoch": "NOT_PROVEN",
+        "original_archive": "NOT_CREATED",
+        "offhost_backup": "NOT_CREATED",
+        "k137_restore": "NOT_PERFORMED",
+        "cutover": "NO_GO",
+        "oci_retirement": "STRICT_NO_GO",
+    }
+    good = tmp_path / "r1072_good.json"
+    good.write_text(json.dumps(receipt, sort_keys=True), encoding="ascii")
+    bad = tmp_path / "r1072_bad.json"
+    bad.write_text(json.dumps(dict(receipt, cutover="GO"), sort_keys=True),
+                   encoding="ascii")
+    validator = tmp_path / "r1072_windows_validate.ps1"
+    validator.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        "$tokens=$null; $errors=$null\n"
+        "$ast=[Management.Automation.Language.Parser]::ParseFile('"
+        + str(controller).replace("'", "''")
+        + "',[ref]$tokens,[ref]$errors)\n"
+        "if($errors.Count -ne 0){exit 40}\n"
+        "$func=@($ast.FindAll({param($n) "
+        "$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)"
+        "|Where-Object {$_.Name -eq 'Check-R1072Result'})\n"
+        "if($func.Count -ne 1){exit 41}\n"
+        "Invoke-Expression $func[0].Extent.Text\n"
+        "$raw=[Text.Encoding]::ASCII.GetBytes([IO.File]::ReadAllText('"
+        + str(good).replace("'", "''") + "'))\n"
+        "$ok=Check-R1072Result $raw\n"
+        "if(($ok|ConvertFrom-Json).result -ne 'INVENTORY_ONLY'){exit 42}\n"
+        "$raw=[Text.Encoding]::ASCII.GetBytes([IO.File]::ReadAllText('"
+        + str(bad).replace("'", "''") + "'))\n"
+        "try {$null=Check-R1072Result $raw;exit 43}\n"
+        "catch {Write-Output 'R1072_VALID_RECEIPT_ACCEPTED_AND_BAD_CUTOVER_DENIED';exit 0}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive",
+         "-File", str(validator)],
+        capture_output=True, timeout=35)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert b"R1072_VALID_RECEIPT_ACCEPTED_AND_BAD_CUTOVER_DENIED" in result.stdout
