@@ -415,3 +415,20 @@ def test_r1072_owner_ps51_parses_and_refuses_extra_arguments():
          str(owner), "extra-argument"], capture_output=True, timeout=30)
     assert stopped.returncode == 0
     assert b"ARGS_STOP" in stopped.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell 5.1 only")
+def test_r1072_owner_public_bootstrap_parses_on_windows():
+    bootstrap = ROOT / "packaging/windows/r1072_owner_public_bootstrap.ps1"
+    path = str(bootstrap).replace("'", "''")
+    program = (
+        "$t=$null;$e=$null;"
+        "[void][System.Management.Automation.Language.Parser]::ParseFile('"
+        + path
+        + "',[ref]$t,[ref]$e);"
+        "if($e.Count -ne 0){exit 42}else{exit 0}"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive",
+         "-Command", program], capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
