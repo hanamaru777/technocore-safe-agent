@@ -46,7 +46,7 @@ def test_script_parses_and_requires_explicit_owner_use():
 
 def test_synthetic_aws_ssh_controller_uses_ephemeral_identity(tmp_path):
     env=mock_env(tmp_path)
-    p=subprocess.run(["bash",str(SCRIPT)],env=env,
+    p=subprocess.run(["bash",str(SCRIPT),"--allow-one-private-landing-create"],env=env,
                      capture_output=True,timeout=20)
     assert p.returncode==0,(p.stdout,p.stderr)
     out=json.loads(p.stdout)
@@ -58,7 +58,7 @@ def test_synthetic_aws_ssh_controller_uses_ephemeral_identity(tmp_path):
 
 def test_invalid_aws_host_key_stops_before_remote_preparation(tmp_path):
     env=mock_env(tmp_path,tamper=True)
-    p=subprocess.run(["bash",str(SCRIPT)],env=env,
+    p=subprocess.run(["bash",str(SCRIPT),"--allow-one-private-landing-create"],env=env,
                      capture_output=True,timeout=20)
     assert p.returncode==42
     assert json.loads(p.stdout)["code"]=="HOSTKEY_FINGERPRINT_STOP"
@@ -102,3 +102,13 @@ def test_no_writes_to_tradebot_or_shadow_routes():
         for line in source.splitlines():
             if any(verb in line for verb in ("os.mkdir(","os.chown(","os.chmod(")):
                 assert path not in line
+
+
+
+def test_no_owner_optin_stops_before_any_aws_or_ssh(tmp_path):
+    env=mock_env(tmp_path)
+    result=subprocess.run(["bash",str(SCRIPT)],env=env,
+                          capture_output=True,timeout=20)
+    assert result.returncode==42
+    assert json.loads(result.stdout)["code"]=="OWNER_OPT_IN_REQUIRED"
+    assert b"PRIVATE KEY" not in result.stdout+result.stderr
