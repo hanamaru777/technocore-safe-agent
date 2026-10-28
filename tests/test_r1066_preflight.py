@@ -393,3 +393,25 @@ Need ($r.code -ceq 'ARCHIVE_SCOPE_STOP')
 Write-Output 'PASS'
 """)
     assert output.strip() == "PASS"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell 5.1 only")
+def test_r1072_owner_ps51_parses_and_refuses_extra_arguments():
+    owner = ROOT / "packaging/migration/r1072_oci_owner_capacity_readonly.ps1"
+    windows_path = str(owner).replace("'", "''")
+    command = (
+        "$t=$null;$e=$null;"
+        "[void][System.Management.Automation.Language.Parser]::ParseFile('"
+        + windows_path
+        + "',[ref]$t,[ref]$e);"
+        "if($e.Count -ne 0){exit 42}else{exit 0}"
+    )
+    parsed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        capture_output=True, timeout=30)
+    assert parsed.returncode == 0, parsed.stderr.decode(errors="replace")
+    stopped = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-File",
+         str(owner), "extra-argument"], capture_output=True, timeout=30)
+    assert stopped.returncode == 0
+    assert b"ARGS_STOP" in stopped.stdout
