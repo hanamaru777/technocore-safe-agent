@@ -42,8 +42,11 @@ def mock_env(tmp_path, *, tamper=False, algorithm="ssh-ed25519"):
     elif algorithm == "ecdsa-sha2-nistp256":
         keydata=(wire(b"ecdsa-sha2-nistp256") + wire(b"nistp256")
                  + wire(b"\x04" + b"B" * 64))
+    elif algorithm == "ssh-rsa":
+        keydata=(wire(b"ssh-rsa") + wire(b"\x01\x00\x01")
+                 + wire(b"\x00"+b"C"*256))
     else:
-        keydata=wire(b"ssh-rsa") + wire(b"unsupported")
+        keydata=wire(b"ssh-dss") + wire(b"unsupported")
     fingerprint = base64.b64encode(hashlib.sha256(keydata).digest()).decode().rstrip("=")
     host = {
         "algorithm":algorithm,
@@ -89,7 +92,8 @@ def mock_env(tmp_path, *, tamper=False, algorithm="ssh-ed25519"):
     env = os.environ.copy()
     env["PATH"] = str(cmd) + os.pathsep + env["PATH"]
     env["SYNTHETIC_AWS_DETAILS"] = json.dumps(mock)
-    env["R1067_EXPECT_ALGO"] = algorithm
+    env["R1067_EXPECT_ALGO"] = ("rsa-sha2-512,rsa-sha2-256"
+                               if algorithm=="ssh-rsa" else algorithm)
     return env
 
 def test_synthetic_ephemeral_aws_key_trust_and_ssh_command(tmp_path):
@@ -123,13 +127,22 @@ def test_aws_authenticated_nistp256_ecdsa_host_key_supported(tmp_path):
     assert b"SYNTHETIC_CANARY" not in run.stdout + run.stderr
 
 
-def test_absent_strong_host_key_is_redacted_specific_stop(tmp_path):
+def test_aws_authenticated_rsa_host_key_uses_rsa_sha2_only(tmp_path):
     env = mock_env(tmp_path, algorithm="ssh-rsa")
+    run = subprocess.run(["bash", str(SCRIPT)], env=env,
+                         capture_output=True, timeout=20)
+    assert run.returncode == 0, (run.stdout, run.stderr)
+    assert json.loads(run.stdout)["result"] == "HOST_AUTHENTICATED"
+    assert b"BEGIN EC PRIVATE KEY" not in run.stdout + run.stderr
+
+
+def test_unsupported_host_key_is_redacted_specific_stop(tmp_path):
+    env = mock_env(tmp_path, algorithm="ssh-dss")
     run = subprocess.run(["bash", str(SCRIPT)], env=env,
                          capture_output=True, timeout=20)
     assert run.returncode == 42
     assert json.loads(run.stdout)["code"] == "HOSTKEY_SUPPORTED_ALGORITHM_MISSING"
-    assert b"SYNTHETIC_CANARY" not in run.stdout + run.stderr
+    assert b"BEGIN EC PRIVATE KEY" not in run.stdout + run.stderr
 
 
 def test_bad_ecdsa_host_fingerprint_cannot_fallback_to_ssh_rsa(tmp_path):
