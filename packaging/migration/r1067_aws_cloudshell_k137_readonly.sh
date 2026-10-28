@@ -44,7 +44,7 @@ def require(ok, code):
 def read_ssh_host_key(record):
     require(type(record) is dict, "HOSTKEY_SCHEMA_STOP")
     algorithm=record.get("algorithm")
-    require(algorithm in ("ssh-ed25519","ecdsa-sha2-nistp256"), "HOSTKEY_ALGORITHM_STOP")
+    require(algorithm in ("ssh-ed25519","ecdsa-sha2-nistp256","ssh-rsa"), "HOSTKEY_ALGORITHM_STOP")
     value=record.get("publicKey")
     require(type(value) is str and len(value)<=4096, "HOSTKEY_BLOB_STOP")
     parts=value.strip().split()
@@ -113,7 +113,7 @@ try:
     require(type(keys) is list, "HOSTKEY_SCHEMA_STOP")
     selected=None
     # Never fall back from an advertised ed25519 key with a bad fingerprint.
-    for algorithm in ("ssh-ed25519","ecdsa-sha2-nistp256"):
+    for algorithm in ("ssh-ed25519","ecdsa-sha2-nistp256","ssh-rsa"):
         matches=[k for k in keys if type(k) is dict and k.get("algorithm")==algorithm]
         require(len(matches)<=1, "HOSTKEY_DUPLICATE_STOP")
         if matches:
@@ -138,7 +138,7 @@ try:
     put("identity-cert.pub",cert.strip()+"\n")
     put("known_hosts",str(ip)+" "+algorithm+" "+public_blob+"\n")
     put("metadata.json",json.dumps({"ip":str(ip),"user":user,
-                                    "algorithm":algorithm},separators=(",",":")))
+                                    "algorithm":("rsa-sha2-512,rsa-sha2-256" if algorithm=="ssh-rsa" else algorithm)},separators=(",",":")))
 except Reject as error:
     # Fixed allow-listed status only. Never show privateKey, certKey or AWS JSON.
     print(json.dumps({"phase":"R1067","result":"STOP","code":str(error),
