@@ -487,3 +487,41 @@ def test_r1072_ps51_accepts_actual_valid_metadata_receipt_and_rejects_cutover(tm
         capture_output=True, timeout=35)
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert b"R1072_VALID_RECEIPT_ACCEPTED_AND_BAD_CUTOVER_DENIED" in result.stdout
+
+
+@WINDOWS
+def test_r1072_ps51_ssh_nonzero_is_classified_without_raw_output(tmp_path):
+    controller=ROOT / "packaging/migration/r1072_oci_owner_capacity_readonly.ps1"
+    path=str(controller).replace("'","''")
+    script=tmp_path/"r1072_ssh_exit_classes.ps1"
+    script.write_text(
+        "$ErrorActionPreference='Stop';$ts=$null;$errs=$null\n"
+        "$ast=[Management.Automation.Language.Parser]::ParseFile('"
+        + path + "',[ref]$ts,[ref]$errs)\n"
+        "if($errs.Count -ne 0){exit 40}\n"
+        "$f=@($ast.FindAll({param($n) "
+        "$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)"
+        "|Where-Object {$_.Name -eq 'Get-R1072RemoteStop'})\n"
+        "if($f.Count -ne 1){exit 41}\n"
+        "Invoke-Expression $f[0].Extent.Text\n"
+        "$unknown=[Text.Encoding]::ASCII.GetBytes('cannot-connect')\n"
+        "$a=Get-R1072RemoteStop 255 $unknown\n"
+        "if($a -cne 'SSH_AUTH_ROUTE_OR_PIN_STOP'){exit 42}\n"
+        "$b=Get-R1072RemoteStop 127 $unknown\n"
+        "if($b -cne 'REMOTE_EXEC_STOP'){exit 43}\n"
+        "$c=Get-R1072RemoteStop 42 $unknown\n"
+        "if($c -cne 'REMOTE_UNRECOGNIZED_STOP'){exit 44}\n"
+        "$safe='{\"phase\":\"R1072_ORIGINAL_READONLY_CAPACITY\","
+        "\"result\":\"STOP\",\"code\":\"ORIGINAL_HEAD_STOP\","
+        "\"cutover\":\"NO_GO\",\"oci_retirement\":\"STRICT_NO_GO\"}'\n"
+        "$d=Get-R1072RemoteStop 42 ([Text.Encoding]::ASCII.GetBytes($safe))\n"
+        "if($d -cne 'GUEST_ORIGINAL_HEAD_STOP'){exit 45}\n"
+        "$bad=$safe.Replace('NO_GO','GO')\n"
+        "$e=Get-R1072RemoteStop 42 ([Text.Encoding]::ASCII.GetBytes($bad))\n"
+        "if($e -cne 'REMOTE_UNRECOGNIZED_STOP'){exit 46}\n"
+        "Write-Output 'R1072_REDACTED_SSH_EXIT_CLASSES=PASS'\n",
+        encoding="utf-8")
+    out=subprocess.run(["powershell.exe","-NoProfile","-NonInteractive",
+                        "-File",str(script)],capture_output=True,timeout=30)
+    assert out.returncode==0,(out.stdout,out.stderr)
+    assert b"R1072_REDACTED_SSH_EXIT_CLASSES=PASS" in out.stdout
