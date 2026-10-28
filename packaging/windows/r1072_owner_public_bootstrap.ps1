@@ -4,10 +4,10 @@
 # change services, create backups, transfer secrets, restore or authorize cutover.
 Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
-$commit='07bcbe380b568119061754a9db324e588c5d53a9'
+$commit='d493217eef36a28ebfb6680cd246476aed0d07b8'
 $prefix='https://raw.githubusercontent.com/hanamaru777/technocore-safe-agent/'+$commit+'/'
 $items=@(
-    @{path='packaging/migration/r1072_oci_owner_capacity_readonly.ps1';blob='44411a8812611503779462dbe1fb9aef5321b643'},
+    @{path='packaging/migration/r1072_oci_owner_capacity_readonly.ps1';blob='af48e7dd7b5fc3248c7687c82ca1633019d9206e'},
     @{path='packaging/migration/r1066_owner_workflow.ps1';blob='7a7d9790ccd9bb464c254188096d85fb315ee550'},
     @{path='packaging/migration/r1066_preflight_transport.cs';blob='305530a86db7e5cc8812fbac57c3e2c7c089a7be'},
     @{path='packaging/windows/r1062_writer_attribution_one_shot_readonly.ps1';blob='7ad3432b89b2aa2fe4a5e6b0142ec7578554baaa'},
