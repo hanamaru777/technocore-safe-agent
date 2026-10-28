@@ -86,3 +86,73 @@ def test_windows_ps51_parse_and_extra_argument_refusal():
         "-File",str(OWNER),"unexpected"],capture_output=True,timeout=30)
     assert guard.returncode==0
     assert b"ARGS_STOP" in guard.stdout
+
+
+
+def test_r1072_receipt_schema_includes_numeric_field_name(roots, monkeypatch, capsys):
+    import json
+    monkeypatch.setattr(mod, "assert_original", lambda: None)
+    assert mod.main() == 0
+    captured = capsys.readouterr().out
+    row = json.loads(captured)
+    assert row["result"] == "INVENTORY_ONLY"
+    assert row["writer_admission"] == "NOT_PROVEN"
+    assert row["k137_restore"] == "NOT_PERFORMED"
+    assert row["oci_retirement"] == "STRICT_NO_GO"
+    pattern = __import__("re").compile(r'"[a-z0-9_]+"[ ]*:')
+    assert len(pattern.findall(captured)) == 22
+    assert len(__import__("re").compile(r'"[a-z_]+"[ ]*:').findall(captured)) == 21
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PS5.1 required")
+def test_r1072_ps51_actual_schema_validator_happy_and_rejection(tmp_path):
+    import json
+    row = {
+        "phase": "R1072_ORIGINAL_READONLY_CAPACITY",
+        "result": "INVENTORY_ONLY",
+        "original_git": "MATCH",
+        "tree": {"entries": 3017, "regular": 2950, "directories": 41,
+                 "symlinks": 19, "hardlink_repeated": 1, "special_objects": 4,
+                 "regular_bytes": 20900000000, "sqlite_bases": 2,
+                 "sqlite_wals": 2, "sqlite_shms": 1},
+        "free_bytes": 4000000000,
+        "writer_admission": "NOT_PROVEN",
+        "common_sqlite_epoch": "NOT_PROVEN",
+        "original_archive": "NOT_CREATED",
+        "offhost_backup": "NOT_CREATED",
+        "k137_restore": "NOT_PERFORMED",
+        "cutover": "NO_GO",
+        "oci_retirement": "STRICT_NO_GO",
+    }
+    sample = tmp_path/"ok.json"
+    sample.write_text(json.dumps(row, sort_keys=True), encoding="ascii")
+    invalid = tmp_path/"bad.json"
+    wrong = dict(row, cutover="GO")
+    invalid.write_text(json.dumps(wrong, sort_keys=True), encoding="ascii")
+    controller_path = str(OWNER).replace("'", "''")
+    good_path = str(sample).replace("'", "''")
+    bad_path = str(invalid).replace("'", "''")
+    code = (
+        "$ErrorActionPreference='Stop';$tokens=$null;$errors=$null;"
+        "$ast=[Management.Automation.Language.Parser]::ParseFile('"
+        + controller_path + "',[ref]$tokens,[ref]$errors);"
+        "if($errors.Count -ne 0){exit 40};"
+        "$defs=@($ast.FindAll({param($n)"
+        "$n -is [Management.Automation.Language.FunctionDefinitionAst]},$true)"
+        "|Where-Object {$_.Name -eq 'Check-R1072Result'});"
+        "if($defs.Count -ne 1){exit 41};"
+        "Invoke-Expression $defs[0].Extent.Text;"
+        "$good=[Text.Encoding]::ASCII.GetBytes("
+        "[IO.File]::ReadAllText('" + good_path + "'));"
+        "$out=Check-R1072Result $good;"
+        "if(($out|ConvertFrom-Json).result -ne 'INVENTORY_ONLY'){exit 42};"
+        "$bad=[Text.Encoding]::ASCII.GetBytes("
+        "[IO.File]::ReadAllText('" + bad_path + "'));"
+        "try {$null=Check-R1072Result $bad;exit 43}"
+        "catch {Write-Output 'R1072_SCHEMA_POSITIVE_AND_DENY=PASS';exit 0}"
+    )
+    done = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", code],
+        capture_output=True, timeout=30)
+    assert done.returncode == 0, (done.stdout,done.stderr)
+    assert b"R1072_SCHEMA_POSITIVE_AND_DENY=PASS" in done.stdout
