@@ -95,6 +95,47 @@ function Check-R1072Result([byte[]]$Bytes) {
     } | ConvertTo-Json -Compress)
 }
 
+function Get-R1072RemoteStop([int]$ExitCode,[byte[]]$Raw) {
+    # Never reveal native SSH stderr, stdout, dynamic filenames, or credentials.
+    # The exit status alone separates OpenSSH failures from guest guard refusal.
+    if ($ExitCode -eq 255) { return 'SSH_AUTH_ROUTE_OR_PIN_STOP' }
+    if ($ExitCode -ne 42) { return 'REMOTE_EXEC_STOP' }
+    if ($null -eq $Raw -or $Raw.Length -lt 100 -or $Raw.Length -gt 512) {
+        return 'REMOTE_UNRECOGNIZED_STOP'
+    }
+    foreach ($byte in $Raw) {
+        if ($byte -ne 10 -and ($byte -lt 32 -or $byte -gt 126)) {
+            return 'REMOTE_UNRECOGNIZED_STOP'
+        }
+    }
+    try {
+        $text=[Text.Encoding]::ASCII.GetString($Raw)
+        $obj=$text | ConvertFrom-Json
+        $keys=@('phase','result','code','cutover','oci_retirement')
+        if (@($obj.PSObject.Properties.Name).Count -ne $keys.Count -or
+            [regex]::Matches($text,'"[a-z0-9_]+"[ ]*:').Count -ne $keys.Count) {
+            return 'REMOTE_UNRECOGNIZED_STOP'
+        }
+        foreach ($key in @($obj.PSObject.Properties.Name)) {
+            if ($keys -cnotcontains $key) { return 'REMOTE_UNRECOGNIZED_STOP' }
+        }
+        if ($obj.phase -cne 'R1072_ORIGINAL_READONLY_CAPACITY' -or
+            $obj.result -cne 'STOP' -or $obj.cutover -cne 'NO_GO' -or
+            $obj.oci_retirement -cne 'STRICT_NO_GO') {
+            return 'REMOTE_UNRECOGNIZED_STOP'
+        }
+        $allowed=@('SOURCE_UNVERIFIED','ORIGINAL_PRIVILEGE_STOP',
+            'WRONG_HOST_STOP','ORIGINAL_ROOT_STOP','ORIGINAL_HEAD_STOP',
+            'INVENTORY_TIME_STOP','INVENTORY_PATH_STOP','INVENTORY_ENTRY_STOP',
+            'INVENTORY_CHILD_STOP','INVENTORY_BYTES_STOP','TWO_SQLITE_STOP',
+            'DISK_STATUS_STOP')
+        if ($allowed -cnotcontains $obj.code) { return 'REMOTE_UNRECOGNIZED_STOP' }
+        return ('GUEST_'+$obj.code)
+    } catch {
+        return 'REMOTE_UNRECOGNIZED_STOP'
+    }
+}
+
 function Invoke-R1072 {
     $directory=$null;$plain=$null;$encrypted=$null;$code=$null;$reply=$null
     $result=$null;$clean=$true;$stage='PREPARE'
@@ -113,7 +154,7 @@ function Invoke-R1072 {
         $stage='GUEST_SOURCE_PIN'
         $guest=Read-R1066PinnedSource (
             Join-Path $PSScriptRoot '..\oracle\r1072_original_readonly_capacity.py'
-        ) 'cb05b793e0b8e04a99af4e7edc2b9a2206d54b1c'
+        ) '0ee105633366abe9e92d72eacc86e7be789aa851'
         $stage='LOCAL_ESCROW'
         $encrypted=Read-R1027Backup
         $code=Read-Host 'R987 V2 local recovery code' -AsSecureString
@@ -145,9 +186,12 @@ function Invoke-R1072 {
             [FlopR1062.Guards]::Quote($_)
         })
         $payload=[Text.Encoding]::UTF8.GetBytes($guest)
-        $stage='SSH_REMOTE'
+        $stage='SSH_CARRIER'
         $reply=[FlopR1066.Transport]::Run($ssh,($quoted -join ' '),$payload,58000)
-        if ($reply.ExitCode -ne 0) { throw 'ORIGINAL_PROBE_STOP' }
+        if ($reply.ExitCode -ne 0) {
+            $stage=Get-R1072RemoteStop $reply.ExitCode $reply.Output
+            throw 'ORIGINAL_PROBE_STOP'
+        }
         $stage='RESPONSE_SCHEMA'
         $result=Check-R1072Result $reply.Output
     } catch {
@@ -168,9 +212,19 @@ function Invoke-R1072 {
         Write-Output '{"phase":"R1072","result":"STOP","code":"CLEANUP_STOP"}'
     } elseif ($null -eq $result) {
         $valid=@('PREPARE','LOCAL_LIB_PIN','GUEST_SOURCE_PIN','LOCAL_ESCROW',
-            'LOCAL_CUSTODY','SSH_REMOTE','RESPONSE_SCHEMA')
+            'LOCAL_CUSTODY','SSH_CARRIER','RESPONSE_SCHEMA',
+            'SSH_AUTH_ROUTE_OR_PIN_STOP','REMOTE_EXEC_STOP',
+            'REMOTE_UNRECOGNIZED_STOP','GUEST_SOURCE_UNVERIFIED',
+            'GUEST_ORIGINAL_PRIVILEGE_STOP','GUEST_WRONG_HOST_STOP',
+            'GUEST_ORIGINAL_ROOT_STOP','GUEST_ORIGINAL_HEAD_STOP',
+            'GUEST_INVENTORY_TIME_STOP','GUEST_INVENTORY_PATH_STOP',
+            'GUEST_INVENTORY_ENTRY_STOP','GUEST_INVENTORY_CHILD_STOP',
+            'GUEST_INVENTORY_BYTES_STOP','GUEST_TWO_SQLITE_STOP',
+            'GUEST_DISK_STATUS_STOP')
         if ($valid -cnotcontains $stage) { $stage='PREPARE' }
-        Write-Output ('{"phase":"R1072","result":"STOP","code":"'+$stage+'_STOP"}')
+        $code=$stage
+        if (-not $code.EndsWith('_STOP')) { $code+='_STOP' }
+        Write-Output ('{"phase":"R1072","result":"STOP","code":"'+$code+'"}')
     } else {
         Write-Output $result
     }
