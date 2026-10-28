@@ -15,6 +15,12 @@ spec.loader.exec_module(m)
 SECRET="ocid1.vaultsecret.oc1.ap-tokyo-1.example"
 DID="did:key:z6Mk"+"a"*44
 
+@pytest.fixture(autouse=True)
+def signer_stub(monkeypatch):
+    core=SimpleNamespace(signer_matches_pinned=lambda:True,current_did=lambda:DID)
+    monkeypatch.setitem(sys.modules,"flop_agent",SimpleNamespace(core=core))
+    return core
+
 
 @pytest.fixture
 def custody(monkeypatch,tmp_path):
@@ -55,7 +61,7 @@ def mock_oci(monkeypatch, hexbytes=None, *, failure=None):
     return seen
 
 
-def test_existing_did_candidate_uses_vault_without_printing_seed(custody,monkeypatch):
+def test_existing_did_candidate_uses_vault_without_printing_seed(custody,monkeypatch,signer_stub):
     cfg,_,_=custody
     seen=mock_oci(monkeypatch)
     observed=[]
@@ -63,7 +69,8 @@ def test_existing_did_candidate_uses_vault_without_printing_seed(custody,monkeyp
     def derive():
         observed.append(os.environ["SIGN_SEED"]=="b"*64)
         return DID
-    report=m.verify_existing_did(cfg,SECRET,DID,derive)
+    signer_stub.current_did=derive
+    report=m.verify_existing_did(cfg,SECRET,DID)
     assert observed==[True]
     assert report=={
         "original_did":"MATCH", "oci_vault_fetch":"PASS",
@@ -75,12 +82,13 @@ def test_existing_did_candidate_uses_vault_without_printing_seed(custody,monkeyp
     assert "SIGN_SEED" not in os.environ
 
 
-def test_wrong_original_did_fails_closed_and_cleans_seed(custody,monkeypatch):
+def test_wrong_original_did_fails_closed_and_cleans_seed(custody,monkeypatch,signer_stub):
     cfg,_,_=custody
     mock_oci(monkeypatch)
     monkeypatch.delenv("SIGN_SEED",raising=False)
+    signer_stub.current_did=lambda:"did:key:z6Mk"+"c"*44
     with pytest.raises(m.Stop,match="ORIGINAL_DID_MISMATCH"):
-        m.verify_existing_did(cfg,SECRET,DID,lambda:"did:key:z6Mk"+"c"*44)
+        m.verify_existing_did(cfg,SECRET,DID)
     assert "SIGN_SEED" not in os.environ
 
 
@@ -89,7 +97,7 @@ def test_invalid_seed_never_calls_derive(custody,monkeypatch):
     mock_oci(monkeypatch,b"invalid")
     monkeypatch.delenv("SIGN_SEED",raising=False)
     with pytest.raises(m.Stop,match="SEED_SHAPE_STOP"):
-        m.verify_existing_did(cfg,SECRET,DID,lambda:pytest.fail("derive called"))
+        m.verify_existing_did(cfg,SECRET,DID)
     assert "SIGN_SEED" not in os.environ
 
 
@@ -98,7 +106,7 @@ def test_untrusted_backend_failure_is_redacted(custody,monkeypatch):
     mock_oci(monkeypatch,failure=True)
     monkeypatch.delenv("SIGN_SEED",raising=False)
     with pytest.raises(m.Stop,match=r"^OCI_VAULT_FETCH_STOP$") as e:
-        m.verify_existing_did(cfg,SECRET,DID,lambda:pytest.fail("derive called"))
+        m.verify_existing_did(cfg,SECRET,DID)
     assert "PRIVATE_CANARY" not in str(e.value)
     assert "SIGN_SEED" not in os.environ
 
@@ -121,7 +129,7 @@ def test_private_material_custody_is_enforced(custody,monkeypatch,tmp_path,mutat
     if mutate=="root_exposed":
         root.chmod(0o755)
     with pytest.raises(m.Stop):
-        m.verify_existing_did(cfg,SECRET,DID,lambda:pytest.fail("derive called"))
+        m.verify_existing_did(cfg,SECRET,DID)
     assert "SIGN_SEED" not in os.environ
 
 
@@ -130,7 +138,7 @@ def test_no_seed_or_auth_in_nonopted_context(custody,monkeypatch):
     calls=mock_oci(monkeypatch)
     monkeypatch.setenv("SIGN_SEED","do-not-overwrite")
     with pytest.raises(m.Stop,match="SEED_ENV_SCOPE_STOP"):
-        m.verify_existing_did(cfg,SECRET,DID,lambda:None)
+        m.verify_existing_did(cfg,SECRET,DID)
     assert os.environ["SIGN_SEED"]=="do-not-overwrite"
     assert calls==[]
 
@@ -144,14 +152,33 @@ def test_no_production_mutations_or_cli():
         assert forbidden not in source
 
 
-def test_local_derivation_exception_is_redacted_and_seed_cleared(custody,monkeypatch):
+def test_local_derivation_exception_is_redacted_and_seed_cleared(custody,monkeypatch,signer_stub):
     cfg,_,_=custody
     mock_oci(monkeypatch)
     monkeypatch.delenv("SIGN_SEED",raising=False)
     def broken():
         raise RuntimeError("private seed canary should never reach logs")
+    signer_stub.current_did=broken
     with pytest.raises(m.Stop,match=r"^LOCAL_DERIVATION_STOP$") as error:
-        m.verify_existing_did(cfg,SECRET,DID,broken)
+        m.verify_existing_did(cfg,SECRET,DID)
     assert error.value.__suppress_context__ is True
     assert "private seed canary" not in str(error.value)
     assert "SIGN_SEED" not in os.environ
+
+
+def test_wrong_official_signer_pin_never_reaches_oci(custody,monkeypatch,signer_stub):
+    cfg,_,_=custody
+    calls=mock_oci(monkeypatch)
+    signer_stub.signer_matches_pinned=lambda:False
+    monkeypatch.delenv("SIGN_SEED",raising=False)
+    with pytest.raises(m.Stop,match="SIGNER_PIN_STOP"):
+        m.verify_existing_did(cfg,SECRET,DID)
+    assert calls==[]
+
+
+def test_callsite_rejects_arbitrary_user_supplied_derivation(custody,monkeypatch):
+    cfg,_,_=custody
+    calls=mock_oci(monkeypatch)
+    with pytest.raises(TypeError):
+        m.verify_existing_did(cfg,SECRET,DID,lambda:pytest.fail("unsafe callback"))
+    assert calls==[]
