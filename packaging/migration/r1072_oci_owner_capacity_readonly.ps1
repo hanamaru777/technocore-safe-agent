@@ -97,10 +97,11 @@ function Check-R1072Result([byte[]]$Bytes) {
 
 function Invoke-R1072 {
     $directory=$null;$plain=$null;$encrypted=$null;$code=$null;$reply=$null
-    $result=$null;$clean=$true
+    $result=$null;$clean=$true;$stage='PREPARE'
     try {
         if ($PSVersionTable.PSVersion.Major -ne 5 -or
             $PSVersionTable.PSVersion.Minor -lt 1) { throw 'PS_VERSION_STOP' }
+        $stage='LOCAL_LIB_PIN'
         Import-R1072Library
         Initialize-R1066
         $ssh=Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\ssh.exe'
@@ -109,13 +110,16 @@ function Invoke-R1072 {
             -not [IO.File]::Exists($known)) { throw 'SSH_ABSENT_STOP' }
         Assert-R1027LocalPath $ssh
         Assert-R1027LocalPath $known
+        $stage='GUEST_SOURCE_PIN'
         $guest=Read-R1066PinnedSource (
             Join-Path $PSScriptRoot '..\oracle\r1072_original_readonly_capacity.py'
         ) 'cb05b793e0b8e04a99af4e7edc2b9a2206d54b1c'
+        $stage='LOCAL_ESCROW'
         $encrypted=Read-R1027Backup
         $code=Read-Host 'R987 V2 local recovery code' -AsSecureString
         try { $plain=Unprotect-R1027 $encrypted $code }
         finally { $code.Dispose();$code=$null }
+        $stage='LOCAL_CUSTODY'
         $directory=Join-Path (
             [Environment]::GetFolderPath('LocalApplicationData')
         ) ('Temp\flop-r1072-'+[Guid]::NewGuid().ToString('N'))
@@ -141,8 +145,10 @@ function Invoke-R1072 {
             [FlopR1062.Guards]::Quote($_)
         })
         $payload=[Text.Encoding]::UTF8.GetBytes($guest)
+        $stage='SSH_REMOTE'
         $reply=[FlopR1066.Transport]::Run($ssh,($quoted -join ' '),$payload,58000)
         if ($reply.ExitCode -ne 0) { throw 'ORIGINAL_PROBE_STOP' }
+        $stage='RESPONSE_SCHEMA'
         $result=Check-R1072Result $reply.Output
     } catch {
         $result=$null
@@ -161,7 +167,10 @@ function Invoke-R1072 {
     if (-not $clean) {
         Write-Output '{"phase":"R1072","result":"STOP","code":"CLEANUP_STOP"}'
     } elseif ($null -eq $result) {
-        Write-Output '{"phase":"R1072","result":"STOP","code":"GUARD_STOP"}'
+        $valid=@('PREPARE','LOCAL_LIB_PIN','GUEST_SOURCE_PIN','LOCAL_ESCROW',
+            'LOCAL_CUSTODY','SSH_REMOTE','RESPONSE_SCHEMA')
+        if ($valid -cnotcontains $stage) { $stage='PREPARE' }
+        Write-Output ('{"phase":"R1072","result":"STOP","code":"'+$stage+'_STOP"}')
     } else {
         Write-Output $result
     }
