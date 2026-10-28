@@ -190,7 +190,8 @@ def test_r1072_integrity_and_decryption_are_distinct_redacted_stages():
     source = OWNER.read_text()
     assert source.count("$stage='LOCAL_ESCROW_INTEGRITY'") == 1
     assert source.count("$stage='LOCAL_DECRYPT'") == 1
-    assert "LOCAL_ESCROW_INTEGRITY','LOCAL_DECRYPT'" in source
+    assert "'LOCAL_ESCROW_INTEGRITY','LOCAL_CODE_ENTRY','LOCAL_CODE_EMPTY'" in source
+    assert "'LOCAL_DECRYPT','LOCAL_CUSTODY'" in source
     assert source.index("$stage='LOCAL_ESCROW_INTEGRITY'") < source.index(
         "$stage='LOCAL_DECRYPT'") < source.index("$stage='LOCAL_CUSTODY'")
 
