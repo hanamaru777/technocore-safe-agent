@@ -310,3 +310,57 @@ owned-temp cleanup; state, logs, SQLite/WAL, encrypted manifests, keys,
 rollback archives and unknown directories are never safe to infer as unused.
 
 Current release authority: cutover=NO_GO, OCI_RETIREMENT=STRICT_NO_GO.
+
+## R1068 candidate — existing-DID Oracle Vault continuity without original OCI Compute
+
+Validated October 28, 2026 against public Oracle documentation:
+
+- https://docs.oracle.com/en-us/iaas/Content/Identity/api-getstarted/token_exchange_grant_type_workload_id-federation.htm
+- https://docs.oracle.com/en-us/iaas/releasenotes/identity/jwt_to_rpst_token_exchange_for_workload_identity_federation.htm
+- https://docs.oracle.com/en-us/iaas/Content/API/Concepts/sdk_authentication_methods.htm
+
+EXISTING signer `src/flop_agent/oracle_signer.py` calls
+`InstancePrincipalsSecurityTokenSigner()`, which cannot authenticate on the
+existing AWS Lightsail host without an OCI instance principal. Merely moving
+the Python runtime would BREAK the original DID signer. OCI now supports
+JWT-to-RPST cross-cloud workload federation, but it requires an actual
+trusted independently issued external JWT, OCI Identity Propagation Trust,
+matching claims, least-privilege policies and a compatible OCI SDK. No such
+issuer or trust is verified on the user-owned Lightsail instance. Do NOT
+pretend native Lightsail SSH certificates are automatically OCI JWTs.
+
+Fallback candidate for retiring the original OCI COMPUTE while retaining
+the existing Vault secret. The candidate `r1068_oci_vault_portability.py` implements a
+NON-DEFAULT, non-CLI, narrow existing Vault secret GET using a separately
+authorized least-privilege OCI API key held under private 0700 directory
+with mode 0600 key/config files and exact pinned Vault secret identifier.
+It derives ONLY the existing public DID locally, compares against the
+original pinned DID and emits a fixed redacted match result. It does NOT
+POST, send a transaction, start services, create credentials or alter OCI
+policies. It intentionally does NOT modify the original oracle_signer.py
+or make the AWS signer usable without separate release integration.
+
+Security caveat: Vault seed is STILL retrieved over authenticated HTTPS into
+the isolated AWS process memory for deterministic derivation; it is NEVER
+persisted by this module or emitted to logs, but Python environment strings
+are not guaranteed securely erasable. This does NOT avoid every risk of
+handling private seed material. An approved least-privilege OCI IAM API key
+would itself be a sensitive persistent K137 credential, requiring scoped IAM
+policy, monitoring, access-control review and revocation/rotation.
+Do not create an IAM user or copy any secret/key to AWS automatically.
+
+Preferred if feasible: independent OIDC JWT issuer + OCI workload identity
+federation, with periodic renewal and exact resource-level deny/allow rules.
+Backup option: dedicated OCI API-key signer with only exact pinned secret
+read permission, NOT tenancy-wide read or manage access. Whether the user's
+OCI tenancy/policy/Identity Domain and AWS installation can support either
+is UNCONFIRMED. The original Oracle instance can be retired ONLY after
+original DID signing and all POST outcomes are independently proved on
+AWS; retaining OCI Vault as a service may have separate charges and must
+be reviewed before the final retirement scope is approved.
+
+R1068 tests use only synthetic keys/mocked OCI and never call AWS/OCI.
+Nothing here proves source writer admission, common SQLite epoch, actual
+encrypted transfer, DISARMED restore, original DID continuity, TradeBot
+isolation or rollback. No production action and no deletion authorized.
+OCI_RETIREMENT=STRICT_NO_GO.
