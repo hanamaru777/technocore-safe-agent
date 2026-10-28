@@ -364,3 +364,34 @@ Nothing here proves source writer admission, common SQLite epoch, actual
 encrypted transfer, DISARMED restore, original DID continuity, TradeBot
 isolation or rollback. No production action and no deletion authorized.
 OCI_RETIREMENT=STRICT_NO_GO.
+
+## R1069 — authenticated owner-created K137 private quarantine directory
+
+R1067 authenticated existing K137 using AWS-issued short-lived SSH credentials
+and pinned the AWS-reported host key. Owner-proven October 28 evidence:
+free disk 48,603,582,464 bytes; total 61,285,326,848, UID1000 SSH
+identity; staged Git HEAD MATCH; protected TradeBot paths have distinct
+ownership; private quarantine directory ABSENT.
+
+New packaging/migration/r1069_aws_cloudshell_k137_private_landing.sh
+reuses the proven AWS credential/host-key verification and does not retain
+persistent SSH credentials. It changes K137 only after the owner's explicit
+--allow-one-private-landing-create opt-in. It calls sudo noninteractively
+and creates exactly ONE missing /var/lib/flop-migration-r1066 directory as
+mode 0700, owned by existing UID1000 ubuntu. Before mutation it checks
+root-owned non-writable parent directories, protected TradeBot/shadow
+ownership, the exact staged Git HEAD and at least 20 GiB free.
+It does not touch TradeBot files/services, edit existing directories,
+launch FLOP or copy confidential source. If the landing already has exact
+expected owner/mode, it returns ALREADY_PREPARED with no mutation.
+An unexpected preexisting object stops, preserving existing contents.
+No automatic deletion of a partially created root on failure, since another
+actor might have used it.
+
+R1069 does NOT establish the dedicated bounded cgroup required by R1066
+preflight. That identity must be separately enrolled and verified.
+Successful synthetic CI does not prove sudo availability on the real host.
+Nothing here establishes the original Oracle writer stop, complete archive,
+encrypted transfer, isolated restoration, original DID, rollback or cleanup.
+Never issue actual sudo commands or send AWS keys to ChatGPT/GitHub.
+Default R1067 remains READ ONLY; OCI_RETIREMENT=STRICT_NO_GO.
