@@ -193,3 +193,14 @@ def test_r1072_integrity_and_decryption_are_distinct_redacted_stages():
     assert "LOCAL_ESCROW_INTEGRITY','LOCAL_DECRYPT'" in source
     assert source.index("$stage='LOCAL_ESCROW_INTEGRITY'") < source.index(
         "$stage='LOCAL_DECRYPT'") < source.index("$stage='LOCAL_CUSTODY'")
+
+
+
+def test_empty_local_secret_is_rejected_before_decrypt_and_redacted():
+    source = OWNER.read_text()
+    assert "if ($null -eq $code -or $code.Length -eq 0)" in source
+    assert "$stage='LOCAL_CODE_EMPTY'" in source
+    assert "'LOCAL_CODE_ENTRY','LOCAL_CODE_EMPTY'" in source
+    assert source.index("$stage='LOCAL_CODE_EMPTY'") < source.index(
+        "$plain=Unprotect-R1027 $encrypted $code")
+    assert "Write-Output $code" not in source
