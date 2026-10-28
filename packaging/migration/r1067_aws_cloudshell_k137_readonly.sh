@@ -81,7 +81,7 @@ try:
     # Do not presume AWS's private-key serialization. Let the installed
     # OpenSSH parser validate the actual unencrypted credential under 0600
     # ephemeral custody, without echoing key text, logs or derived pubkey.
-    require(len(private)<=65536 and private.isascii() and "\\x00" not in private,
+    require(len(private)<=65536 and private.isascii() and "\x00" not in private,
             "TEMP_PRIVATE_KEY_BOUND_STOP")
     cert=a.get("certKey")
     require(type(cert) is str and cert.startswith((
