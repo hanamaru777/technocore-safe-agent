@@ -95,10 +95,16 @@ function Check-R1072Result([byte[]]$Bytes) {
     } | ConvertTo-Json -Compress)
 }
 
-function Get-R1072RemoteStop([int]$ExitCode,[byte[]]$Raw) {
+function Get-R1072RemoteStop([int]$ExitCode,[byte[]]$Raw,[string]$Kind='SSH_UNKNOWN') {
     # Never reveal native SSH stderr, stdout, dynamic filenames, or credentials.
     # The exit status alone separates OpenSSH failures from guest guard refusal.
-    if ($ExitCode -eq 255) { return 'SSH_AUTH_ROUTE_OR_PIN_STOP' }
+    if ($ExitCode -eq 255) {
+        $allowed=@('SSH_OPTION_REJECTED','SSH_HOSTKEY_REJECTED',
+            'SSH_IDENTITY_UNREADABLE','SSH_PUBLIC_KEY_REJECTED',
+            'SSH_CONNECTIVITY_REJECTED','SSH_REMOTE_CLOSED')
+        if ($allowed -ccontains $Kind) { return $Kind }
+        return 'SSH_AUTH_ROUTE_OR_PIN_STOP'
+    }
     if ($ExitCode -ne 42) { return 'REMOTE_EXEC_STOP' }
     if ($null -eq $Raw -or $Raw.Length -lt 100 -or $Raw.Length -gt 512) {
         return 'REMOTE_UNRECOGNIZED_STOP'
@@ -147,7 +153,7 @@ function Invoke-R1072 {
         Initialize-R1066
         $freshCarrier=Read-R1066PinnedSource (
             Join-Path $PSScriptRoot 'r1073_exit_preserving_transport.cs'
-        ) '9f4629a9f4e5fffbe9b30cf8536fcfb7902482bb'
+        ) '8d08e13f060488326854fac3f014470d8b1f3ec5'
         if (-not ('FlopR1073.Transport' -as [type])) {
             Add-Type -TypeDefinition $freshCarrier
         }
@@ -203,7 +209,7 @@ function Invoke-R1072 {
         $stage='SSH_CARRIER'
         $reply=[FlopR1073.Transport]::Run($ssh,($quoted -join ' '),$payload,58000)
         if ($reply.ExitCode -ne 0) {
-            $stage=Get-R1072RemoteStop $reply.ExitCode $reply.Output
+            $stage=Get-R1072RemoteStop $reply.ExitCode $reply.Output $reply.FailureKind
             throw 'ORIGINAL_PROBE_STOP'
         }
         $stage='RESPONSE_SCHEMA'
@@ -244,7 +250,10 @@ function Invoke-R1072 {
             'SSH_CARRIER','SSH_CARRIER_BOUND','SSH_CARRIER_START',
             'SSH_CARRIER_TIMEOUT','SSH_CARRIER_IO','SSH_CARRIER_CLEANUP',
             'SSH_CARRIER_UNCLASSIFIED','RESPONSE_SCHEMA',
-            'SSH_AUTH_ROUTE_OR_PIN_STOP','REMOTE_EXEC_STOP',
+            'SSH_AUTH_ROUTE_OR_PIN_STOP','SSH_OPTION_REJECTED',
+            'SSH_HOSTKEY_REJECTED','SSH_IDENTITY_UNREADABLE',
+            'SSH_PUBLIC_KEY_REJECTED','SSH_CONNECTIVITY_REJECTED',
+            'SSH_REMOTE_CLOSED','REMOTE_EXEC_STOP',
             'REMOTE_UNRECOGNIZED_STOP','GUEST_SOURCE_UNVERIFIED',
             'GUEST_ORIGINAL_PRIVILEGE_STOP','GUEST_WRONG_HOST_STOP',
             'GUEST_ORIGINAL_ROOT_STOP','GUEST_ORIGINAL_HEAD_STOP',
