@@ -156,3 +156,30 @@ def test_r1072_ps51_actual_schema_validator_happy_and_rejection(tmp_path):
         capture_output=True, timeout=30)
     assert done.returncode == 0, (done.stdout,done.stderr)
     assert b"R1072_SCHEMA_POSITIVE_AND_DENY=PASS" in done.stdout
+
+
+
+def test_original_source_classifies_guard_without_disclosing_path(monkeypatch, capsys):
+    import json
+    monkeypatch.setattr(mod, "assert_original", lambda: None)
+    def guard():
+        raise mod.Stop("ORIGINAL_HEAD_STOP")
+    monkeypatch.setattr(mod, "inventory", guard)
+    assert mod.main() == 42
+    msg=json.loads(capsys.readouterr().out)
+    assert msg == {
+        "phase":"R1072_ORIGINAL_READONLY_CAPACITY",
+        "result":"STOP","code":"ORIGINAL_HEAD_STOP",
+        "cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}
+
+
+def test_unexpected_exception_is_redacted_without_echo(monkeypatch, capsys):
+    import json
+    monkeypatch.setattr(mod, "assert_original", lambda: None)
+    def fail():
+        raise RuntimeError("/var/lib/technocore-safe-agent/PRIVATE-do-not-print")
+    monkeypatch.setattr(mod, "inventory", fail)
+    assert mod.main() == 42
+    msg=capsys.readouterr().out
+    assert "PRIVATE-do-not-print" not in msg
+    assert json.loads(msg)["code"]=="SOURCE_UNVERIFIED"
