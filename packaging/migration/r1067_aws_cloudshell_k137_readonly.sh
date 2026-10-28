@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 umask 077
 die() { printf '{"phase":"R1067","result":"STOP","code":"%s","cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}\n' "$1"; exit 42; }
-for command_name in aws python3 ssh mktemp; do
+for command_name in aws python3 ssh ssh-keygen mktemp; do
   command -v "$command_name" >/dev/null 2>&1 || die TOOL_UNAVAILABLE
 done
 d="$(mktemp -d /tmp/flop-r1067.XXXXXXXX)" || die TEMP_STOP
@@ -30,6 +30,7 @@ import os
 import pathlib
 import re
 import struct
+import subprocess
 import sys
 
 class Reject(Exception):
@@ -76,9 +77,12 @@ try:
     require(type(user) is str and bool(re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",user))
             and user!="root", "INSTANCE_USER_STOP")
     private=a.get("privateKey")
-    require(type(private) is str and private.startswith((
-        "-----BEGIN OPENSSH PRIVATE KEY-----","-----BEGIN RSA PRIVATE KEY-----")),
-        "TEMP_PRIVATE_KEY_FORMAT_STOP")
+    require(type(private) is str and bool(private.strip()), "TEMP_PRIVATE_KEY_MISSING_STOP")
+    # Do not presume AWS's private-key serialization. Let the installed
+    # OpenSSH parser validate the actual unencrypted credential under 0600
+    # ephemeral custody, without echoing key text, logs or derived pubkey.
+    require(len(private)<=65536 and private.isascii() and "\\x00" not in private,
+            "TEMP_PRIVATE_KEY_BOUND_STOP")
     cert=a.get("certKey")
     require(type(cert) is str and cert.startswith((
         "ssh-ed25519-cert-v01@openssh.com ",
@@ -103,6 +107,15 @@ try:
         with os.fdopen(fd,"w",encoding="ascii",newline="\n") as stream:
             stream.write(value)
     put("identity",private.strip()+"\n")
+    try:
+        parsed=subprocess.run(
+            ["/usr/bin/ssh-keygen","-y","-P","","-f",str(d/"identity")],
+            stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,timeout=10,check=False,
+            env={"PATH":"/usr/bin:/bin","HOME":"/nonexistent"})
+    except (OSError,subprocess.TimeoutExpired):
+        raise Reject("TEMP_PRIVATE_KEY_PARSER_STOP")
+    require(parsed.returncode==0,"TEMP_PRIVATE_KEY_PARSE_STOP")
     put("identity-cert.pub",cert.strip()+"\n")
     put("known_hosts",str(ip)+" "+algorithm+" "+public_blob+"\n")
     put("metadata.json",json.dumps({"ip":str(ip),"user":user,
