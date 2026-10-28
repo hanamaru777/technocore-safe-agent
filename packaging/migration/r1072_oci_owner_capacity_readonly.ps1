@@ -145,6 +145,12 @@ function Invoke-R1072 {
         $stage='LOCAL_LIB_PIN'
         Import-R1072Library
         Initialize-R1066
+        $freshCarrier=Read-R1066PinnedSource (
+            Join-Path $PSScriptRoot 'r1073_exit_preserving_transport.cs'
+        ) '9f4629a9f4e5fffbe9b30cf8536fcfb7902482bb'
+        if (-not ('FlopR1073.Transport' -as [type])) {
+            Add-Type -TypeDefinition $freshCarrier
+        }
         $ssh=Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\ssh.exe'
         $known=Join-Path ([Environment]::GetFolderPath('UserProfile')) '.ssh\known_hosts'
         if (-not [IO.File]::Exists($ssh) -or
@@ -195,7 +201,7 @@ function Invoke-R1072 {
         })
         $payload=[Text.Encoding]::UTF8.GetBytes($guest)
         $stage='SSH_CARRIER'
-        $reply=[FlopR1066.Transport]::Run($ssh,($quoted -join ' '),$payload,58000)
+        $reply=[FlopR1073.Transport]::Run($ssh,($quoted -join ' '),$payload,58000)
         if ($reply.ExitCode -ne 0) {
             $stage=Get-R1072RemoteStop $reply.ExitCode $reply.Output
             throw 'ORIGINAL_PROBE_STOP'
@@ -204,6 +210,19 @@ function Invoke-R1072 {
         $result=Check-R1072Result $reply.Output
     } catch {
         $result=$null
+        if ($stage -ceq 'SSH_CARRIER') {
+            $kind=$null
+            if ($null -ne $_.Exception.InnerException) {
+                $kind=$_.Exception.InnerException.Message
+            } elseif ($null -ne $_.Exception) {
+                $kind=$_.Exception.Message
+            }
+            if (@('BOUND','START','TIMEOUT','IO','CLEANUP') -ccontains $kind) {
+                $stage='SSH_CARRIER_'+$kind
+            } else {
+                $stage='SSH_CARRIER_UNCLASSIFIED'
+            }
+        }
     } finally {
         if ($null -ne $code) { $code.Dispose() }
         if ('FlopR1062.Guards' -as [type]) {
@@ -222,7 +241,9 @@ function Invoke-R1072 {
         $valid=@('PREPARE','LOCAL_LIB_PIN','GUEST_SOURCE_PIN','LOCAL_ESCROW',
             'LOCAL_ESCROW_INTEGRITY','LOCAL_CODE_ENTRY','LOCAL_CODE_EMPTY',
             'LOCAL_DECRYPT','LOCAL_CUSTODY',
-            'SSH_CARRIER','RESPONSE_SCHEMA',
+            'SSH_CARRIER','SSH_CARRIER_BOUND','SSH_CARRIER_START',
+            'SSH_CARRIER_TIMEOUT','SSH_CARRIER_IO','SSH_CARRIER_CLEANUP',
+            'SSH_CARRIER_UNCLASSIFIED','RESPONSE_SCHEMA',
             'SSH_AUTH_ROUTE_OR_PIN_STOP','REMOTE_EXEC_STOP',
             'REMOTE_UNRECOGNIZED_STOP','GUEST_SOURCE_UNVERIFIED',
             'GUEST_ORIGINAL_PRIVILEGE_STOP','GUEST_WRONG_HOST_STOP',
