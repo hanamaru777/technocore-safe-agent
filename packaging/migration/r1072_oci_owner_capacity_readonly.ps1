@@ -157,8 +157,13 @@ function Invoke-R1072 {
         ) '0ee105633366abe9e92d72eacc86e7be789aa851'
         $stage='LOCAL_ESCROW_INTEGRITY'
         $encrypted=Read-R1027Backup
-        $stage='LOCAL_DECRYPT'
+        $stage='LOCAL_CODE_ENTRY'
         $code=Read-Host 'R987 V2 local recovery code' -AsSecureString
+        if ($null -eq $code -or $code.Length -eq 0) {
+            $stage='LOCAL_CODE_EMPTY'
+            throw 'EMPTY_LOCAL_INPUT_STOP'
+        }
+        $stage='LOCAL_DECRYPT'
         try { $plain=Unprotect-R1027 $encrypted $code }
         finally { $code.Dispose();$code=$null }
         if ($null -eq $plain -or $plain.Length -lt 81 -or
@@ -215,7 +220,8 @@ function Invoke-R1072 {
         Write-Output '{"phase":"R1072","result":"STOP","code":"CLEANUP_STOP"}'
     } elseif ($null -eq $result) {
         $valid=@('PREPARE','LOCAL_LIB_PIN','GUEST_SOURCE_PIN','LOCAL_ESCROW',
-            'LOCAL_ESCROW_INTEGRITY','LOCAL_DECRYPT','LOCAL_CUSTODY',
+            'LOCAL_ESCROW_INTEGRITY','LOCAL_CODE_ENTRY','LOCAL_CODE_EMPTY',
+            'LOCAL_DECRYPT','LOCAL_CUSTODY',
             'SSH_CARRIER','RESPONSE_SCHEMA',
             'SSH_AUTH_ROUTE_OR_PIN_STOP','REMOTE_EXEC_STOP',
             'REMOTE_UNRECOGNIZED_STOP','GUEST_SOURCE_UNVERIFIED',
