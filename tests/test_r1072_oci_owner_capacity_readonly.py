@@ -62,7 +62,7 @@ def test_windows_wrapper_pins_existing_r1066_and_new_guest():
     src=OWNER.read_text()
     assert "r1066_owner_workflow.ps1" in src
     assert "7a7d9790ccd9bb464c254188096d85fb315ee550" in src
-    assert "0ee105633366abe9e92d72eacc86e7be789aa851" in src
+    assert "51e88037c39b40c3c397322f86dcd1cde7cc97bd" in src
     assert "StrictHostKeyChecking=yes" in src
     assert "Remove-R1027Custody" in src
     assert "NOT_PROVEN" in src
@@ -246,3 +246,43 @@ def test_r1079_bootstrap_all_source_pins_match_immutable_git_blobs():
     assert "Initialize-R1066" in owner
     assert "FlopR1079.Transport" in owner
     assert "FlopR1075.Transport]::Run" not in owner
+
+
+
+def test_r1080_bounded_streaming_census_retains_guards(roots, monkeypatch):
+    app, state = roots
+    assert mod.MAX_OBJECTS == 100000
+    assert mod.TIME_LIMIT <= 35
+    assert mod.MAX_TOTAL == 64 * 1024 ** 3
+    code = GUEST.read_text()
+    assert "with os.scandir(path) as directory:" in code
+    assert "children=[Path(row.path) for row in directory]" not in code
+    assert "require(depth<=48" in code
+    assert 'visit(root,0)' in code
+    assert "for root in (STATE,APP):" in code
+    with pytest.raises(mod.Stop, match="INVENTORY_ENTRY_STOP"):
+        monkeypatch.setattr(mod, "MAX_OBJECTS", 4)
+        mod.inventory()
+    monkeypatch.setattr(mod, "MAX_OBJECTS", 100000)
+    report=mod.inventory()
+    assert report["sqlite_bases"] == 2
+    assert report["regular_bytes"] == 13 + 100 + 200 + 9
+
+
+def test_r1080_hardlinks_not_double_counted(roots):
+    app, state = roots
+    (app/"dup1").hardlink_to(app/"a")
+    (app/"dup2").hardlink_to(app/"a")
+    report=mod.inventory()
+    assert report["hardlink_repeated"] == 2
+    assert report["regular_bytes"] == 13 + 100 + 200 + 9
+
+
+def test_r1080_guest_owner_bounds_and_pins_are_consistent():
+    text=OWNER.read_text()
+    guest=GUEST.read_text()
+    assert "MAX_OBJECTS=100000" in guest
+    assert "$data.tree.entries -gt 100000" in text
+    assert "51e88037c39b40c3c397322f86dcd1cde7cc97bd" in text
+    assert "INVENTORY_ENTRY_STOP" in text
+    assert "INVENTORY_TIME_STOP" in text
