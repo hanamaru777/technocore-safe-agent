@@ -642,3 +642,39 @@ def test_r1075_process_returns_255_with_native_stderr_without_exposing_it(tmp_pa
     )
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert b"R1075_REAL_PROCESS_STDERR_255=PASS" in result.stdout
+
+
+
+@WINDOWS
+def test_r1075_stale_r1073_and_new_classifier_coexist_in_same_ps51_process(tmp_path):
+    old_path = str(ROOT / "packaging/migration/r1073_exit_preserving_transport.cs").replace("'", "''")
+    new_path = str(ROOT / "packaging/migration/r1075_stderr_classifying_transport.cs").replace("'", "''")
+    controller = ROOT / "packaging/migration/r1072_oci_owner_capacity_readonly.ps1"
+    src = controller.read_text()
+    assert "r1075_stderr_classifying_transport.cs" in src
+    assert "[FlopR1075.Transport]::Run" in src
+    assert "'FlopR1075.Transport' -as [type]" in src
+    script = tmp_path / "test-r1075-same-console.ps1"
+    script.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        "Add-Type -TypeDefinition ([IO.File]::ReadAllText('" + old_path + "'))\n"
+        "if(-not ('FlopR1073.Transport' -as [type])){exit 40}\n"
+        "if(('FlopR1075.Transport' -as [type])){exit 41}\n"
+        "Add-Type -TypeDefinition ([IO.File]::ReadAllText('" + new_path + "'))\n"
+        "if(-not ('FlopR1075.Transport' -as [type])){exit 42}\n"
+        "$test=[Text.Encoding]::ASCII.GetBytes('Bad configuration option: ssh-example')\n"
+        "$kind=[FlopR1075.Transport]::Classify($test)\n"
+        "if($kind -cne 'SSH_OPTION_REJECTED'){exit 43}\n"
+        "$data=New-Object byte[] 16384\n"
+        "$args1='/d /q /c echo Connection timed out 1>&2 & exit /b 255'\n"
+        "$out=[FlopR1075.Transport]::Run($env:ComSpec,$args1,$data,12000)\n"
+        "if($out.ExitCode -ne 255){exit 44}\n"
+        "if($out.FailureKind -cne 'SSH_CONNECTIVITY_REJECTED'){exit 45}\n"
+        "Write-Output 'R1075_STALE_ASSEMBLY_COEXISTENCE_PASS'\n",
+        encoding="utf-8"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(script)],
+        capture_output=True, timeout=45)
+    assert result.returncode == 0, (result.stdout,result.stderr)
+    assert b"R1075_STALE_ASSEMBLY_COEXISTENCE_PASS" in result.stdout
