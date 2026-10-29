@@ -729,3 +729,56 @@ def test_r1076_ps51_exact_oci_ssh_options_parse_without_credentials(tmp_path):
     )
     assert done.returncode == 0, (done.stdout, done.stderr)
     assert b"R1076_ALL_OPTIONS_PARSE_PASS" in done.stdout or b"R1076_SSH_ABSENT_SKIP" in done.stdout
+
+
+
+@WINDOWS
+def test_r1077_ps51_exact_no_secret_ssh_through_real_child_carrier(tmp_path):
+    """Exercise actual Windows OpenSSH -G under the carrier's sanitized env/argv.
+
+    No network, no private key, no login and no production file reads/writes.
+    """
+    carrier=str(ROOT / "packaging/migration/r1075_stderr_classifying_transport.cs").replace("'","''")
+    script=tmp_path/"r1077_exact_carrier.ps1"
+    script.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        "Add-Type -TypeDefinition ([IO.File]::ReadAllText('" + carrier + "'))\n"
+        "$ssh=Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\\ssh.exe'\n"
+        "if(-not [IO.File]::Exists($ssh)){throw 'R1077_NO_WINDOWS_OPENSSH'}\n"
+        "$known=Join-Path $PSScriptRoot 'nonexistent-hosts-file'\n"
+        "$argv=@('-F','NUL','-G','-T','-o',"
+        "('UserKnownHostsFile=\"'+$known.Replace('\\','/')+'\"'),"
+        "'-o','GlobalKnownHostsFile=NUL',"
+        "'-o','StrictHostKeyChecking=yes',"
+        "'-o','HostKeyAlgorithms=ecdsa-sha2-nistp256',"
+        "'-o','PasswordAuthentication=no','-o','KbdInteractiveAuthentication=no',"
+        "'-o','PreferredAuthentications=publickey',"
+        "'-o','HostbasedAuthentication=no','-o','GSSAPIAuthentication=no',"
+        "'-o','UpdateHostKeys=no','-o','BatchMode=yes','-o','IdentitiesOnly=yes',"
+        "'-o','IdentityAgent=none','-o','ClearAllForwardings=yes',"
+        "'-o','ForwardAgent=no','-o','ForwardX11=no','-o','PermitLocalCommand=no',"
+        "'-o','KnownHostsCommand=none','-o','ProxyCommand=none','-o','ProxyJump=none',"
+        "'-o','CanonicalizeHostname=no','-o','ConnectionAttempts=1',"
+        "'-o','ConnectTimeout=7','-o','ServerAliveInterval=10',"
+        "'-o','ServerAliveCountMax=2','ubuntu@140.238.55.171')\n"
+        "$quoted=@($argv|ForEach-Object{[FlopR1062.Guards]::Quote($_)})\n"
+        "$r=[FlopR1075.Transport]::Run($ssh,($quoted -join ' '),([byte[]]@()),12000)\n"
+        "if($r.ExitCode -ne 0){throw 'R1077_CARRIER_OPTION_FAIL'}\n"
+        "if($r.Output.Length -lt 500){throw 'R1077_OUTPUT_FAIL'}\n"
+        "Write-Output 'R1077_NO_SECRET_SSH_G_CARRIER_PASS'\n",
+        encoding="utf-8"
+    )
+    # R1062 quoting is intentionally obtained from trusted compiled source without
+    # invoking any R1062 workflow or accessing any saved owner credential.
+    # The helper loads only the needed isolated Quote implementation from its
+    # pinned original source via a Windows test-scoped class already in ps_script.
+    text=script.read_text(encoding="utf-8")
+    # Quote is also provided by the original verified R1066 test harness.
+    text=ps_script("")+"\n"+text
+    script.write_text(text,encoding="utf-8-sig")
+    result=subprocess.run(
+        ["powershell.exe","-NoProfile","-NonInteractive","-File",str(script)],
+        capture_output=True,timeout=45
+    )
+    assert result.returncode==0,(result.stdout,result.stderr)
+    assert b"R1077_NO_SECRET_SSH_G_CARRIER_PASS" in result.stdout
