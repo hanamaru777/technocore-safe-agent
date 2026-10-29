@@ -18,9 +18,9 @@ def test_only_readonly_guest_no_deletion_path():
 
 def test_all_embedded_dependency_git_blobs_match():
     s=P.read_text(encoding="utf8")
-    pairs=re.findall(r"@\\{path='([^']+)';blob='([0-9a-f]{40})'\\}",s)
+    pairs=re.findall(r"@\{path='([^']+)';blob='([0-9a-f]{40})'\}",s)
     assert len(pairs)==5
     for p,pin in pairs:
-        raw=(ROOT/p).read_bytes().replace(b"\\r\\n",b"\\n")
-        digest=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\\0"+raw).hexdigest()
+        raw=(ROOT/p).read_bytes().replace(b"\r\n",b"\n")
+        digest=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()
         assert digest==pin,p
