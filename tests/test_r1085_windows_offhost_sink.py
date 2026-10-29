@@ -80,7 +80,7 @@ $null=[IO.Directory]::CreateDirectory($path,$acl)
     assert repeat.returncode==42
     assert (candidate/"header.bin").read_bytes()==b"FLOPENV1"+bytes(44)
 
-    cmd[-2]="synthetic2"
+    cmd[-4]="synthetic2"  # target argument; preserve the 1GiB quota
     incomplete=subprocess.run(cmd,input=wire()[:-5],capture_output=True,timeout=50)
     assert incomplete.returncode==42
     assert not (parent/"synthetic2"/"commit.bin").exists()
