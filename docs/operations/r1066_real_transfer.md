@@ -463,3 +463,25 @@ production backup, SQLite epoch, K137 restore, signing or cutover authority.
 PowerShell wrapper source pin must match exact Git blob. No actual owner NTFS
 capacity/ACL evidence exists. No owner operation is requested by this source
 development. The original OCI live-source fencing guard is unchanged.
+
+
+## R1086: isolated disarmed K137 plain-stream sink (synthetic/source-only)
+
+R1086 adds a Linux-only, non-root, dedicated-user filesystem restorer that
+accepts the existing verified R1066 manifest-plus-plaintext stream within an
+already independently authenticated SSH channel; it does not store the ~26GB
+ciphertext on the 60GB K137 drive. Unlike the generic offline restorer (whose
+live-host guard is unchanged), the ONLY authorized output is a new exact
+random-ID child beneath the pre-existing private dedicated
+/var/lib/flop-migration-r1066/disarmed landing. Requires independent pinned
+K137 machine-id digest, exact dedicated UID, 0700 private parent, full-file
+quota and enough free disk for manifest bytes + 1GiB SQLite allowance + 20GiB
+protected TradeBot/OS reserve. It validates all paths, symlinks, hardlinks,
+cryptographic per-file hashes and two read-only SQLite integrity checks; no
+systemd/service/cgroup changes or signing. The completed candidate stays
+DISARMED and has no promotion method. Source authority and common SQLite epoch
+remain NOT_PROVEN. It does not independently authenticate its plain stream:
+future owner transport MUST first fully AEAD verify R1001 at offhost and bind
+the stream to a separately pinned authenticated encrypted SSH origin. There is
+still no approved Windows offhost archive decrypt/sender implementation, no
+exact original OCI admission or production permission, no new paid storage.
