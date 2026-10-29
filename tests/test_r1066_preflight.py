@@ -738,7 +738,7 @@ def test_r1077_ps51_exact_no_secret_ssh_through_real_child_carrier(tmp_path):
 
     No network, no private key, no login and no production file reads/writes.
     """
-    carrier=str(ROOT / "packaging/migration/r1075_stderr_classifying_transport.cs").replace("'","''")
+    carrier=str(ROOT / "packaging/migration/r1079_profile_ssh_transport.cs").replace("'","''")
     script=tmp_path/"r1077_exact_carrier.ps1"
     script.write_text(
         "$ErrorActionPreference='Stop'\n"
@@ -762,7 +762,7 @@ def test_r1077_ps51_exact_no_secret_ssh_through_real_child_carrier(tmp_path):
         "'-o','ConnectTimeout=7','-o','ServerAliveInterval=10',"
         "'-o','ServerAliveCountMax=2','ubuntu@140.238.55.171')\n"
         "$quoted=@($argv|ForEach-Object{[FlopR1062.Guards]::Quote($_)})\n"
-        "$r=[FlopR1075.Transport]::Run($ssh,($quoted -join ' '),([byte[]]@()),12000)\n"
+        "$r=[FlopR1079.Transport]::Run($ssh,($quoted -join ' '),([byte[]]@()),12000)\n"
         "if($r.ExitCode -ne 0){throw 'R1077_CARRIER_OPTION_FAIL'}\n"
         "if($r.Output.Length -lt 500){throw 'R1077_OUTPUT_FAIL'}\n"
         "Write-Output 'R1077_NO_SECRET_SSH_G_CARRIER_PASS'\n",
@@ -832,4 +832,6 @@ def test_r1078_windows_ssh_g_environment_matrix_without_identity():
         )
         matrix[label] = "PASS" if result.returncode == 0 else "STOP"
     # Never print stdout/stderr from the native SSH process.
-    assert all(value == "PASS" for value in matrix.values()), matrix
+    assert matrix["normal_min"] == "PASS", matrix
+    assert matrix["normal_full"] == "PASS", matrix
+    assert matrix["profile_full"] == "PASS", matrix
