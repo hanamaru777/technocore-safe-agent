@@ -741,3 +741,48 @@ jobs:
           catch { $blocked = $true }
           if (-not $blocked) { throw 'R1092_CATEGORY_CANONICAL_COLLISION_STOP' }
           Write-Host 'R1092_PS51_SOURCE_AND_REPORT=PASS'
+
+      - name: Validate R1093 original hotspot PS5.1 JSON guard offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1093_original_hotspots_readonly.ps1'
+          $tok=$null; $err=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tok,[ref]$err)
+          if ($err.Count -ne 0) { throw 'R1093_PS51_SYNTAX_STOP' }
+          $fn=$ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq 'Read-R1093Report'
+          },$true)
+          if ($null -eq $fn) { throw 'R1093_REPORT_FUNCTION_MISSING' }
+          Invoke-Expression $fn.Extent.Text
+          $item=@{ token='abcdef012345';kind='CAPTURE_DB';allocated_bytes=[long]102400;
+                  logical_bytes=[long]101000;age_days=[long]3 }
+          $root=@{ allocated_bytes=[long]204800;objects=[long]7;
+                   regular_files=[long]2;symlinks=[long]0;largest=@($item) }
+          $sample=@{schema_version=1;phase='R1093';result='HOTSPOTS_ONLY';
+            head='MATCH';roots=@{observer=$root;autopilot=$root};
+            disk_free_bytes=[long]11800000000;action='READ_ONLY';
+            cutover='NO_GO';oci_retirement='STRICT_NO_GO'}
+          $bytes=[Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 7))
+          $ok=Read-R1093Report $bytes
+          if ($ok.result -cne 'HOTSPOTS_ONLY' -or
+              $ok.roots.observer.largest[0].kind -cne 'CAPTURE_DB' -or
+              $ok.action -cne 'READ_ONLY') { throw 'R1093_REPORT_POSITIVE_STOP' }
+          $sample.action='DELETE'
+          $blocked=$false
+          try {
+            $b=[Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 7))
+            $null=Read-R1093Report $b
+          } catch { $blocked=$true }
+          if (-not $blocked) { throw 'R1093_MUTATING_RESULT_ACCEPTED' }
+          $sample.action='READ_ONLY'
+          $sample.roots.observer.largest[0].token='../../../secret'
+          $blocked=$false
+          try {
+            $b=[Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 7))
+            $null=Read-R1093Report $b
+          } catch { $blocked=$true }
+          if (-not $blocked) { throw 'R1093_PATH_RESULT_ACCEPTED' }
+          Write-Host 'R1093_PS51_READONLY_REPORT=PASS'
