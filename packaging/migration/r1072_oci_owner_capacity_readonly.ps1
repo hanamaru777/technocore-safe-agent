@@ -153,7 +153,7 @@ function Invoke-R1072 {
         Initialize-R1066
         $freshCarrier=Read-R1066PinnedSource (
             Join-Path $PSScriptRoot 'r1079_profile_ssh_transport.cs'
-        ) '1f61ec3eb2961b89e50c36772f290c75e43c7994'
+        ) 'b150af9fe7a335bc6c02e8fc1e5451599d124a97'
         if (-not ('FlopR1079.Transport' -as [type])) {
             Add-Type -TypeDefinition $freshCarrier
         }
