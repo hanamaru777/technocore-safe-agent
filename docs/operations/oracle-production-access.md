@@ -29,7 +29,21 @@
 4. **Details** タブ → **Instance access** にある `Public IP address` と `Username` を確認。
 5. この画面自体は **Linuxのコマンド入力画面ではない**。サーバーに入るには、認証済みSSH（Secure Shell）接続が必要。
 
-## 3. WindowsからSSHで入る場合
+## 3. Oracleコンソール画面からブラウザでシリアル接続する場合
+
+**Oracle公式案内で確認済み**：https://docs.oracle.com/ja-jp/iaas/Content/Compute/References/serialconsole.htm
+
+2026-10-29利用者が提示した `technocore-resident` の画面では、上部に **OS Management** タブが表示されている。まずそのタブをクリックし、画面を下へスクロールして **Console connection（コンソール接続）** を探す。OCI画面のバージョンによっては左の **Resources → Console connection** にある。
+
+**Launch Cloud Shell connection（Cloud Shell接続の起動）** をクリックすると、ブラウザ下部にシリアルコンソールのターミナルが開く。この接続ではOCIが一時的なコンソール接続・認証鍵を用意するため、WindowsのR987エスクローSSH鍵ファイルを直接指定する必要はない。
+
+ただし**シリアルコンソールは通常のSSHログインとは違う**。Linuxのユーザー名・ログインパスワードが求められる場合、OS上にその資格情報が既に設定されていなければログインできない。一般的なOCI Ubuntu初期構築はSSH鍵を利用するため、パスワードログインが設定済みだと推測しない。**ユーザーにパスワード・鍵・シードをチャットへ送らせない。** 設定を変更・再発行して進めない。
+
+利用者が「どこを押す？」と尋ねたら：**スクリーンショットの OS Management → Console connection → Launch Cloud Shell connection** と答える。OS Managementに見つからなければResources下のConsole connectionを確認する。進行途中のスクリーンショットに表示された実際のボタンを優先する。
+
+接続が有効でもログイン自体は未検証。ブラウザにCloud Shellが現れただけでOracle本番内にログインしたとはみなさない。Linuxのプロンプトと対象ホスト・Git HEADを照合するまで、本番削除コマンドは実行しない。
+
+## 4. WindowsからSSHで入る場合
 
 Windowsのスタートメニューから **Windows PowerShell** を開く。
 **既存の、Oracle側で登録済みのOpenSSH秘密鍵が安全に利用可能な場合だけ**、次の形式でログインする。
@@ -58,7 +72,7 @@ git -C /opt/technocore-safe-agent rev-parse --verify HEAD
 
 想定元HEAD `ec4bc4892d40cdd2a03e102faa44d72c89e01b99`。これは2026-10-29までの過去の実測・ソースに基づく値で、変化していたら無理に戻さず調査する。
 
-## 4. 不要ファイル整理 R1091 との関係
+## 5. 不要ファイル整理 R1091 との関係
 
 2026-10-29に既存Draft PR #906へ追加した **`packaging/oracle/r1091_safe_cache_cleanup.py`** は、Oracleにログインした後の「容量内訳確認／再生成可能なアプリキャッシュのみ削除」のプログラム。GitHubでのソース作成・CI PASSと、本番での削除完了は**別**。
 
@@ -71,7 +85,7 @@ git -C /opt/technocore-safe-agent rev-parse --verify HEAD
 ソース（初回コミット固定）：
 https://github.com/hanamaru777/technocore-safe-agent/blob/605328b2b5094ebc5fc41e2488d0e621ef30a57f/packaging/oracle/r1091_safe_cache_cleanup.py
 
-## 5. 禁止事項と既存PASS
+## 6. 禁止事項と既存PASS
 
 - Oracleの停止・再起動、インスタンス削除、ディスク初期化、未検証データの一括削除を「不要ファイル整理」と混同しない。
 - 同じサーバーへのR1072/R1080容量一括調査を繰り返さない。以前に消費済みの一回限りの実測：30,682エントリ／25,983,618,920バイト、SQLite 2＋WAL 2、OCI空き11,852,025,856バイト。当時の数字であって現在の空き容量ではない。
