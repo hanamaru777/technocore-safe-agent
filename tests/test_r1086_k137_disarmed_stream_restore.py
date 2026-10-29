@@ -69,7 +69,7 @@ def test_disarmed_stream_restore_protected_failures(offline,monkeypatch,failure)
             lambda _:type("Disk",(),{"free":m.RESERVE})())
     if failure=="truncated":plain=plain[:-70]
     if failure=="existing":(landing/name).mkdir(mode=0o700)
-    if failure=="wrong_root":monkeypatch.setattr(m,"ROOT",root)
+    if failure=="wrong_root":monkeypatch.setattr(m,"ROOT",root/"missing-private-root")
     with pytest.raises((m.Stop,m.T.Stop,m.T.G.Deny,ValueError,sqlite3.Error,OSError)):
         m.restore_stream(io.BytesIO(plain),name,identity,uid,quota_bytes=4*1024**2)
     if failure in ("wrong_host","wrong_uid","no_space","wrong_root"):
