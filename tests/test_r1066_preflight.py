@@ -893,4 +893,18 @@ def test_r1078_windows_ssh_g_environment_matrix_without_identity():
     assert matrix["win_allowlist_full"] == "PASS", (
         "ENV_MATRIX " + " ".join(k+"="+v for k,v in matrix.items()) +
         " ESSENTIAL_NAMES=" + ",".join(removed_breaks))
+    reduced=dict(safe)
+    for name in sorted(safe.keys(), reverse=True):
+        if name.upper() == "SYSTEMROOT":
+            continue
+        trial=dict(reduced)
+        trial.pop(name, None)
+        candidate=subprocess.run([str(ssh),*minimal],stdin=subprocess.DEVNULL,
+                                 capture_output=True,timeout=10,env=trial)
+        if candidate.returncode == 0:
+            reduced=trial
+    # Fixed-name-only evidence (no contents) for required native OpenSSH support.
+    assert set(reduced).issubset(set(profile)), (
+        "R1078_NEEDED_ENV_NAMES=" + ",".join(sorted(reduced)))
+
 
