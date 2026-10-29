@@ -16,7 +16,7 @@ APP=Path("/opt/technocore-safe-agent")
 STATE=Path("/var/lib/technocore-safe-agent")
 EXPECTED_SHA="ec4bc4892d40cdd2a03e102faa44d72c89e01b99"
 DB_FILES=frozenset(("lobby-capture.sqlite3","lobby-capture-service.sqlite3"))
-MAX_OBJECTS=25000
+MAX_OBJECTS=100000
 MAX_TOTAL=64*1024**3
 TIME_LIMIT=35
 
@@ -46,16 +46,19 @@ def assert_original():
     require(p.returncode==0 and p.stdout.strip()==EXPECTED_SHA.encode(), "ORIGINAL_HEAD_STOP")
 
 def inventory():
+    # Stream one child at a time. No full-directory Path lists are retained,
+    # and open scandir contexts are bounded by the existing depth <=48 cap.
+    # 100k is an explicit finite ceiling (not an unbounded rescan).
     start=time.monotonic()
     totals={"entries":0,"regular":0,"directories":0,"symlinks":0,
             "hardlink_repeated":0,"special_objects":0,"regular_bytes":0,
             "sqlite_bases":0,"sqlite_wals":0,"sqlite_shms":0}
     found=set()
-    seen=set()
-    todo=[(APP,0),(STATE,0)]
-    while todo:
+    # Only multiply linked inodes need to be remembered.
+    seen_hardlinks=set()
+
+    def visit(path, depth):
         require(time.monotonic()-start<=TIME_LIMIT, "INVENTORY_TIME_STOP")
-        path,depth=todo.pop()
         require(depth<=48 and len(os.fsencode(path))<=4096, "INVENTORY_PATH_STOP")
         info=path.lstat()
         totals["entries"]+=1
@@ -63,19 +66,23 @@ def inventory():
         if stat.S_ISDIR(info.st_mode):
             totals["directories"]+=1
             with os.scandir(path) as directory:
-                children=[Path(row.path) for row in directory]
-            require(len(children)<=MAX_OBJECTS, "INVENTORY_CHILD_STOP")
-            todo.extend((item,depth+1) for item in children)
+                # Never preallocate a directory's full child list.
+                child_count=0
+                for row in directory:
+                    child_count+=1
+                    require(child_count<=MAX_OBJECTS, "INVENTORY_CHILD_STOP")
+                    visit(Path(row.path),depth+1)
         elif stat.S_ISLNK(info.st_mode):
             totals["symlinks"]+=1
         elif stat.S_ISREG(info.st_mode):
-            inode=(info.st_dev,info.st_ino)
-            if info.st_nlink>1 and inode in seen:
-                totals["hardlink_repeated"]+=1
-            else:
-                seen.add(inode)
-                totals["regular"]+=1
-                totals["regular_bytes"]+=info.st_size
+            if info.st_nlink>1:
+                inode=(info.st_dev,info.st_ino)
+                if inode in seen_hardlinks:
+                    totals["hardlink_repeated"]+=1
+                    return
+                seen_hardlinks.add(inode)
+            totals["regular"]+=1
+            totals["regular_bytes"]+=info.st_size
             require(totals["regular_bytes"]<=MAX_TOTAL, "INVENTORY_BYTES_STOP")
             for name in DB_FILES:
                 if path.name==name:
@@ -87,6 +94,10 @@ def inventory():
                     totals["sqlite_shms"]+=1
         else:
             totals["special_objects"]+=1
+
+    # Real state is a first-class scope, not skipped if source tree is large.
+    for root in (STATE,APP):
+        visit(root,0)
     require(found==DB_FILES, "TWO_SQLITE_STOP")
     return totals
 
