@@ -185,7 +185,9 @@ def seal_manifest_to_stream(roots, manifest, identities, recovery, output, *, re
         index += 1
 
     try:
-        for data in T.pack(roots, manifest, identities, recensus=recensus):
+        blocks = (T.pack(roots, manifest, identities) if recensus is None else
+                  T.pack(roots, manifest, identities, recensus=recensus))
+        for data in blocks:
             pending.extend(data)
             while len(pending) >= C.CHUNK_BYTES:
                 emit(bytes(pending[:C.CHUNK_BYTES]))
