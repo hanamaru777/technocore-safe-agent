@@ -31,13 +31,8 @@ def offline(tmp_path,monkeypatch):
             con.execute("INSERT INTO messages VALUES (1,'fixture')")
     (state/"history").write_bytes(b"synthetic-record")
     arc=tmp_path/"archive"
-    m.T.seal(app,state,arc,os.urandom(48),source_head=m.T.HEAD)
-    # Source bytes are from a synthetic committed test archive. In production,
-    # they would be reassembled over independently authenticated SSH.
-    key_file=next(iter((tmp_path/"unused").parent.glob("nonexistent*")),None)
-    # Recreate a deterministic archive so this fixture retains its private key.
-    import shutil
-    shutil.rmtree(arc)
+    # Synthetic committed archive; future production transport must be
+    # authenticated separately before any source plaintext is sent.
     material=os.urandom(48)
     m.T.seal(app,state,arc,material,source_head=m.T.HEAD)
     plaintext=b"".join(m.T.decrypt(arc,material))
