@@ -93,8 +93,10 @@ def scan(root: Path, start: float) -> dict:
 def main():
     try:
         require(sys.platform == "linux" and os.geteuid() != 0, "NONROOT_REQUIRED")
-        require(os.getlogin() == "ubuntu" if os.isatty(0) else
-                __import__("pwd").getpwuid(os.getuid()).pw_name == "ubuntu",
+        # Browser-based SSH may have a TTY but no utmp/login entry.
+        # Derive the current account from UID, never os.getlogin().
+        import pwd
+        require(pwd.getpwuid(os.getuid()).pw_name == "ubuntu",
                 "K137_USER_STOP")
         require(PINNED_RELEASE.is_dir() and not PINNED_RELEASE.is_symlink(),
                 "KNOWN_FLOP_STAGE_MISSING_STOP")
