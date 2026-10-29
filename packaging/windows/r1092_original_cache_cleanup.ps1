@@ -61,6 +61,14 @@ function Read-R1092Report([byte[]]$bytes,[bool]$delete) {
     $rows=([Text.Encoding]::ASCII.GetString($bytes)).Split([char]10)
     foreach ($row in $rows) {
         if (-not $row) { continue }
+        # The immutable OCI R1091 source prints the real Git-ignored
+        # 'local-state' directory verbatim in its category label. Map ONLY
+        # that one known hyphen to the public underscore receipt schema.
+        $sourceCategory='APP_LOCAL-STATE_PROTECTED_ALLOCATED_BYTES='
+        if ($row.StartsWith($sourceCategory,[StringComparison]::Ordinal)) {
+            $row='APP_LOCAL_STATE_PROTECTED_ALLOCATED_BYTES=' +
+                $row.Substring($sourceCategory.Length)
+        }
         $match=[regex]::Match($row,'\A([A-Z0-9_]{2,75})=([A-Z_]{2,60}|[0-9]{1,16})\z')
         if (-not $match.Success) { throw 'REPORT_SCHEMA_STOP' }
         $key=$match.Groups[1].Value

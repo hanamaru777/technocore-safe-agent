@@ -44,3 +44,15 @@ def test_one_shot_delete_consumed_and_diagnostics_narrow():
     assert "REPORT_UNKNOWN_FIELD_STOP" in t
     assert "REPORT_UNCLASSIFIED_STOP" in t
     assert 'Read-R1092Report $reply.Output ([bool]$DeleteProvenCache)' in t
+
+def test_real_source_label_local_state_requires_exact_normalization():
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec=spec_from_file_location("r1091_for_r1092",SOURCE)
+    module=module_from_spec(spec)
+    spec.loader.exec_module(module)
+    actual=module.classify("app",Path("local-state/history")).upper()+"_ALLOCATED_BYTES"
+    assert actual=="APP_LOCAL-STATE_PROTECTED_ALLOCATED_BYTES"
+    ps=P.read_text(encoding="utf8")
+    assert "$sourceCategory='APP_LOCAL-STATE_PROTECTED_ALLOCATED_BYTES='" in ps
+    assert "'APP_LOCAL_STATE_PROTECTED_ALLOCATED_BYTES='" in ps
+    assert "DELETE_ONE_SHOT_CONSUMED" in ps

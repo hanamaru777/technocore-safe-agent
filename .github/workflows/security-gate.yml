@@ -725,4 +725,19 @@ jobs:
               $safe.allocated_by_category.Count -ne 2) {
             throw 'R1092_READONLY_RECEIPT_STOP'
           }
+          # Reproduce an actual stdout key emitted when app/local-state exists.
+          # The REST of the original OCI script and its Git blob are unchanged.
+          $hyphenReport = $readOnlySample.Replace(
+            'APP_PROVEN_CACHE_ALLOCATED_BYTES=8192',
+            'APP_LOCAL-STATE_PROTECTED_ALLOCATED_BYTES=8192'
+          )
+          $normalized = Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($hyphenReport)) $false
+          if ($normalized.allocated_by_category['APP_LOCAL_STATE_PROTECTED_ALLOCATED_BYTES'] -ne 8192) {
+            throw 'R1092_ACTUAL_CATEGORY_LABEL_STOP'
+          }
+          $duplicate = $hyphenReport + 'APP_LOCAL_STATE_PROTECTED_ALLOCATED_BYTES=1' + [char]10
+          $blocked = $false
+          try { $null = Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($duplicate)) $false }
+          catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1092_CATEGORY_CANONICAL_COLLISION_STOP' }
           Write-Host 'R1092_PS51_SOURCE_AND_REPORT=PASS'
