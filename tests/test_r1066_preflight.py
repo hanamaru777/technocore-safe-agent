@@ -904,7 +904,23 @@ def test_r1078_windows_ssh_g_environment_matrix_without_identity():
         if candidate.returncode == 0:
             reduced=trial
     # Fixed-name-only evidence (no contents) for required native OpenSSH support.
-    assert set(reduced).issubset(set(profile)), (
+    assert set(reduced).issubset({k for k in safe if k.upper() in ("SYSTEMROOT", "PROGRAMDATA")}), (
         "R1078_NEEDED_ENV_NAMES=" + ",".join(sorted(reduced)))
+    minimal_os={k:v for k,v in os.environ.items() if k.upper() in ("SYSTEMROOT", "PROGRAMDATA")}
+    test=subprocess.run([str(ssh),*full],stdin=subprocess.DEVNULL,
+                        capture_output=True,timeout=10,env=minimal_os)
+    assert test.returncode == 0, "R1079_TWO_PATHS_SSH_G_STOP"
+
+
+def test_r1079_carrier_inherits_no_arbitrary_process_environment():
+    carrier=(ROOT / "packaging/migration/r1079_profile_ssh_transport.cs").read_text()
+    source=(ROOT / "packaging/migration/r1072_oci_owner_capacity_readonly.ps1").read_text()
+    assert "namespace FlopR1079" in carrier
+    assert "start.EnvironmentVariables.Clear();" in carrier
+    assert 'start.EnvironmentVariables["SystemRoot"]' in carrier
+    assert 'start.EnvironmentVariables["ProgramData"]' in carrier
+    assert 'start.EnvironmentVariables["USERPROFILE"]' not in carrier
+    assert 'start.EnvironmentVariables["PATH"]' not in carrier
+    assert "[FlopR1079.Transport]::Run" in source
 
 
