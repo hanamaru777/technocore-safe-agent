@@ -1,5 +1,5 @@
 // R1079 Windows PowerShell 5.1 read-only SSH carrier with redacted stderr classes.
-// Restores only OS-derived profile environment required by Windows OpenSSH.
+// Restores only two OS-derived paths required by Windows OpenSSH.
 // Different namespace from R1073 to prevent stale PowerShell 5.1 Add-Type reuse.
 // Unlike R1066, when the child exits nonzero before consuming stdin,
 // preserve the child's bounded exit code; do NOT recast it as a generic I/O error.
@@ -74,24 +74,15 @@ namespace FlopR1079 {
             start.UseShellExecute = false; start.CreateNoWindow = true;
             start.RedirectStandardInput = start.RedirectStandardOutput = start.RedirectStandardError = true;
             start.EnvironmentVariables.Clear();
-            // Only well-known OS-derived profile paths, never inherited env,
-            // HOME, SSH_AUTH_SOCK, agent, proxy, PATH or arbitrary caller values.
+            // Windows OpenSSH needs the machine-wide ssh directory location,
+            // even with -F NUL. Do not forward inherited HOME, PATH, proxy,
+            // agent, user tokens or any other process environment variables.
             string systemRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            if (string.IsNullOrEmpty(systemRoot) || string.IsNullOrEmpty(profile) ||
-                string.IsNullOrEmpty(appData) || string.IsNullOrEmpty(localAppData))
-                throw new Exception("PROFILE");
-            string drive = Path.GetPathRoot(profile);
-            if (string.IsNullOrEmpty(drive) || drive.Length < 2 ||
-                !Directory.Exists(profile)) throw new Exception("PROFILE");
+            string programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            if (string.IsNullOrEmpty(systemRoot) || string.IsNullOrEmpty(programData) ||
+                !Directory.Exists(programData)) throw new Exception("PROFILE");
             start.EnvironmentVariables["SystemRoot"] = systemRoot;
-            start.EnvironmentVariables["USERPROFILE"] = profile;
-            start.EnvironmentVariables["HOMEDRIVE"] = drive.TrimEnd('\\');
-            start.EnvironmentVariables["HOMEPATH"] = profile.Substring(drive.Length - 1);
-            start.EnvironmentVariables["APPDATA"] = appData;
-            start.EnvironmentVariables["LOCALAPPDATA"] = localAppData;
+            start.EnvironmentVariables["ProgramData"] = programData;
             using (var p = new Process()) using (var output = new MemoryStream()) using (var stderr = new MemoryStream()) {
                 p.StartInfo = start;
                 int failed = 0, writerFailed = 0; bool started = false;
