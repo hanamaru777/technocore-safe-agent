@@ -443,3 +443,23 @@ source epoch attestation and real production operator integration remain OPEN.
 The existing direct OCI→K137 ciphertext relay retains its protective
 dual-copy disk gate: it is NOT a substitute for independent offhost custody.
 CUTOVER NO_GO; OCI_RETIREMENT STRICT_NO_GO.
+
+
+## R1085: Windows ciphertext-only sink (NOT owner migration runner)
+
+Windows PowerShell 5.1 launches the pinned C# source using Add-Type, consumes
+raw binary process stdin (never a PowerShell text pipeline), and writes R1084
+framed ciphertext to a NEW directory beneath an EXISTING private owner-ACL NTFS
+parent. It refuses inherited or third-party ACEs, reparse-point ancestors,
+wrong owner, low disk/quota (< full ciphertext budget + 1GiB reserve), invalid
+frame order/size/SHA, trailing or truncated wire, and existing destinations.
+The final commit is hidden until the terminal frame and EOF are accepted.
+File.Flush(true) persists file content; parent directory metadata fsync is
+not available here. After a crash, all candidates require independent full
+R1001 AEAD verification, even if the final commit filename exists.
+
+This is a raw binary sink ONLY; it has no SSH, credentials, admission token,
+production backup, SQLite epoch, K137 restore, signing or cutover authority.
+PowerShell wrapper source pin must match exact Git blob. No actual owner NTFS
+capacity/ACL evidence exists. No owner operation is requested by this source
+development. The original OCI live-source fencing guard is unchanged.
