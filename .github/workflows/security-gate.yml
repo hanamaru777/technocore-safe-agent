@@ -838,3 +838,55 @@ jobs:
             if (-not $blocked) { throw 'R1094_MALFORMED_RECEIPT_ACCEPTED' }
           }
           Write-Host 'R1094_PS51_HOTSPOTS_READONLY_PASS'
+
+      - name: Validate R1095 PS5.1 orphan removal restricted receipt offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path=Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1095_original_orphan_cleanup.ps1'
+          $tokens=$null;$errors=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) { throw 'R1095_PS51_PARSE_STOP' }
+          $f=$ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -ceq 'Read-R1095Report'
+          },$true)
+          if ($null -eq $f) { throw 'R1095_REPORT_FUNCTION_STOP' }
+          Invoke-Expression $f.Extent.Text
+          $sample=[ordered]@{
+            phase='R1095';result='APPLIED';dry_run=$false;
+            entries=2470;matching_tmp=2440;skipped_tmp=2;unknown_tmp=4;
+            eligible=2438;eligible_bytes=[long]19292643328;
+            deleted=2438;deleted_allocated_bytes=[long]19292643328;
+            disk_free_before=[long]11827724288;disk_free_after=[long]31120367616;
+            source='ORIGINAL_PINNED';protected_data='UNTOUCHED';
+            historical_autopilot_archive='PRESERVED';cutover='NO_GO';
+            oci_retirement='STRICT_NO_GO'
+          }
+          $raw=[Text.Encoding]::ASCII.GetBytes(($sample|ConvertTo-Json -Compress -Depth 6))
+          $ok=Read-R1095Report $raw
+          if ($ok.result -cne 'APPLIED' -or $ok.deleted -ne 2438 -or
+              $ok.deleted_allocated_bytes -ne 19292643328 -or
+              $ok.historical_autopilot_archive -cne 'PRESERVED') {
+            throw 'R1095_VALID_RECEIPT_REJECTED'
+          }
+          foreach ($field in @('protected_data','result','deleted','dry_run')) {
+            $prior=$sample[$field]
+            if ($field -eq 'protected_data') {$sample[$field]='REMOVED'}
+            if ($field -eq 'result') {$sample[$field]='INVENTORY_ONLY'}
+            if ($field -eq 'deleted') {$sample[$field]=2437}
+            if ($field -eq 'dry_run') {$sample[$field]=$true}
+            $blocked=$false
+            try {
+              $raw=[Text.Encoding]::ASCII.GetBytes(($sample|ConvertTo-Json -Compress -Depth 6))
+              $null=Read-R1095Report $raw
+            } catch {$blocked=$true}
+            $sample[$field]=$prior
+            if (-not $blocked) {throw 'R1095_UNSAFE_RECEIPT_ACCEPTED'}
+          }
+          $rawScript=[IO.File]::ReadAllText($path)
+          if (-not $rawScript.Contains('sudo -n /usr/bin/python3 -I -B - --apply-obsolete-atomic-temp')) {
+            throw 'R1095_REMOTE_COMMAND_SCOPE_STOP'
+          }
+          Write-Host 'R1095_PS51_LIMITED_CLEANUP_RECEIPT_PASS'
