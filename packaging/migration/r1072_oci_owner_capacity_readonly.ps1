@@ -152,9 +152,9 @@ function Invoke-R1072 {
         Import-R1072Library
         Initialize-R1066
         $freshCarrier=Read-R1066PinnedSource (
-            Join-Path $PSScriptRoot 'r1073_exit_preserving_transport.cs'
-        ) '8d08e13f060488326854fac3f014470d8b1f3ec5'
-        if (-not ('FlopR1073.Transport' -as [type])) {
+            Join-Path $PSScriptRoot 'r1075_stderr_classifying_transport.cs'
+        ) '66b790f976a70711c68dea947f23698d77ba1406'
+        if (-not ('FlopR1075.Transport' -as [type])) {
             Add-Type -TypeDefinition $freshCarrier
         }
         $ssh=Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\ssh.exe'
@@ -207,7 +207,7 @@ function Invoke-R1072 {
         })
         $payload=[Text.Encoding]::UTF8.GetBytes($guest)
         $stage='SSH_CARRIER'
-        $reply=[FlopR1073.Transport]::Run($ssh,($quoted -join ' '),$payload,58000)
+        $reply=[FlopR1075.Transport]::Run($ssh,($quoted -join ' '),$payload,58000)
         if ($reply.ExitCode -ne 0) {
             $stage=Get-R1072RemoteStop $reply.ExitCode $reply.Output $reply.FailureKind
             throw 'ORIGINAL_PROBE_STOP'
