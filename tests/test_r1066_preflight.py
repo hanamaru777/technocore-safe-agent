@@ -867,4 +867,30 @@ def test_r1078_windows_ssh_g_environment_matrix_without_identity():
     # Never print stdout/stderr from the native SSH process.
     assert matrix["normal_min"] == "PASS", matrix
     assert matrix["normal_full"] == "PASS", matrix
-    assert matrix["profile_full"] == "PASS", " ".join(k + "=" + v for k,v in matrix.items())
+    # Narrowing diagnostic: names only; never print values, stdout or stderr.
+    allow = {
+        "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC",
+        "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "USERNAME", "USERDOMAIN",
+        "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "HOME",
+        "PROGRAMDATA", "ALLUSERSPROFILE", "PUBLIC", "OS", "PATH", "PATHEXT",
+        "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER", "NUMBER_OF_PROCESSORS",
+        "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+        "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+        "LOGONSERVER", "SESSIONNAME", "DRIVERDATA"
+    }
+    safe={k:v for k,v in os.environ.items() if k.upper() in allow}
+    result=subprocess.run([str(ssh),*full],stdin=subprocess.DEVNULL,
+                          capture_output=True,timeout=10,env=safe)
+    matrix["win_allowlist_full"]="PASS" if result.returncode==0 else "STOP"
+    removed_breaks=[]
+    for name in sorted(safe):
+        trial=dict(os.environ)
+        trial.pop(name, None)
+        result=subprocess.run([str(ssh),*minimal],stdin=subprocess.DEVNULL,
+                              capture_output=True,timeout=10,env=trial)
+        if result.returncode != 0:
+            removed_breaks.append(name)
+    assert matrix["win_allowlist_full"] == "PASS", (
+        "ENV_MATRIX " + " ".join(k+"="+v for k,v in matrix.items()) +
+        " ESSENTIAL_NAMES=" + ",".join(removed_breaks))
+
