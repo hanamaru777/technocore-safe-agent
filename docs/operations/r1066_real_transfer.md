@@ -497,3 +497,11 @@ must independently validate all restored files and exact pin-authenticated SSH
 transport; a completed source pipe is NOT a destination restore/cutover
 receipt. Windows NTFS and Oracle live source are not admitted. This is an
 offline integration primitive only; no real archive or K137 migration exists.
+
+
+## R1088 Windows native ciphertext custody gate
+The new pinned PowerShell 5.1 / C# verifier checks private NTFS ACL owner
+and explicit DACL for the archive and EACH ciphertext file, no reparse
+points, extra files, missing or noncontiguous shards, or oversized blobs.
+Read-only. Not AEAD verification, no recovery secret or SSH. No live source
+authority or permission to restore.

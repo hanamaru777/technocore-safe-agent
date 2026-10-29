@@ -64,6 +64,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PYTEST_INSTALL_STOP' }
           python -m pytest -q tests/test_r1066_preflight.py
           python -m pytest -q tests/test_r1085_windows_offhost_sink.py
+          python -m pytest -q tests/test_r1088_windows_ciphertext_custody.py
           if ($LASTEXITCODE -ne 0) { throw 'R1066_TEST_STOP' }
 
       - name: Prove bootstrap remote shell source is LF-only
