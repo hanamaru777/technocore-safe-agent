@@ -167,7 +167,7 @@ def delete_caches(app, candidates):
         s = p.lstat()
         require((s.st_dev, s.st_ino, s.st_mtime_ns) == candidates[str(p)], "CACHE_DRIFT_STOP")
         shutil.rmtree(p)
-        print("DELETED_PROVEN_CACHE=" + str(p.relative_to(app)), flush=True)
+        # Never output potentially unbounded per-path lists in owner SSH receipts.
     return len(chosen)
 
 
