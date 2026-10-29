@@ -786,3 +786,55 @@ jobs:
           } catch { $blocked=$true }
           if (-not $blocked) { throw 'R1093_PATH_RESULT_ACCEPTED' }
           Write-Host 'R1093_PS51_READONLY_REPORT=PASS'
+
+      - name: Validate R1094 PS5.1 hot-file attribution schema offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1094_original_attribution_readonly.ps1'
+          $tokens=$null; $errors=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) { throw 'R1094_PS_PARSE_STOP' }
+          $fn=$ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -ceq 'Read-R1094Report'
+          },$true)
+          if ($null -eq $fn) { throw 'R1094_REPORT_FUNCTION_STOP' }
+          Invoke-Expression $fn.Extent.Text
+          $audit=[ordered]@{files=1;allocated_bytes=[long]5166563328;
+            over_7d_files=1;over_7d_bytes=[long]5166563328;
+            over_30d_files=1;over_30d_bytes=[long]5166563328}
+          $one=[ordered]@{token='aa2b53f61777';basename='archive.jsonl';
+            class='OTHER_JSONL';allocated_bytes=[long]5166563328;
+            logical_bytes=[long]5166537629;age_days=55;hardlinks=1}
+          $root=[ordered]@{objects=2;regular_files=1;
+            allocated_bytes=[long]5166563328;categories=@{OTHER_JSONL=$audit};top=@($one)}
+          $report=[ordered]@{schema=1;phase='R1094';result='ATTRIBUTION_READONLY';
+            roots=@{observer=$root;autopilot=$root};action='READ_ONLY';
+            cutover='NO_GO';oci_retirement='STRICT_NO_GO'}
+          $bytes=[Text.Encoding]::ASCII.GetBytes(($report|ConvertTo-Json -Compress -Depth 9))
+          $got=Read-R1094Report $bytes
+          if ($got.result -cne 'ATTRIBUTION_READONLY' -or
+              $got.roots.autopilot.top[0].allocated_bytes -ne 5166563328 -or
+              $got.roots.autopilot.categories.OTHER_JSONL.files -ne 1) {
+            throw 'R1094_POSITIVE_RECEIPT_STOP'
+          }
+          foreach ($tamper in @('action','basename','total')) {
+            $originalAction=$report.action
+            $originalName=$report.roots.observer.top[0].basename
+            $originalSize=$report.roots.observer.allocated_bytes
+            if ($tamper -eq 'action') { $report.action='DELETE' }
+            if ($tamper -eq 'basename') { $report.roots.observer.top[0].basename='../private' }
+            if ($tamper -eq 'total') { $report.roots.observer.allocated_bytes=[long]1 }
+            $blocked=$false
+            try {
+              $bytes=[Text.Encoding]::ASCII.GetBytes(($report|ConvertTo-Json -Compress -Depth 9))
+              $null=Read-R1094Report $bytes
+            } catch { $blocked=$true }
+            $report.action=$originalAction
+            $report.roots.observer.top[0].basename=$originalName
+            $report.roots.observer.allocated_bytes=$originalSize
+            if (-not $blocked) { throw 'R1094_MALFORMED_RECEIPT_ACCEPTED' }
+          }
+          Write-Host 'R1094_PS51_HOTSPOTS_READONLY_PASS'

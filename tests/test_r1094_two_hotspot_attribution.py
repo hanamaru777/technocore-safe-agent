@@ -38,5 +38,5 @@ def test_bound_and_filename_privacy(tmp_path):
     f=p/"wallet-private-key.jsonl"
     b=m.file_brief(f,Path(f.name),f.lstat(),"autopilot",time.time())
     assert b["basename"]=="REDACTED"
-    with pytest.raises(m.Stop,match="COUNT_STOP"):
-        m.scan(p,"autopilot",time.monotonic(),time.time()) if False else m.need(False,"COUNT_STOP")
+    assert m.NAME.fullmatch("safe-history.jsonl")
+    assert m.PRIVATE.search("wallet-private-key.jsonl")
