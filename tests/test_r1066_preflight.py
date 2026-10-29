@@ -560,7 +560,7 @@ def test_r1073_is_isolated_from_existing_r1066_transport():
     assert "namespace FlopR1066" in old
     assert "int failed = 0, writerFailed = 0" in new
     assert "(writerFailed != 0 && p.ExitCode == 0)" in new
-    assert "[FlopR1075.Transport]::Run" in controller
+    assert "[FlopR1079.Transport]::Run" in controller
     assert "[FlopR1073.Transport]::Run" not in controller
     assert "[FlopR1066.Transport]::Run" not in controller
     assert "SSH_CARRIER_UNCLASSIFIED" in controller
@@ -651,9 +651,9 @@ def test_r1075_stale_r1073_and_new_classifier_coexist_in_same_ps51_process(tmp_p
     new_path = str(ROOT / "packaging/migration/r1075_stderr_classifying_transport.cs").replace("'", "''")
     controller = ROOT / "packaging/migration/r1072_oci_owner_capacity_readonly.ps1"
     src = controller.read_text()
-    assert "r1075_stderr_classifying_transport.cs" in src
-    assert "[FlopR1075.Transport]::Run" in src
-    assert "'FlopR1075.Transport' -as [type]" in src
+    assert "r1079_profile_ssh_transport.cs" in src
+    assert "[FlopR1079.Transport]::Run" in src
+    assert "'FlopR1079.Transport' -as [type]" in src
     script = tmp_path / "test-r1075-same-console.ps1"
     script.write_text(
         "$ErrorActionPreference='Stop'\n"
@@ -818,6 +818,31 @@ def test_r1078_windows_ssh_g_environment_matrix_without_identity():
     for name in ("USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"):
         if name in os.environ:
             profile[name] = os.environ[name]
+    profile_home = dict(profile)
+    profile_windir = dict(profile)
+    profile_path = dict(profile)
+    profile_temp = dict(profile)
+    profile_all = dict(profile)
+    for name, target in (
+        ("HOME", profile_home),
+        ("WINDIR", profile_windir),
+        ("PATH", profile_path),
+        ("TEMP", profile_temp), ("TMP", profile_temp),
+        ("HOME", profile_all), ("WINDIR", profile_all),
+        ("PATH", profile_all), ("TEMP", profile_all), ("TMP", profile_all)
+    ):
+        if name in os.environ:
+            target[name] = os.environ[name]
+    stripped_home = dict(stripped)
+    stripped_windir = dict(stripped)
+    stripped_path = dict(stripped)
+    for name, target in (
+        ("HOME", stripped_home),
+        ("WINDIR", stripped_windir),
+        ("PATH", stripped_path)
+    ):
+        if name in os.environ:
+            target[name] = os.environ[name]
     matrix = {}
     for label, arguments, env in (
         ("normal_min", minimal, dict(os.environ)),
@@ -825,6 +850,14 @@ def test_r1078_windows_ssh_g_environment_matrix_without_identity():
         ("normal_full", full, dict(os.environ)),
         ("clean_full", full, stripped),
         ("profile_full", full, profile),
+        ("profile_home_full", full, profile_home),
+        ("profile_windir_full", full, profile_windir),
+        ("profile_path_full", full, profile_path),
+        ("profile_temp_full", full, profile_temp),
+        ("profile_all_full", full, profile_all),
+        ("stripped_home_full", full, stripped_home),
+        ("stripped_windir_full", full, stripped_windir),
+        ("stripped_path_full", full, stripped_path),
     ):
         result = subprocess.run(
             [str(ssh), *arguments],
@@ -834,4 +867,4 @@ def test_r1078_windows_ssh_g_environment_matrix_without_identity():
     # Never print stdout/stderr from the native SSH process.
     assert matrix["normal_min"] == "PASS", matrix
     assert matrix["normal_full"] == "PASS", matrix
-    assert matrix["profile_full"] == "PASS", matrix
+    assert matrix["profile_full"] == "PASS", " ".join(k + "=" + v for k,v in matrix.items())
