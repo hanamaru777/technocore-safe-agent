@@ -614,3 +614,30 @@ def test_r1075_controller_accepts_only_known_ssh_failure_kinds():
     assert "SSH_PUBLIC_KEY_REJECTED" in source
     assert "SSH_IDENTITY_UNREADABLE" in source
     assert "SSH_HOSTKEY_REJECTED" in source
+
+
+
+@WINDOWS
+def test_r1075_process_returns_255_with_native_stderr_without_exposing_it(tmp_path):
+    carrier = ROOT / "packaging/migration/r1073_exit_preserving_transport.cs"
+    script = tmp_path / "r1075_native_stderr.ps1"
+    path = str(carrier).replace("'", "''")
+    script.write_text(
+        "$ErrorActionPreference='Stop'\n"
+        "$source=[IO.File]::ReadAllText('" + path + "')\n"
+        "Add-Type -TypeDefinition $source\n"
+        "$data=New-Object byte[] 16384\n"
+        "$args1='/d /q /c echo Connection timed out 1>&2 & exit /b 255'\n"
+        "$out=[FlopR1073.Transport]::Run($env:ComSpec,$args1,$data,12000)\n"
+        "if($out.ExitCode -ne 255){exit 41}\n"
+        "if($out.FailureKind -cne 'SSH_CONNECTIVITY_REJECTED'){exit 42}\n"
+        "if($out.Output.Length -ne 0){exit 43}\n"
+        "Write-Output 'R1075_REAL_PROCESS_STDERR_255=PASS'\n",
+        encoding="utf-8"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(script)],
+        capture_output=True, timeout=40
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert b"R1075_REAL_PROCESS_STDERR_255=PASS" in result.stdout
