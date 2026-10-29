@@ -30,6 +30,10 @@ def load(name, leaf):
 C = load("r1066_cipher", "r1066_sealed_dependency.py")
 G = load("r1066_gates", "r1063_release_gates.py")
 MAX_MANIFEST = 16 * 1024**2
+# R1080 real original OCI census 30,682 entries. This limit is finite and
+# independently enforced both at source enumeration and at restore parsing.
+MAX_ARCHIVE_ENTRIES = 100000
+MAX_ARCHIVE_DEPTH = 48
 HEAD = G.SOURCE_HEAD
 CHUNK = C.CHUNK_BYTES
 BLOCKED_ROOTS = ("/opt/technocore-safe-agent", "/var/lib/technocore-safe-agent",
@@ -93,8 +97,9 @@ def census(app, state, source_head):
     need(roots["app"] != roots["state"] and not any(a in b.parents for a, b in
          ((roots["app"], roots["state"]), (roots["state"], roots["app"]))), "ROOT_OVERLAP")
     rows, identities, links = [], {}, {}
-    def visit(path, name):
-        need(len(rows) < 25000 and len(os.fsencode(name)) <= 4096, "CENSUS_BOUND")
+    def visit(path, name, depth):
+        need(len(rows) < MAX_ARCHIVE_ENTRIES and depth <= MAX_ARCHIVE_DEPTH
+             and len(os.fsencode(name)) <= 4096, "CENSUS_BOUND")
         s = path.lstat()
         row = {"path": name, "mode": stat.S_IMODE(s.st_mode), "uid": s.st_uid, "gid": s.st_gid,
                "mtime_ns": s.st_mtime_ns, "kind": "", "size": 0, "sha256": None, "target": None}
@@ -118,9 +123,9 @@ def census(app, state, source_head):
         rows.append(row)
         if row["kind"] == "directory":
             for child in sorted(path.iterdir(), key=lambda p: os.fsencode(p.name)):
-                visit(child, name + "/" + child.name)
+                visit(child, name + "/" + child.name, depth + 1)
     for name, path in roots.items():
-        visit(path, name)
+        visit(path, name, 0)
     manifest = {"version": 1, "source_head": source_head, "epoch": "PROVISIONAL_UNFENCED", "entries": rows}
     need(len(G.canonical(manifest)) <= MAX_MANIFEST, "MANIFEST_BOUND")
     return roots, manifest, identities
@@ -272,7 +277,7 @@ def restore(archive, target, recovery, *, quota):
     m = json.loads(reader.read(size), object_pairs_hook=G._pairs)
     G.shape(m, "version source_head epoch entries")
     need(m["version"] == 1 and m["source_head"] == HEAD and m["epoch"] == "PROVISIONAL_UNFENCED", "MANIFEST_STOP")
-    need(type(m["entries"]) is list and 2 <= len(m["entries"]) <= 25000, "MANIFEST_BOUND")
+    need(type(m["entries"]) is list and 2 <= len(m["entries"]) <= MAX_ARCHIVE_ENTRIES, "MANIFEST_BOUND")
     seen, total = {}, 0
     for row in m["entries"]:
         G.shape(row, "path mode uid gid mtime_ns kind size sha256 target")
