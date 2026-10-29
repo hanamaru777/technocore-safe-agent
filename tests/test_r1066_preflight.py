@@ -560,7 +560,8 @@ def test_r1073_is_isolated_from_existing_r1066_transport():
     assert "namespace FlopR1066" in old
     assert "int failed = 0, writerFailed = 0" in new
     assert "(writerFailed != 0 && p.ExitCode == 0)" in new
-    assert "[FlopR1073.Transport]::Run" in controller
+    assert "[FlopR1075.Transport]::Run" in controller
+    assert "[FlopR1073.Transport]::Run" not in controller
     assert "[FlopR1066.Transport]::Run" not in controller
     assert "SSH_CARRIER_UNCLASSIFIED" in controller
     assert "SSH_AUTH_ROUTE_OR_PIN_STOP" in controller
@@ -569,7 +570,7 @@ def test_r1073_is_isolated_from_existing_r1066_transport():
 
 @WINDOWS
 def test_r1075_ps51_ssh_diagnostics_are_fixed_classes_only(tmp_path):
-    carrier = ROOT / "packaging/migration/r1073_exit_preserving_transport.cs"
+    carrier = ROOT / "packaging/migration/r1075_stderr_classifying_transport.cs"
     script = tmp_path / "r1075_classify.ps1"
     path = str(carrier).replace("'", "''")
     script.write_text(
@@ -587,7 +588,7 @@ def test_r1075_ps51_ssh_diagnostics_are_fixed_classes_only(tmp_path):
         ")\n"
         "foreach($pair in $pairs) {\n"
         "  $bytes=[Text.Encoding]::ASCII.GetBytes($pair[0])\n"
-        "  $got=[FlopR1073.Transport]::Classify($bytes)\n"
+        "  $got=[FlopR1075.Transport]::Classify($bytes)\n"
         "  if($got -cne $pair[1]){throw 'R1075_CLASSIFICATION_FAIL'}\n"
         "  if($got.Contains('PRIVATE_') -or $got.Contains('/private/')){exit 43}\n"
         "}\n"
@@ -605,7 +606,7 @@ def test_r1075_ps51_ssh_diagnostics_are_fixed_classes_only(tmp_path):
 def test_r1075_controller_accepts_only_known_ssh_failure_kinds():
     root = ROOT / "packaging/migration"
     source = (root / "r1072_oci_owner_capacity_readonly.ps1").read_text()
-    carrier = (root / "r1073_exit_preserving_transport.cs").read_text()
+    carrier = (root / "r1075_stderr_classifying_transport.cs").read_text()
     assert "public string FailureKind;" in carrier
     assert "SSH_OPTION_REJECTED" in carrier
     assert "SSH_PUBLIC_KEY_REJECTED" in carrier
@@ -619,7 +620,7 @@ def test_r1075_controller_accepts_only_known_ssh_failure_kinds():
 
 @WINDOWS
 def test_r1075_process_returns_255_with_native_stderr_without_exposing_it(tmp_path):
-    carrier = ROOT / "packaging/migration/r1073_exit_preserving_transport.cs"
+    carrier = ROOT / "packaging/migration/r1075_stderr_classifying_transport.cs"
     script = tmp_path / "r1075_native_stderr.ps1"
     path = str(carrier).replace("'", "''")
     script.write_text(
@@ -628,7 +629,7 @@ def test_r1075_process_returns_255_with_native_stderr_without_exposing_it(tmp_pa
         "Add-Type -TypeDefinition $source\n"
         "$data=New-Object byte[] 16384\n"
         "$args1='/d /q /c echo Connection timed out 1>&2 & exit /b 255'\n"
-        "$out=[FlopR1073.Transport]::Run($env:ComSpec,$args1,$data,12000)\n"
+        "$out=[FlopR1075.Transport]::Run($env:ComSpec,$args1,$data,12000)\n"
         "if($out.ExitCode -ne 255){exit 41}\n"
         "if($out.FailureKind -cne 'SSH_CONNECTIVITY_REJECTED'){exit 42}\n"
         "if($out.Output.Length -ne 0){exit 43}\n"
