@@ -9,7 +9,8 @@ $ErrorActionPreference='Stop'
 try {
     if (-not $AllowCiphertextOnly) { throw 'OPT_IN_REQUIRED' }
     $source=Join-Path $PSScriptRoot 'r1085_windows_offhost_sink.cs'
-    $bytes=[IO.File]::ReadAllBytes($source)
+    $raw=[IO.File]::ReadAllText($source,[Text.Encoding]::UTF8).Replace("`r`n","`n")
+    $bytes=[Text.Encoding]::UTF8.GetBytes($raw)
     if ($bytes.Length -gt 20000 -or $bytes.Length -lt 500) { throw 'SOURCE_BOUND' }
     $prefix=[Text.Encoding]::ASCII.GetBytes(('blob ' + $bytes.Length + [char]0))
     $sha=[Security.Cryptography.SHA1]::Create()
@@ -19,7 +20,6 @@ try {
         $pin=[BitConverter]::ToString($sha.Hash).Replace('-','').ToLowerInvariant()
         if ($pin -cne '661f8ce097aa50986d4f6847d0693edcd1531149') { throw 'SOURCE_PIN' }
     } finally { $sha.Dispose() }
-    $raw=[Text.Encoding]::UTF8.GetString($bytes)
     Add-Type -TypeDefinition $raw -ReferencedAssemblies @('System.dll','System.Core.dll','System.Security.dll') -ErrorAction Stop
     $inputStream=[Console]::OpenStandardInput()
     try { $status=[FlopR1085.Sink]::Receive($inputStream,$ExistingPrivateNtfsParent,

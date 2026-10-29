@@ -29,7 +29,7 @@ def wire():
 
 
 def test_r1085_no_ssh_or_live_authority_and_exact_source_pin():
-    code=CS.read_bytes()
+    code=CS.read_bytes().replace(b"\r\n",b"\n")
     digest=hashlib.sha1(b"blob "+str(len(code)).encode()+b"\0"+code).hexdigest()
     script=PS.read_text()
     assert digest in script
