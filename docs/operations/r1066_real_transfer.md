@@ -485,3 +485,15 @@ future owner transport MUST first fully AEAD verify R1001 at offhost and bind
 the stream to a separately pinned authenticated encrypted SSH origin. There is
 still no approved Windows offhost archive decrypt/sender implementation, no
 exact original OCI admission or production permission, no new paid storage.
+
+
+## R1087: full AES-GCM two-pass offhost plaintext source — NOT runtime migration
+
+A nonroot POSIX-only owner private R1001 archive is independently fully decrypted
+and AEAD/part/commit/hash authenticated BEFORE emitting a plaintext byte to a
+caller-supplied binary stream. All part file custody/owner/mode/inode/mtime are
+pinned across the two passes and changed archives fail closed. The receiver
+must independently validate all restored files and exact pin-authenticated SSH
+transport; a completed source pipe is NOT a destination restore/cutover
+receipt. Windows NTFS and Oracle live source are not admitted. This is an
+offline integration primitive only; no real archive or K137 migration exists.
