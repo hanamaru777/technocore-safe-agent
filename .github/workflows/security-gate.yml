@@ -713,4 +713,16 @@ jobs:
             catch { $blocked=$true }
             if (-not $blocked) { throw 'R1092_UNSAFE_RECEIPT_ACCEPTED' }
           }
+          $whole = [IO.File]::ReadAllText($path)
+          if (-not $whole.Contains('DELETE_ONE_SHOT_CONSUMED')) {
+            throw 'R1092_DELETE_ONE_SHOT_GUARD_MISSING'
+          }
+          $readOnlySample = $sample.Replace('DELETED_CACHE_DIR_COUNT=2' + [char]10,
+                                             'DELETE=NOT_REQUESTED' + [char]10)
+          $safe = Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($readOnlySample)) $false
+          if ($safe.result -cne 'CATEGORY_INVENTORY_ONLY' -or
+              $safe.deleted_cache_dirs -ne 0 -or
+              $safe.allocated_by_category.Count -ne 2) {
+            throw 'R1092_READONLY_RECEIPT_STOP'
+          }
           Write-Host 'R1092_PS51_SOURCE_AND_REPORT=PASS'

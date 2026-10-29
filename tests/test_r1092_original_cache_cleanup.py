@@ -36,3 +36,11 @@ def test_cleanup_never_deletes_state_or_unverified_data():
     assert "ORIGINAL_HEAD" in t and "protected_context()" in t
     assert 'parser.add_argument("--delete-proven-cache"' in t
     assert "DELETED_PROVEN_CACHE=" not in t
+
+def test_one_shot_delete_consumed_and_diagnostics_narrow():
+    t=P.read_text(encoding="utf8")
+    assert 'DELETE_ONE_SHOT_CONSUMED' in t
+    assert t.index('if ($DeleteProvenCache) {') < t.index("        $stage='PUBLIC_SOURCE_PIN'")
+    assert "REPORT_UNKNOWN_FIELD_STOP" in t
+    assert "REPORT_UNCLASSIFIED_STOP" in t
+    assert 'Read-R1092Report $reply.Output ([bool]$DeleteProvenCache)' in t

@@ -126,6 +126,13 @@ function Read-R1092Report([byte[]]$bytes,[bool]$delete) {
 }
 
 function Invoke-R1092 {
+    # This live one-shot delete path was attempted on 2026-10-29. Its response
+    # was lost AFTER remote zero exit; do not risk deleting the same caches
+    # again. Only allow a fresh READ-ONLY current-state receipt.
+    if ($DeleteProvenCache) {
+        Write-Output '{"phase":"R1092","result":"STOP","code":"DELETE_ONE_SHOT_CONSUMED"}'
+        return
+    }
     $public=$null; $private=$null; $plain=$null; $encrypted=$null
     $password=$null; $reply=$null; $success=$null
     $stage='PREPARE';$clean=$true
@@ -220,7 +227,19 @@ function Invoke-R1092 {
         $stage='RESPONSE_VALIDATION'
         $success=Read-R1092Report $reply.Output ([bool]$DeleteProvenCache)
     } catch {
-        if ($null -eq $success -and $stage -ceq 'SSH_AND_ORACLE') { $stage='SSH_CARRIER_STOP' }
+        if ($null -eq $success -and $stage -ceq 'SSH_AND_ORACLE') {
+            $stage='SSH_CARRIER_STOP'
+        } elseif ($null -eq $success -and $stage -ceq 'RESPONSE_VALIDATION') {
+            # Never print raw stdout, stderr, paths, credentials or exception text.
+            $safe=@('REPORT_BOUND_STOP','REPORT_ASCII_STOP','REPORT_SCHEMA_STOP',
+                'REPORT_DUPLICATE_STOP','REPORT_UNKNOWN_FIELD_STOP',
+                'REPORT_UNKNOWN_CATEGORY_STOP','REPORT_VALUE_STOP',
+                'REPORT_REQUIRED_STOP','REPORT_GUARD_STOP','REPORT_MODE_STOP',
+                'REPORT_COUNT_STOP')
+            $message=$_.Exception.Message
+            if ($safe -ccontains $message) { $stage=$message }
+            else { $stage='REPORT_UNCLASSIFIED_STOP' }
+        }
     } finally {
         if ($null -ne $password) { $password.Dispose() }
         if ('FlopR1062.Guards' -as [type]) {
@@ -244,7 +263,11 @@ function Invoke-R1092 {
         $allow=@('PREPARE','PUBLIC_SOURCE_PIN','TRUSTED_HELPERS','SSH_REQUIREMENTS',
             'LOCAL_ESCROW','R987_CODE_PROMPT','LOCAL_ESCROW_DECRYPT',
             'TEMPORARY_KEY_CUSTODY','SSH_CONNECT_OR_AUTH_STOP','ORACLE_GUARD_STOP',
-            'SSH_CARRIER_STOP','RESPONSE_VALIDATION')
+            'SSH_CARRIER_STOP','RESPONSE_VALIDATION','REPORT_BOUND_STOP',
+            'REPORT_ASCII_STOP','REPORT_SCHEMA_STOP','REPORT_DUPLICATE_STOP',
+            'REPORT_UNKNOWN_FIELD_STOP','REPORT_UNKNOWN_CATEGORY_STOP',
+            'REPORT_VALUE_STOP','REPORT_REQUIRED_STOP','REPORT_GUARD_STOP',
+            'REPORT_MODE_STOP','REPORT_COUNT_STOP','REPORT_UNCLASSIFIED_STOP')
         if ($allow -cnotcontains $stage) { $stage='GUARD_STOP' }
         Write-Output ('{"phase":"R1092","result":"STOP","code":"'+$stage+'"}')
     } else {
