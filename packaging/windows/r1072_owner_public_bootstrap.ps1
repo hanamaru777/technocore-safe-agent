@@ -4,12 +4,12 @@
 # change services, create backups, transfer secrets, restore or authorize cutover.
 Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
-$commit='ad5e220c46a3b69ddd92c49b1e415fd285a9aefb'
+$commit='1ca7725c29a0c23303e158c19c6e0446c88ea728'
 $prefix='https://raw.githubusercontent.com/hanamaru777/technocore-safe-agent/'+$commit+'/'
 $items=@(
     @{path='packaging/migration/r1072_oci_owner_capacity_readonly.ps1';blob='e17eafd3dc09293a310bb1b7c892864367d03ccc'},
     @{path='packaging/migration/r1066_owner_workflow.ps1';blob='7a7d9790ccd9bb464c254188096d85fb315ee550'},
-    @{path='packaging/migration/r1079_profile_ssh_transport.cs';blob='1f61ec3eb2961b89e50c36772f290c75e43c7994'},
+    @{path='packaging/migration/r1079_profile_ssh_transport.cs';blob='b150af9fe7a335bc6c02e8fc1e5451599d124a97'},
     @{path='packaging/migration/r1066_preflight_transport.cs';blob='305530a86db7e5cc8812fbac57c3e2c7c089a7be'},
     @{path='packaging/windows/r1062_writer_attribution_one_shot_readonly.ps1';blob='7ad3432b89b2aa2fe4a5e6b0142ec7578554baaa'},
     @{path='packaging/oracle/r1072_original_readonly_capacity.py';blob='0ee105633366abe9e92d72eacc86e7be789aa851'}
