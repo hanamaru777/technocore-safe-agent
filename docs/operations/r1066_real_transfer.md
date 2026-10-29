@@ -395,3 +395,51 @@ Nothing here establishes the original Oracle writer stop, complete archive,
 encrypted transfer, isolated restoration, original DID, rollback or cleanup.
 Never issue actual sudo commands or send AWS keys to ChatGPT/GitHub.
 Default R1067 remains READ ONLY; OCI_RETIREMENT=STRICT_NO_GO.
+
+
+## R1082–R1083 release-gate corrections (source-only; NO live migration)
+
+R1082 aligns offline G7 evidence entry cardinality with the R1081 archive and
+restore hard limit of 100,000. Synthetic 30,682-entry signed evidence can now
+pass G7; oversized or unequal source/restored entry counts still stop. This
+neither constructs an archive nor establishes source authority.
+
+R1083 corrects a distinct physical impossibility: the original G2 all-on-K137
+capacity formula implicitly requires ciphertext, plaintext and rollback copies
+on the 60GB shared disk. The original one-filesystem contract is preserved.
+An optional explicit separate-existing-disk topology now requires a fresh,
+independently signed owner-offhost receipt, exact owner approval, private
+existing offhost custody and zero incremental cost. The offhost filesystem
+must independently have encrypted archive peak plus at least 1GiB reserve.
+K137 itself must retain free room for restored source + SQLite allowance +
+20GiB TradeBot/OS reserve. No compression credit or K137 ciphertext co-location
+is assumed. Memory, CPU/PSI and TradeBot checks remain unchanged. These are
+STRICT offline evidence requirements; no existing owner offhost measurement,
+approval, OCI fenced backup, K137 restored bytes or signing credentials are
+implied or manufactured. Both split and legacy assessments continue to output
+CUTOVER NO_GO and OCI_RETIREMENT STRICT_NO_GO. No live SSH, disk writes, IAM,
+production service change, or permission to restore on protected host is added.
+
+
+## R1084 bounded ciphertext stream (OFFLINE implementation, no live authorization)
+
+The new source-only \`r1084_offhost_ciphertext_stream.py\` reuses R1066's exact
+offline census, deterministic manifest, source drift detection and R1001
+AES-GCM/PBKDF2 framing, but emits ciphertext header, parts and final commit
+over a binary length-and-hash-framed stream. It DOES NOT make a 26GB plaintext
+or ciphertext duplicate on the source host. Its receiver writes the ciphertext
+to a new private POSIX offhost directory after checking pre-existing free
+capacity and an explicit bounded quota. It fsyncs each completed file, rejects
+truncation, trailing data, bad hashes, wrong order and reuse of a destination,
+and never asserts common SQLite epoch or live authority. The unchanged R1066
+decrypt/restore independently verifies the received encrypted archive.
+
+This is an actual integration-tested binary stream over synthetic OFFLINE files,
+not the production two-host coordinator. The original OCI roots remain blocked
+by \`offline_source\` until a separately approved and proven complete writer
+admission/fence; no remote SSH or recovery-material handoff is enabled.
+Offhost Windows NTFS custody is not enrolled, and a Windows binary receiver,
+source epoch attestation and real production operator integration remain OPEN.
+The existing direct OCI→K137 ciphertext relay retains its protective
+dual-copy disk gate: it is NOT a substitute for independent offhost custody.
+CUTOVER NO_GO; OCI_RETIREMENT STRICT_NO_GO.
