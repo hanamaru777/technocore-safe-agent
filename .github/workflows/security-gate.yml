@@ -665,3 +665,52 @@ jobs:
             throw 'R1062_UNRECOGNIZED_ACCEPT'
           }
           Write-Host 'WINDOWS_PS51_R1062_FIXED_STAGE_DIAGNOSTIC=PASS'
+
+      - name: Validate R1092 Windows owner cleanup runner without network or credentials
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1092_REQUIRES_PS51' }
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1092_original_cache_cleanup.ps1'
+          $tok = $null; $err = $null
+          $ast = [Management.Automation.Language.Parser]::ParseFile($path,[ref]$tok,[ref]$err)
+          if ($err.Count -ne 0) { throw 'R1092_SYNTAX_STOP' }
+          $fn = $ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -ceq 'Read-R1092Report'
+          },$true)
+          if ($null -eq $fn) { throw 'R1092_REPORT_FUNCTION_MISSING' }
+          Invoke-Expression $fn.Extent.Text
+          $sample = (@(
+            'R1091_ORIGINAL_SCOPE=PINNED'
+            'OBJECTS_INSPECTED=30682'
+            'APP_PROVEN_CACHE_ALLOCATED_BYTES=8192'
+            'STATE_SIGNER_ALLOCATED_BYTES=270000'
+            'PROVEN_CACHE_DIR_COUNT=2'
+            'PROVEN_CACHE_ESTIMATED_BYTES=8192'
+            'DELETED_CACHE_DIR_COUNT=2'
+            'DISK_FREE_BEFORE=11852025856'
+            'DISK_FREE_AFTER=11852034048'
+            'STATE_GIT_VENV_LOG_SIGNER_DB_DELETE=NONE'
+            'RESULT=COMPLETE'
+          ) -join [char]10) + [char]10
+          $bytes = [Text.Encoding]::ASCII.GetBytes($sample)
+          $ok = Read-R1092Report $bytes $true
+          if ($ok.result -cne 'CACHE_CLEANUP_COMPLETED' -or
+              $ok.deleted_cache_dirs -ne 2 -or
+              $ok.allocated_by_category['STATE_SIGNER_ALLOCATED_BYTES'] -ne 270000 -or
+              $ok.cutover -cne 'NO_GO') {
+            throw 'R1092_RECEIPT_POSITIVE_STOP'
+          }
+          foreach ($bad in @(
+            $sample + 'EXTRA_FIELD=NOPE' + [char]10,
+            $sample.Replace('RESULT=COMPLETE','RESULT=GO'),
+            $sample.Replace('DELETED_CACHE_DIR_COUNT=2','DELETED_CACHE_DIR_COUNT=30000')
+          )) {
+            $blocked = $false
+            try { $null=Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($bad)) $true }
+            catch { $blocked=$true }
+            if (-not $blocked) { throw 'R1092_UNSAFE_RECEIPT_ACCEPTED' }
+          }
+          Write-Host 'R1092_PS51_SOURCE_AND_REPORT=PASS'
