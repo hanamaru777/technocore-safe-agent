@@ -15,7 +15,7 @@ WIN=pytest.mark.skipif(sys.platform!="win32",reason="Windows PowerShell5.1 NTFS"
 
 def part(name,b):
     def frame(t,v=b""):return struct.pack(">cI",t,len(v))+v
-    return frame(b"S",name.encode())+frame(b"D",b)+frame(b"E",struct.pack(">Q",len(b))+hashlib.sha256(b).digest()
+    return frame(b"S",name.encode())+frame(b"D",b)+frame(b"E",struct.pack(">Q",len(b))+hashlib.sha256(b).digest())
 
 def wire():
     return b"FLOPST01"+part("header.bin",b"FLOPENV1"+bytes(44))+part("part-0000.bin",b"synthetic-secret-free-ciphertext")+part("commit.bin",b"synthetic-commit")+struct.pack(">cI",b"F",0)
