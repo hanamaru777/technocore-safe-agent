@@ -44,3 +44,24 @@ def test_whitelist_and_no_general_backup_delete():
     assert m.TEMP.fullmatch(".observer-state.json.abcdefgh.tmp")
     assert not m.TEMP.fullmatch("observer-state.json.abcdefgh.tmp")
     assert not m.TEMP.fullmatch(".observer-state.json.abcdefgh.tmp/other")
+
+def test_actual_deletion_only_of_stale_exact_atomic_orphan(tmp_path,monkeypatch):
+    obs=tmp_path/"observer";obs.mkdir()
+    old=obs/".resident-state.json.abcdefgh.tmp"
+    old.write_bytes(b"orphan" * 5000)
+    time.sleep(0.02)
+    canonical=obs/"resident-state.json"
+    canonical.write_bytes(b"current" * 100)
+    unknown=obs/".untrusted-nonce.json.abcdefgh.tmp"
+    unknown.write_bytes(b"protect")
+    # Simulate the passage of 8 days without changing real files or root ctime.
+    now=time.time()+8*86400
+    stats,eligible=m.candidates(obs,now)
+    assert stats["eligible"]==1
+    assert eligible[0][0]==old.name
+    monkeypatch.setattr(m,"no_candidate_handles",lambda _:None)
+    deleted,freed=m.apply(obs,eligible,now)
+    assert deleted==1 and freed>=0
+    assert not old.exists()
+    assert canonical.read_bytes()==b"current" * 100
+    assert unknown.read_bytes()==b"protect"
