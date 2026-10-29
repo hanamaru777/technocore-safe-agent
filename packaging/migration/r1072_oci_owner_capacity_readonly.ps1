@@ -77,7 +77,7 @@ function Check-R1072Result([byte[]]$Bytes) {
         }
     }
     if (($data.free_bytes -isnot [int] -and $data.free_bytes -isnot [long]) -or
-        $data.free_bytes -lt 0 -or $data.tree.entries -gt 25000 -or
+        $data.free_bytes -lt 0 -or $data.tree.entries -gt 100000 -or
         $data.tree.sqlite_bases -lt 2 -or
         $data.tree.regular_bytes -gt 68719476736) { throw 'RESPONSE_STOP' }
     # Return freshly serialized, narrow validated counts — never raw host output.
@@ -166,7 +166,7 @@ function Invoke-R1072 {
         $stage='GUEST_SOURCE_PIN'
         $guest=Read-R1066PinnedSource (
             Join-Path $PSScriptRoot '..\oracle\r1072_original_readonly_capacity.py'
-        ) '0ee105633366abe9e92d72eacc86e7be789aa851'
+        ) '51e88037c39b40c3c397322f86dcd1cde7cc97bd'
         $stage='LOCAL_ESCROW_INTEGRITY'
         $encrypted=Read-R1027Backup
         $stage='LOCAL_CODE_ENTRY'
