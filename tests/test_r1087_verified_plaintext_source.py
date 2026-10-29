@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import pytest
+from cryptography.exceptions import InvalidTag
 
 F=Path(__file__).resolve().parents[1]/"packaging/migration/r1087_verified_plaintext_source.py"
 spec=importlib.util.spec_from_file_location("r1087_tested",F)
@@ -60,7 +61,7 @@ def test_invalid_archive_zero_plaintext_leak(sample,failure):
         part.rename(archive/"relocated")
         part.symlink_to("relocated")
     out=io.BytesIO()
-    with pytest.raises((m.Stop,m.T.Stop,m.T.C.Stop,OSError,ValueError)):
+    with pytest.raises((m.Stop,m.T.Stop,m.T.C.Stop,InvalidTag,OSError,ValueError)):
         m.preverify_then_stream(archive,recovery,out,
                                 expected_sha256=expected)
     assert out.getvalue()==b""
