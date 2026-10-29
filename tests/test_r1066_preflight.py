@@ -782,3 +782,54 @@ def test_r1077_ps51_exact_no_secret_ssh_through_real_child_carrier(tmp_path):
     )
     assert result.returncode==0,(result.stdout,result.stderr)
     assert b"R1077_NO_SECRET_SSH_G_CARRIER_PASS" in result.stdout
+
+
+
+@WINDOWS
+def test_r1078_windows_ssh_g_environment_matrix_without_identity():
+    """No-credential, no-network checks for sanitized child process environment."""
+    import sys
+    systemroot = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    assert systemroot
+    ssh = Path(systemroot) / "System32" / "OpenSSH" / "ssh.exe"
+    assert ssh.is_file()
+    dest = "ubuntu@140.238.55.171"
+    known = str(Path(systemroot) / "Temp" / "NONEXISTENT_R1078_FIXTURE").replace("\\", "/")
+    full = [
+        "-F", "NUL", "-G", "-T", "-o", 'UserKnownHostsFile="' + known + '"',
+        "-o", "GlobalKnownHostsFile=NUL",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "HostKeyAlgorithms=ecdsa-sha2-nistp256",
+        "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
+        "-o", "PreferredAuthentications=publickey", "-o", "HostbasedAuthentication=no",
+        "-o", "GSSAPIAuthentication=no", "-o", "UpdateHostKeys=no",
+        "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes",
+        "-o", "IdentityAgent=none", "-o", "ClearAllForwardings=yes",
+        "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
+        "-o", "PermitLocalCommand=no", "-o", "KnownHostsCommand=none",
+        "-o", "ProxyCommand=none", "-o", "ProxyJump=none",
+        "-o", "CanonicalizeHostname=no", "-o", "ConnectionAttempts=1",
+        "-o", "ConnectTimeout=7", "-o", "ServerAliveInterval=10",
+        "-o", "ServerAliveCountMax=2", dest
+    ]
+    minimal = ["-F", "NUL", "-G", dest]
+    stripped = {"SystemRoot": systemroot}
+    profile = dict(stripped)
+    for name in ("USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA"):
+        if name in os.environ:
+            profile[name] = os.environ[name]
+    matrix = {}
+    for label, arguments, env in (
+        ("normal_min", minimal, dict(os.environ)),
+        ("clean_min", minimal, stripped),
+        ("normal_full", full, dict(os.environ)),
+        ("clean_full", full, stripped),
+        ("profile_full", full, profile),
+    ):
+        result = subprocess.run(
+            [str(ssh), *arguments],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=10, env=env
+        )
+        matrix[label] = "PASS" if result.returncode == 0 else "STOP"
+    # Never print stdout/stderr from the native SSH process.
+    assert all(value == "PASS" for value in matrix.values()), matrix
