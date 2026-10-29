@@ -203,7 +203,7 @@ def check_post_route(item, route, inventory_digest, trust, now, all_attempts, al
         all_attempts.add(attempt); all_nonces.add(nonce)
 
 
-def check_gate(gate, e, evidence, packets, trust, now):
+def check_gate(gate, e, evidence, packets, trust, now, *, preservation_session=None):
     """Strict evidence contracts; booleans only count inside authenticated packets."""
     if gate == "G0":
         shape(e, "scope_complete unrelated_hosts_excluded source_artifact identity_digest roots_digest")
@@ -289,8 +289,23 @@ def check_gate(gate, e, evidence, packets, trust, now):
             zero(e[name])
         digest(e["barrier_digest"])
         # Authorize the fixed barrier plan before acquisition, not hindsight facts.
+        approval_time = now
+        if preservation_session is not None:
+            # R1089 streaming can exceed a release assessment's 15-minute TTL.
+            # A separately signed, bounded owner session permits continuing an
+            # ALREADY authorized fence. Fresh independent G4 renewal, zero FDs,
+            # same barrier/epoch and the runtime kernel checks remain required.
+            # evaluate()/release gates never supply this optional session.
+            shape(preservation_session, "approval binding")
+            session = verify(preservation_session["approval"], "owner", trust)
+            shape(session, "action context binding approved_at expires_at")
+            need(session["action"] == "preserve_restore" and session["context"] == trust.context
+                 and session["binding"] == digest(preservation_session["binding"]), "APPROVAL_BINDING")
+            need(integer(session["approved_at"]) <= now < integer(session["expires_at"])
+                 <= session["approved_at"] + 14400, "APPROVAL_EXPIRED")
+            approval_time = e["fence_start"]
         authorization(e["approval"], "fence", sha({"barrier_digest": e["barrier_digest"],
-                                                  "coverage": e["coverage"]}), trust, now)
+                                                  "coverage": e["coverage"]}), trust, approval_time)
         need(e["approval"]["body"]["approved_at"] <= e["fence_start"], "APPROVAL_ORDER")
     elif gate == "G5":
         shape(e, "inventory_complete inventory_digest routes")

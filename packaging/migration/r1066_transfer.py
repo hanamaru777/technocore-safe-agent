@@ -94,6 +94,16 @@ def read_blocks(path, before):
 def census(app, state, source_head):
     need(source_head == HEAD, "SOURCE_HEAD_STOP")
     roots = {"app": offline_source(app), "state": offline_source(state)}
+    return _census_roots(roots, source_head)
+
+
+def _census_roots(roots, source_head, *, epoch="PROVISIONAL_UNFENCED"):
+    """Shared byte inventory; live callers must independently hold admission.
+
+    The public census/CLI continue to enforce offline_source. R1089 supplies
+    only the two fixed original roots after signed and kernel fence checks.
+    """
+    need(source_head == HEAD and set(roots) == {"app", "state"}, "SOURCE_HEAD_STOP")
     need(roots["app"] != roots["state"] and not any(a in b.parents for a, b in
          ((roots["app"], roots["state"]), (roots["state"], roots["app"]))), "ROOT_OVERLAP")
     rows, identities, links = [], {}, {}
@@ -126,7 +136,7 @@ def census(app, state, source_head):
                 visit(child, name + "/" + child.name, depth + 1)
     for name, path in roots.items():
         visit(path, name, 0)
-    manifest = {"version": 1, "source_head": source_head, "epoch": "PROVISIONAL_UNFENCED", "entries": rows}
+    manifest = {"version": 1, "source_head": source_head, "epoch": epoch, "entries": rows}
     need(len(G.canonical(manifest)) <= MAX_MANIFEST, "MANIFEST_BOUND")
     return roots, manifest, identities
 
@@ -136,14 +146,15 @@ def resolve_source(roots, name):
     return roots[first].joinpath(*tail)
 
 
-def pack(roots, manifest, identities):
+def pack(roots, manifest, identities, *, recensus=None):
     raw = G.canonical(manifest)
     yield len(raw).to_bytes(8, "big") + raw
     for row in manifest["entries"]:
         if row["kind"] == "file":
             yield from read_blocks(resolve_source(roots, row["path"]), identities[row["path"]])
     # Re-enumeration detects new/deleted files and directory/link drift too.
-    _, current, again = census(roots["app"], roots["state"], HEAD)
+    _, current, again = (census(roots["app"], roots["state"], HEAD) if recensus is None
+                         else recensus())
     need(current == manifest and again == identities, "SOURCE_TREE_DRIFT")
 
 
@@ -191,13 +202,23 @@ def seal(app, state, archive, recovery, *, source_head):
 def decrypt(archive, recovery):
     """R1001 authenticated ordered stream, bounded to one 1MiB plaintext chunk."""
     archive = private_dir(archive)
-    with C.open_regular(archive, "header.bin", C.HEADER.size) as f:
+    yield from _decrypt_regular(archive, recovery,
+                               lambda name, limit: C.open_regular(archive, name, limit))
+
+
+def _decrypt_regular(archive, recovery, open_regular):
+    """Same frozen crypto decoder with a platform-specific custody reader.
+
+    R1089's Windows caller holds non-write/non-delete-shared NTFS handles and
+    validates R1088 ACLs. The public POSIX decoder/CLI guard is unchanged.
+    """
+    with open_regular("header.bin", C.HEADER.size) as f:
         hdr = f.read()
     need(len(hdr) == C.HEADER.size, "HEADER_STOP")
     magic, salt, aid, prefix, iterations, chunk = C.HEADER.unpack(hdr)
     need(magic == C.HEADER_MAGIC and iterations == C.ITERATIONS and chunk == CHUNK, "HEADER_STOP")
     aes, aad = C.AESGCM(C.key_for(recovery, salt)), hashlib.sha256(hdr).digest()
-    with C.open_regular(archive, "commit.bin", 256 * 1024) as f:
+    with open_regular("commit.bin", 256 * 1024) as f:
         raw = f.read()
     need(len(raw) > C.COMMIT_HEADER.size + 16, "INCOMPLETE_ARCHIVE")
     cmagic, length = C.COMMIT_HEADER.unpack(raw[:C.COMMIT_HEADER.size])
@@ -215,7 +236,7 @@ def decrypt(archive, recovery):
         need(row["name"] == f"part-{i:04d}.bin", "PART_ORDER_STOP")
         G.digest(row["sha256"]); G.integer(row["bytes"], 1, C.SHARD_LIMIT + 1024)
         part_hash, read = hashlib.sha256(), 0
-        with C.open_regular(archive, row["name"], C.SHARD_LIMIT + 1024) as f:
+        with open_regular(row["name"], C.SHARD_LIMIT + 1024) as f:
             h = C.exactly(f, C.PART_HEADER.size)
             need(C.PART_HEADER.unpack(h) == (C.PART_MAGIC, aid, i), "PART_HEADER_STOP")
             part_hash.update(h); read += len(h)

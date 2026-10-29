@@ -1,9 +1,12 @@
-# Windows PowerShell 5.1: owner-run READ-ONLY two-host preflight, not migration.
+# Windows PowerShell 5.1: default READ-ONLY preflight; explicit R1089 preservation
+# mode requires independently authenticated owner/fence evidence. Never cutover.
 # Independent enrollment must exist BEFORE any escrow prompt or SSH operation.
 param([string]$EnrollmentFile = '', [string]$EnrollmentSha256 = '',
     [switch]$StageCiphertext,
     [string]$SealedArchiveRoot = '',
-    [string]$ArchiveId = '')
+    [string]$ArchiveId = '',
+    [switch]$PreserveAndRestore,
+    [string]$PlanFile = '', [string]$PlanSha256 = '')
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $script:R1066Root = $PSScriptRoot
@@ -196,6 +199,104 @@ function Invoke-R1066Ssh([string]$Executable, [string[]]$Arguments, [byte[]]$Inp
     return [FlopR1066.Transport]::Run($Executable, ($quoted -join ' '), $InputBytes, 58000)
 }
 
+function Invoke-R1089Migration([string]$Enrollment, [string]$EnrollmentDigest,
+                              [string]$PlanPath, [string]$PlanDigest) {
+    $directory=$null; $plain=$null; $code=$null; $recovery=$null; $result=$null
+    $failure='MIGRATION_GUARD_STOP'
+    try {
+        if (-not $PlanPath -or $PlanDigest -cnotmatch '\A[0-9a-f]{64}\z') { throw 'OWNER_APPROVAL_REQUIRED' }
+        Initialize-R1066
+        $e=Read-R1066Enrollment $Enrollment $EnrollmentDigest
+        Assert-R1027LocalPath $PlanPath
+        Assert-R1027Acl $PlanPath
+        $file=[IO.File]::Open($PlanPath,'Open','Read','Read')
+        try {
+            if ($file.Length -lt 100 -or $file.Length -gt 4194304) { throw 'PLAN_STOP' }
+            $bytes=New-Object byte[] ([int]$file.Length)
+            $at=0
+            while ($at -lt $bytes.Length) {
+                $n=$file.Read($bytes,$at,$bytes.Length-$at)
+                if ($n -le 0) { throw 'PLAN_STOP' }; $at+=$n
+            }
+        } finally { $file.Dispose() }
+        if ([FlopR1062.Guards]::Sha256($bytes) -cne $PlanDigest) { throw 'PLAN_STOP' }
+        $rawPlan=(New-Object Text.UTF8Encoding($false,$true)).GetString($bytes)
+        # Python's strict decoder validates the ORIGINAL bytes, including
+        # duplicate JSON keys, before ConvertFrom-Json is used for presentation.
+        $pins=Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1089_source_pins.json') '82a4e7972f3eb0a05d1000330c8a38623307fe9f'
+        $map=$pins | ConvertFrom-Json
+        foreach ($entry in $map.PSObject.Properties) {
+            $null=Read-R1066PinnedSource (Join-Path $script:R1066Root $entry.Name) $entry.Value
+        }
+        $native=[IO.File]::ReadAllText((Join-Path $script:R1066Root 'r1089_owner_control_pipe.cs'))
+        if (-not ('FlopR1089.OwnerPipe' -as [type])) { Add-Type -TypeDefinition $native }
+        $sink=[IO.File]::ReadAllText((Join-Path $script:R1066Root 'r1085_windows_offhost_sink.cs'))
+        if (-not ('FlopR1085.Sink' -as [type])) {
+            Add-Type -TypeDefinition $sink -ReferencedAssemblies @('System.dll','System.Core.dll','System.Security.dll')
+        }
+        $python=Join-Path $script:R1066Root '..\..\.venv\Scripts\python.exe'
+        if (-not [IO.File]::Exists($python)) { throw 'OWNER_PYTHON_REQUIRED' }
+        $program=Join-Path $script:R1066Root 'r1089_migration.py'
+        $validation='{"plan":'+$rawPlan+'}'
+        $checkArgs=@('-I','-B',$program,'--check-plan') | ForEach-Object { [FlopR1062.Guards]::Quote($_) }
+        $checked=[FlopR1089.OwnerPipe]::Run($python,($checkArgs -join ' '),[Text.Encoding]::UTF8.GetBytes($validation),$null,60000)
+        if ($checked.ExitCode -ne 0) { throw 'SOURCE_ADMISSION_REQUIRED' }
+        if ([Text.Encoding]::ASCII.GetString($checked.Output).Trim() -cne '{"operation":"OWNER_SESSION_VERIFIED","cutover":"NO_GO"}') {
+            throw 'PLAN_STOP'
+        }
+        $plan=$rawPlan | ConvertFrom-Json
+        $archive=Join-Path $plan.offhost_parent $plan.run_id
+        $required=[long]$plan.quota_bytes
+        if ([IO.Directory]::Exists($archive)) { $required=0 }
+        [FlopR1085.Sink]::AdmitExistingParent($plan.offhost_parent,$required)
+        $ssh=Join-Path ([Environment]::GetFolderPath('System')) 'OpenSSH\ssh.exe'
+        if (-not [IO.File]::Exists($ssh)) { throw 'SSH_UNAVAILABLE' }
+        # No archive, recovery input or source SSH until BOTH public approval
+        # domains and real local private capacity have passed.
+        $recovery=Read-Host 'Independent ARCHIVE recovery code (at least 32 UTF-8 bytes; NOT DID seed)' -AsSecureString
+        $encrypted=Read-R1027Backup
+        $code=Read-Host 'R987 V2 recovery code (OCI SSH only)' -AsSecureString
+        try { $plain=Unprotect-R1027 $encrypted $code } finally { $code.Dispose(); $code=$null }
+        if ([FlopR1062.Guards]::Sha256($plain) -cne $e.oci.credential_sha256) { throw 'OCI_CREDENTIAL_STOP' }
+        $directory=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Temp\flop-r1089-'+[Guid]::NewGuid().ToString('N'))
+        New-R1027Custody $directory
+        $ociKey=Write-R1027Key $directory $plain
+        [FlopR1062.Guards]::Clear($plain); $plain=$null
+        $hosts=@{}
+        foreach ($role in @('oci','k137')) {
+            $hosts[$role]=Join-Path $directory ($role+'-known-hosts')
+            [IO.File]::WriteAllText($hosts[$role],($e.$role.host+' '+$e.$role.host_key+"`n"),[Text.Encoding]::ASCII)
+        }
+        $rest=[ordered]@{endpoints=$e;ssh=$ssh;oci_key=$ociKey;oci_hosts=$hosts['oci'];k137_hosts=$hosts['k137']} | ConvertTo-Json -Depth 10 -Compress
+        $control='{"plan":'+$rawPlan+','+$rest.Substring(1)
+        $argsForOwner=@('-I','-B',$program,'--owner') | ForEach-Object { [FlopR1062.Guards]::Quote($_) }
+        $answer=[FlopR1089.OwnerPipe]::Run($python,($argsForOwner -join ' '),[Text.Encoding]::UTF8.GetBytes($control),$recovery,14400000)
+        $public=[Text.Encoding]::ASCII.GetString($answer.Output) | ConvertFrom-Json
+        if ($public.task -cne 'R1089' -or $public.cutover -cne 'NO_GO' -or
+            $public.oci_retirement -cne 'STRICT_NO_GO') { throw 'REPORT_STOP' }
+        if ($answer.ExitCode -eq 0 -and $public.operation -ceq 'PRESERVED_AND_DISARMED_RESTORED') { $result=$public }
+        elseif ($public.operation -ceq 'BLOCKED' -and $public.code -cmatch '\A[A-Z_]{3,60}\z') { $failure=$public.code }
+    } catch {
+        if (@('OWNER_APPROVAL_REQUIRED','SOURCE_ADMISSION_REQUIRED','PLAN_STOP','OWNER_PYTHON_REQUIRED',
+              'OCI_CREDENTIAL_STOP','SSH_UNAVAILABLE') -ccontains $_.Exception.Message) { $failure=$_.Exception.Message }
+    } finally {
+        if ($null -ne $plain) { [Array]::Clear($plain,0,$plain.Length) }
+        if ($null -ne $code) { $code.Dispose() }
+        if ($null -ne $recovery) { $recovery.Dispose() }
+        if ($null -ne $directory) {
+            try {
+                foreach ($name in @('oci-known-hosts','k137-known-hosts')) {
+                    $p=Join-Path $directory $name
+                    if ([IO.File]::Exists($p)) { [IO.File]::Delete($p) }
+                }
+                Remove-R1027Custody $directory
+            } catch { $result=$null; $failure='CLEANUP_STOP' }
+        }
+    }
+    if ($null -ne $result) { return $result }
+    return [ordered]@{task='R1089';operation='BLOCKED';code=$failure;cutover='NO_GO';oci_retirement='STRICT_NO_GO'}
+}
+
 
 function Assert-R1066StageIntent([bool]$Enabled, [string]$Source, [string]$Id) {
     if (-not $Enabled) {
@@ -369,6 +470,16 @@ function Invoke-R1066Workflow([string]$Path, [string]$Digest,
 
 if ($args.Count -ne 0) {
     Write-Output '{"operation":"blocked","code":"ARGUMENTS_STOP","oci_retirement":"STRICT_NO_GO"}'
+    exit 42
+}
+if ($PreserveAndRestore) {
+    if ($StageCiphertext -or $SealedArchiveRoot -or $ArchiveId) {
+        Write-Output '{"operation":"BLOCKED","code":"MUTUALLY_EXCLUSIVE_MODES"}'
+        exit 42
+    }
+    $report=Invoke-R1089Migration $EnrollmentFile $EnrollmentSha256 $PlanFile $PlanSha256
+    Write-Output ($report | ConvertTo-Json -Depth 5 -Compress)
+    if ($report.operation -ceq 'PRESERVED_AND_DISARMED_RESTORED') { exit 0 }
     exit 42
 }
 $report = Invoke-R1066Workflow $EnrollmentFile $EnrollmentSha256 ([bool]$StageCiphertext) $SealedArchiveRoot $ArchiveId

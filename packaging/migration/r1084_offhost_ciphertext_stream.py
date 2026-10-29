@@ -149,6 +149,15 @@ def seal_offline_to_stream(app, state, recovery, output, *, source_head):
     independent review, owner approval and proven fenced acquisition.
     """
     roots, manifest, identities = T.census(app, state, source_head)
+    return seal_manifest_to_stream(roots, manifest, identities, recovery, output)
+
+
+def seal_manifest_to_stream(roots, manifest, identities, recovery, output, *, recensus=None):
+    """Reuse R1001 framing for an inventory held by a separately admitted caller.
+
+    No new live CLI/bypass: the ordinary entrypoint above remains offline-only.
+    The R1089 caller rechecks its signed lease/kernel fence during iteration.
+    """
     T.need(type(recovery) is bytes and len(recovery) >= 32, "RECOVERY_MISSING")
     salt, aid, prefix = os.urandom(16), os.urandom(16), os.urandom(4)
     hdr = C.HEADER.pack(C.HEADER_MAGIC, salt, aid, prefix, C.ITERATIONS, C.CHUNK_BYTES)
@@ -176,7 +185,7 @@ def seal_offline_to_stream(app, state, recovery, output, *, source_head):
         index += 1
 
     try:
-        for data in T.pack(roots, manifest, identities):
+        for data in T.pack(roots, manifest, identities, recensus=recensus):
             pending.extend(data)
             while len(pending) >= C.CHUNK_BYTES:
                 emit(bytes(pending[:C.CHUNK_BYTES]))
@@ -198,7 +207,7 @@ def seal_offline_to_stream(app, state, recovery, output, *, source_head):
         pending[:] = b"\x00" * len(pending)
     return {"operation": "CIPHERTEXT_STREAM_EMITTED_ONLY",
             "files": len(manifest["entries"]), "plaintext_bytes": total,
-            "source_epoch": "PROVISIONAL_UNFENCED", "restore": "NOT_PERFORMED",
+            "source_epoch": manifest["epoch"], "restore": "NOT_PERFORMED",
             "cutover": "NO_GO", "oci_retirement": "STRICT_NO_GO"}
 
 

@@ -1,5 +1,154 @@
 # R1066 executable preservation components — PARTIAL, CUTOVER BLOCKED
 
+## R1089: integrated owner preservation / disarmed restoration
+
+R1089 connects the existing components, rather than requiring a user to wire
+binary pipes manually. This section supersedes the older component-only
+limitations below **only for this explicit mode**. The default command is still
+the original read-only preflight. No live migration has been executed or proven.
+
+The owner-only invocation, after the prerequisites below have been independently
+established and the operation separately authorized, is:
+
+```powershell
+.\packaging\migration\r1066_owner_workflow.ps1 -PreserveAndRestore -EnrollmentFile C:\PRIVATE\r1066-enrollment.json -EnrollmentSha256 INDEPENDENT_ENROLLMENT_SHA256 -PlanFile C:\PRIVATE\r1089-plan.json -PlanSha256 INDEPENDENT_PLAN_SHA256
+```
+
+Do not run this using synthetic tests, historical inventory, self-asserted PASS
+flags or a plan received from either host as authorization. No credential,
+archive recovery code, seed, hostname or personal path belongs in GitHub.
+
+### What executes, and in what order
+
+1. Verify the existing R987 custody helper and the complete R1089 public source
+   dependency map against canonical-LF Git blobs. Verify independent OCI/K137
+   enrollment, the owner-pinned plan, strict JSON, owner signature and R1063
+   G0/G1/G2/G4/**all five G5 routes**. Missing evidence stops before prompts or
+   SSH. This preservation-only subset is NOT a release assessment.
+2. Check an existing private owner/SYSTEM NTFS parent and physical archive quota
+   plus 1GiB. Hidden prompts accept an independent archive recovery code and
+   the existing R987 **V2 OCI-only** recovery code. No DID seed is requested.
+   Only the OCI key is temporarily decrypted with audited custody and cleanup;
+   K137 uses its independently enrolled existing credential.
+   A Windows kill-on-close Job Object contains the owner interpreter and its
+   descendants before control input; timeout/error cleanup kills the entire
+   tree before temporary SSH custody is removed, not only the Python parent.
+3. Strict pinned SSH, no inherited SSH config/agent/proxy/forwarding/password,
+   sends only hash-bound public code and memory-only control/recovery framing.
+   The source verifies the fixed original machine and Git HEAD, existing fresh
+   signed admission, both read-only roots and absence of writable/directory
+   source FDs. Unreadable/raced/oversized process evidence stops. It does NOT
+   manufacture a fence, stop services or claim that a `/proc` snapshot suffices.
+4. Inventory and re-inventory both complete original roots; bind **all non-SQLite
+   state** to independently reconciled G5 (all five routes, nonce/receipt/history,
+   verified DID). Compare actual verified DID and both read-only SQLite
+   integrity/cursors. Encrypt R1001 directly into R1084 binary framing, through
+   native pipes into the R1085 NTFS sink. No source-host 26GB staging archive,
+   plaintext offhost disk file or PowerShell object pipeline is used.
+5. Hold NTFS read handles that deny write/delete sharing, check R1088 custody,
+   then independently authenticate EVERY AEAD chunk/final commit, manifest and
+   file hash before sending any plaintext to K137. A source stream is not itself
+   backup proof. The `aead_verified` checkpoint is public metadata only.
+6. Check **current** K137 capacity (not the historical landing measurement).
+   Full restore needs original bytes + 1GiB SQLite allowance + 20GiB protected
+   TradeBot/OS headroom: for the consumed census, **48,532,197,224 bytes**.
+   Insufficient space leaves the independent authenticated backup intact and
+   stops; no deletion, compression credit, extra disk, paid resource or reserve
+   reduction. A matching partial restore precheck is explicitly NOT full
+   capacity proof: exact remaining-byte capacity is checked by the restorer.
+7. Second authenticated pass streams plaintext ONLY inside pinned SSH to the
+   fixed `/var/lib/flop-migration-r1066/disarmed/<run_id>` child. It runs as
+   existing UID1000 ubuntu in a transient 256MiB/64-task/50%-CPU sandbox with
+   read-only system/protected paths and sole permanent write allowance to the
+   existing migration landing. No ciphertext duplicate on K137, no modification
+   of `/opt/flop-shadow`, TradeBot or its units. The transient transfer process
+   is not an application service activation.
+8. Restore every regular file, internal hardlink and all recorded symlink
+   targets without following them. Absolute/upward links remain **inert** and
+   require activation review. Files remain 0600/directories 0700; original
+   modes/owners/paths/times remain in the encrypted manifest, not silently
+   applied to the shared host. Both SQLite/WAL/SHM copies remain byte-preserved
+   during read-only integrity checks. Source cursor mismatch prevents a
+   completion receipt. Exact counts, hashes and cursors are compared before
+   reporting a DISARMED restore; never runtime/signing/cutover success.
+
+The existing offhost Linux API and its live-source guard remain unchanged.
+Only the fixed R1089 source peer has the separate authenticated admission path.
+The immutable R1001 crypto and protected app/signer/runtime files are unchanged.
+Python cannot guarantee zeroing every immutable recovery-key copy; the trusted
+operator process holds it only for the bounded session, never argv/env/log/disk.
+
+### Admission is still an external, unproven prerequisite
+
+The private plan's exact schema is `schema_version`, `run_id` (32 lowercase hex),
+`offhost_parent`, `quota_bytes`, `expected_did`, `trust`, `packets`, `approval`.
+Trust is an independently enrolled public-key/role map plus the exact R1063
+campaign/source/destination/DID/source-HEAD/generation context; source keys
+cannot attest their own independent gates. Owner action `preserve_restore`
+signs the canonical hash of the plan without `approval`. Maximum session is
+four hours. Starting G0/G1/G2/G4/G5 must be fresh at owner approval, not old
+snapshots relabelled as current. No production attester keys are enrolled here.
+
+A separate approved admission holder must supply root-owned 0600
+`/run/flop-migration-r1089/admission.json` under root-owned 0700 parent. It is a
+current independent R1063 G4 signature bound to the SAME barrier and fence-start,
+renewed at most every 30s while streaming. The original barrier approval must
+precede that fence. The extended owner session does not extend the freshness
+of G4 or alter the normal R1063 release gate's 15-minute policy. Kernel read-only
+mount checks, bounded FD checks and full pre/post inventory remain mandatory.
+Directory or writable FDs, external hardlink aliases, unknown writers or a lost
+lease stop export. Root/admin is a trusted operator boundary.
+
+**This package does not create that all-writer barrier or its independent
+renewal producer.** Existing service/timer/cron/manual/unknown launch authority
+and five-route authoritative finality are not established by the completed
+inventories. Their live proof/approval is still missing. R1089 therefore cannot
+be run on production merely because the command or synthetic CI passes.
+No backup-before-stop exception or automatic source restart is implied.
+
+### Resume, failure and rollback
+
+- Public checkpoint is `r1089-<run_id>.json` beside, never inside, the immutable
+  ciphertext directory. No recovery material is stored there.
+- Interrupted encryption has no authenticated final commit: incomplete forever.
+  Do not reuse that archive/salt/nonce domain or overwrite it. Preserve it;
+  a separately approved fresh plan/run ID is required. Ciphertext-copy-only
+  resume remains available in the existing R1066 component; this live encryptor
+  never pretends it can resume an interrupted source encryption.
+- A completed archive is fully reauthenticated, never reacquired from a newer
+  source epoch. Partial inert restoration resumes the same manifest only;
+  compare every existing prefix before appending, reject extra files/aliases,
+  and reuse a completed receipt only after full content validation. No duplicate
+  activation, source rewrite, nonce reset or POST replay is possible here.
+- Capacity, authentication, SSH or lease failure leaves originals, completed
+  backup and partial inert target intact. No automatic deletion/free-space
+  cleanup. Operator must resolve a fence/session failure, not auto-resume
+  source writers while a destination could have become active.
+- Both remote interpreters must already provide the pinned public code's
+  Python/cryptography dependencies. OCI uses its existing application venv;
+  K137 uses system Python inside the sandbox. Missing imports report
+  `REMOTE_RUNTIME_REQUIRED`, not an implicit install or activation. Prefer a
+  fresh Windows PowerShell 5.1 process, not previously cached Add-Type classes.
+- After backup + disarmed restore, independently prove G3 using the existing
+  R1068 least-privilege Vault API-auth candidate (already provisioned auth only),
+  same original DID and all five routes. **No API credentials, IAM change or
+  five-route runtime portability is supplied/proven by this task.** Original
+  instance-principal signer is not rewritten. Frozen raw SQLite/WAL preservation
+  here is not automatically R1063 G6's independently attested common images.
+- For later separately approved cutover: require G0–G8, actual TradeBot acceptance,
+  reviewed original links/owners/dependencies, fresh finality and a nonoverlap
+  writer lease. Keep source data and offhost backup. Rollback must first fence
+  the destination, reconcile every attempted POST/nonce, then obtain authority
+  to resume exactly one source; never run both or replay an ambiguous attempt.
+  No generic start/rollback/delete executor is added while these facts are
+  unproven. OCI release requires a later independent approval after sustained
+  destination proof, zero remaining references and an accepted rollback window.
+
+Current release decision: **CUTOVER=NO_GO; OCI_RETIREMENT=STRICT_NO_GO**.
+No production SSH, archive, restore, IAM, signing or service action was executed
+while implementing this source. No incremental paid resources or CI artifacts
+are introduced. The sections below retain provenance of earlier components.
+
 Issue #905. Base `f2244967c6d0e0079ddd95eb38fd33baef3839f7`.
 This package performs real encrypted file preservation, ciphertext copying and
 independent disarmed restoration on an authorized **offhost Linux copy**.

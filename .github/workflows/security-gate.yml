@@ -40,6 +40,9 @@ jobs:
       - name: Sync locked dependencies
         run: uv sync --frozen --group dev --extra oracle-signer --extra discord
 
+      - name: R1089 targeted transport and preservation regression before full suite
+        run: uv run pytest -q tests/test_r1089_migration.py tests/test_r1063_release_gates.py tests/test_r1084_offhost_ciphertext_stream.py tests/test_r1086_k137_disarmed_stream_restore.py
+
       - name: Run tests
         run: uv run pytest -q
 
@@ -60,12 +63,20 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip install --disable-pip-version-check pytest==9.1.1
+          python -m pip install --disable-pip-version-check pytest==9.1.1 cryptography==50.0.1
           if ($LASTEXITCODE -ne 0) { throw 'PYTEST_INSTALL_STOP' }
           python -m pytest -q tests/test_r1066_preflight.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1066_TEST_STOP' }
           python -m pytest -q tests/test_r1085_windows_offhost_sink.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1085_TEST_STOP' }
           python -m pytest -q tests/test_r1088_windows_ciphertext_custody.py
           if ($LASTEXITCODE -ne 0) { throw 'R1066_TEST_STOP' }
+
+      - name: Test R1089 binary custody and authenticated owner transport offline
+        shell: powershell
+        run: |
+          python -m pytest -q tests/test_r1089_migration.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1089_TEST_STOP' }
 
       - name: Prove bootstrap remote shell source is LF-only
         shell: powershell

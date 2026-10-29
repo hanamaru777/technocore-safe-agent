@@ -18,7 +18,7 @@ try {
         $null=$sha.TransformBlock($prefix,0,$prefix.Length,$prefix,0)
         $null=$sha.TransformFinalBlock($bytes,0,$bytes.Length)
         $pin=[BitConverter]::ToString($sha.Hash).Replace('-','').ToLowerInvariant()
-        if ($pin -cne '661f8ce097aa50986d4f6847d0693edcd1531149') { throw 'SOURCE_PIN' }
+        if ($pin -cne '51140cf947b0b27d9e05d8b461229076151d9fe9') { throw 'SOURCE_PIN' }
     } finally { $sha.Dispose() }
     Add-Type -TypeDefinition $raw -ReferencedAssemblies @('System.dll','System.Core.dll','System.Security.dll') -ErrorAction Stop
     $inputStream=[Console]::OpenStandardInput()

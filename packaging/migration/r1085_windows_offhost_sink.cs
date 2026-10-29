@@ -64,6 +64,13 @@ public static class Sink {
       acl.AddAccessRule(new FileSystemAccessRule(id,FileSystemRights.FullControl,AccessControlType.Allow));
     return acl;
   }
+  public static void AdmitExistingParent(string parent,long requiredFreeBytes) {
+    Check(!String.IsNullOrEmpty(parent)&&Path.IsPathRooted(parent)&&requiredFreeBytes>=0,"PARENT");
+    Private(Path.GetFullPath(parent),Owner());
+    var drive=new DriveInfo(Path.GetPathRoot(parent));
+    Check(drive.IsReady&&drive.DriveFormat=="NTFS","NTFS_ONLY");
+    Check(drive.AvailableFreeSpace>=requiredFreeBytes+GIB,"OFFHOST_SPACE");
+  }
   public static string Receive(Stream input,string privateParent,string newFolder,long quota) {
     Check(input!=null && input.CanRead,"INPUT");
     Check(!String.IsNullOrEmpty(privateParent) && Path.IsPathRooted(privateParent),"PARENT");

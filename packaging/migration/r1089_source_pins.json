@@ -1,0 +1,17 @@
+{
+  "r1089_migration.py": "154e740c94144c942206d3be85310f31471c2d41",
+  "r1066_transfer.py": "edcc15602a039e8637718f6c757811f902b5974d",
+  "r1066_sealed_dependency.py": "f52bcea342cd5a08e7a0e9383d587404416d4785",
+  "r1063_release_gates.py": "8d63be178323c668265808f95978c105ea013ebf",
+  "r1084_offhost_ciphertext_stream.py": "9fffd287f928bb377caa37da2dd0d19b7920b06e",
+  "r1086_k137_disarmed_stream_restore.py": "fdfc97a473c565be72b5698b48f0c30dcbc322bb",
+  "r1066_ciphertext_ssh_relay.py": "0514e5d65c4236dfda83dfc2997e1bba14c6f8bd",
+  "../archive/r1052_offline_writer_route_contract.py": "8b8a6f1995749acf91812166211d7962f6d8f962",
+  "../archive/r1050_offhost_sixfile_audit.py": "8a50b42dc28493f521f269911032ef35e4824b59",
+  "../archive/verify-capture-backup-images.py": "8e4391d49cd2808a4b37cb12d791b0745a8f5aed",
+  "r1089_owner_control_pipe.cs": "f8d4d7f586a0cde53d1ffec06816869f47df0b11",
+  "r1085_windows_offhost_sink.cs": "51140cf947b0b27d9e05d8b461229076151d9fe9",
+  "r1085_windows_offhost_sink.ps1": "fba0720ad5a72b70514dc56ed43ec2b58297736e",
+  "r1088_windows_ciphertext_custody.cs": "16b9feffddb2339570593b588956bfaea3d496ba",
+  "r1088_windows_ciphertext_custody.ps1": "e3e83add415344b8c79c58709aa990728c4e6b05"
+}
