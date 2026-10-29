@@ -213,3 +213,43 @@ def test_no_write_authority_or_production_approval_from_reports():
     result = m.summary("archive", files=3017, bytes_count=20 * 1024**3)
     assert result["source_authority"] == "unknown" and result["cutover"] == "blocked"
     assert m.G.evaluate({"schema_version": 1, "packets": []}, now=2000000000)["cutover"] == "NO_GO"
+
+
+
+@POSIX
+def test_r1081_real_census_beyond_old_25000_object_ceiling(work):
+    """Actual local source traversal: measured OCI 30682 > obsolete 25000."""
+    root, app, state, _ = work
+    # Keep the fixture small in bytes; the case is metadata cardinality.
+    for i in range(25001):
+        (app / f"asset{i:05d}").touch()
+    roots, manifest, identities = m.census(app, state, m.HEAD)
+    assert m.MAX_ARCHIVE_ENTRIES == 100000
+    assert m.MAX_ARCHIVE_DEPTH == 48
+    assert len(manifest["entries"]) > 25000
+    assert len(manifest["entries"]) == len(identities)
+    assert {row["path"] for row in manifest["entries"]} == set(identities)
+    assert "state" in roots and "app" in roots
+    assert len(m.G.canonical(manifest)) <= m.MAX_MANIFEST
+
+
+@POSIX
+def test_r1081_archive_census_still_stops_at_finite_entry_and_depth_limits(work, monkeypatch):
+    root, app, state, _ = work
+    monkeypatch.setattr(m, "MAX_ARCHIVE_ENTRIES", 4)
+    with pytest.raises(m.Stop, match="CENSUS_BOUND"):
+        m.census(app, state, m.HEAD)
+    monkeypatch.setattr(m, "MAX_ARCHIVE_ENTRIES", 100000)
+    monkeypatch.setattr(m, "MAX_ARCHIVE_DEPTH", 0)
+    with pytest.raises(m.Stop, match="CENSUS_BOUND"):
+        m.census(app, state, m.HEAD)
+
+
+def test_r1081_no_production_writer_or_plaintext_backup_authority():
+    text=FILE.read_text()
+    assert "MAX_ARCHIVE_ENTRIES = 100000" in text
+    assert "MAX_ARCHIVE_DEPTH = 48" in text
+    assert "len(rows) < MAX_ARCHIVE_ENTRIES" in text
+    assert 'len(m["entries"]) <= MAX_ARCHIVE_ENTRIES' in text
+    assert "PROVISIONAL_UNFENCED" in text
+    assert "LIVE_SOURCE_FENCE_UNPROVEN" in text
