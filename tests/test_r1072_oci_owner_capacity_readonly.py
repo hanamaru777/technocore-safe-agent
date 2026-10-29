@@ -205,3 +205,44 @@ def test_empty_local_secret_is_rejected_before_decrypt_and_redacted():
     assert source.index("$stage='LOCAL_CODE_EMPTY'") < source.index(
         "$plain=Unprotect-R1027 $encrypted $code")
     assert "Write-Output $code" not in source
+
+
+
+def test_r1079_bootstrap_all_source_pins_match_immutable_git_blobs():
+    """Prevent an R1079 carrier refresh with a stale owner-internal pin.
+
+    Strict checks are intentionally not weakened to fix a mismatched source.
+    """
+    import hashlib
+    import re
+
+    root = ROOT
+    bootstrap = (root/"packaging/windows/r1072_owner_public_bootstrap.ps1").read_text()
+    owner = OWNER.read_text()
+    rows = re.findall(
+        r"@\{path='([^']+)';blob='([0-9a-f]{40})'\}",
+        bootstrap)
+    assert len(rows) == 6
+    assert len(set(path for path, _ in rows)) == 6
+
+    pinned = {}
+    for path, advertised in rows:
+        content = (root/path).read_bytes()
+        assert 10 <= len(content) <= 65536
+        check = hashlib.sha1(
+            b"blob " + str(len(content)).encode("ascii") + b"\0" + content
+        ).hexdigest()
+        assert advertised == check, path
+        pinned[path] = advertised
+
+    controller = "packaging/migration/r1072_oci_owner_capacity_readonly.ps1"
+    carrier = "packaging/migration/r1079_profile_ssh_transport.cs"
+    assert controller in pinned and carrier in pinned
+    assert pinned[carrier] in owner
+    assert re.search(
+        r"r1079_profile_ssh_transport\.cs'\s*\)\s*'"+pinned[carrier]+r"'",
+        owner)
+    assert "Read-R1066PinnedSource" in owner
+    assert "Initialize-R1066" in owner
+    assert "FlopR1079.Transport" in owner
+    assert "FlopR1075.Transport]::Run" not in owner
