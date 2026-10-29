@@ -7,63 +7,9 @@ using System.IO;
 using System.Text;
 using System.Threading;
 namespace FlopR1073 {
-    public sealed class Result {
-        public int ExitCode; public byte[] Output;
-        // Only a fixed taxonomy; no native stderr text or key path escapes.
-        public string FailureKind;
-    }
+    public sealed class Result { public int ExitCode; public byte[] Output; }
     public static class Transport {
         private static readonly object LaunchLock = new object();
-        private static bool Contains(byte[] data, string literal) {
-            var value = Encoding.ASCII.GetBytes(literal.ToLowerInvariant());
-            try {
-                for (int i = 0; i <= data.Length - value.Length; i++) {
-                    bool found = true;
-                    for (int j = 0; j < value.Length; j++) {
-                        int b = data[i + j];
-                        if (b >= 65 && b <= 90) b += 32;
-                        if (b != value[j]) { found = false; break; }
-                    }
-                    if (found) return true;
-                }
-                return false;
-            } finally { Array.Clear(value, 0, value.Length); }
-        }
-        public static string Classify(byte[] stderr) {
-            if (stderr == null || stderr.Length == 0 || stderr.Length > 8192)
-                return "SSH_UNKNOWN";
-            if (Contains(stderr, "bad configuration option") ||
-                Contains(stderr, "unsupported option") ||
-                Contains(stderr, "bad ssh2") ||
-                Contains(stderr, "keyword ") && Contains(stderr, "unknown"))
-                return "SSH_OPTION_REJECTED";
-            if (Contains(stderr, "host key verification failed") ||
-                Contains(stderr, "remote host identification has changed") ||
-                Contains(stderr, "no matching host key") ||
-                Contains(stderr, "host key is not cached"))
-                return "SSH_HOSTKEY_REJECTED";
-            if (Contains(stderr, "unprotected private key file") ||
-                Contains(stderr, "bad permissions") ||
-                Contains(stderr, "invalid format") ||
-                Contains(stderr, "error in libcrypto") ||
-                Contains(stderr, "identity file") && Contains(stderr, "not accessible") ||
-                Contains(stderr, "load key") && Contains(stderr, "invalid"))
-                return "SSH_IDENTITY_UNREADABLE";
-            if (Contains(stderr, "permission denied (publickey") ||
-                Contains(stderr, "no more authentication methods"))
-                return "SSH_PUBLIC_KEY_REJECTED";
-            if (Contains(stderr, "timed out") ||
-                Contains(stderr, "connection refused") ||
-                Contains(stderr, "network is unreachable") ||
-                Contains(stderr, "no route to host") ||
-                Contains(stderr, "could not resolve hostname"))
-                return "SSH_CONNECTIVITY_REJECTED";
-            if (Contains(stderr, "connection closed") ||
-                Contains(stderr, "connection reset") ||
-                Contains(stderr, "kex_exchange_identification"))
-                return "SSH_REMOTE_CLOSED";
-            return "SSH_UNKNOWN";
-        }
         // No shell, inherited credentials, unbounded ReadToEnd, stderr disclosure
         // or automatic retries. Caller pins executable, arguments and source.
         public static Result Run(string executable, string arguments, byte[] input, int timeout) {
@@ -73,7 +19,7 @@ namespace FlopR1073 {
             start.RedirectStandardInput = start.RedirectStandardOutput = start.RedirectStandardError = true;
             start.EnvironmentVariables.Clear();
             start.EnvironmentVariables["SystemRoot"] = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-            using (var p = new Process()) using (var output = new MemoryStream()) using (var stderr = new MemoryStream()) {
+            using (var p = new Process()) using (var output = new MemoryStream()) {
                 p.StartInfo = start;
                 int failed = 0, writerFailed = 0; bool started = false;
                 Thread writer = null, reader = null, errors = null;
@@ -106,10 +52,6 @@ namespace FlopR1073 {
                         byte[] b = new byte[2048]; int n, total = 0;
                         try { while ((n = p.StandardError.BaseStream.Read(b, 0, b.Length)) > 0) {
                             total += n; if (total > 65536) { Interlocked.Exchange(ref failed, 1); p.Kill(); return; }
-                            if (stderr.Length < 8192) {
-                                int available = (int)(8192 - stderr.Length);
-                                stderr.Write(b, 0, Math.Min(n, available));
-                            }
                         }} catch { Interlocked.Exchange(ref failed, 1); }
                         finally { Array.Clear(b, 0, b.Length); }
                     });
@@ -119,18 +61,8 @@ namespace FlopR1073 {
                     if (!writer.Join(2000) || !reader.Join(2000) || !errors.Join(2000) ||
                         failed != 0 || (writerFailed != 0 && p.ExitCode == 0))
                         throw new Exception("IO");
-                    byte[] redacted = stderr.ToArray();
-                    try {
-                        return new Result { ExitCode = p.ExitCode,
-                            Output = output.ToArray(),
-                            FailureKind = p.ExitCode == 255 ? Classify(redacted) : "SSH_NA" };
-                    } finally { Array.Clear(redacted, 0, redacted.Length); }
+                    return new Result { ExitCode = p.ExitCode, Output = output.ToArray() };
                 } finally {
-                    // Clear the bounded diagnostic capture regardless of exit status.
-                    if (stderr.Length > 0) {
-                        var backing = stderr.GetBuffer();
-                        Array.Clear(backing, 0, backing.Length);
-                    }
                     if (started && !p.HasExited) { p.Kill(); if (!p.WaitForExit(3000)) throw new Exception("CLEANUP"); }
                     foreach (var t in new[] {writer, reader, errors})
                         if (t != null && t.IsAlive && !t.Join(3000)) throw new Exception("CLEANUP");
