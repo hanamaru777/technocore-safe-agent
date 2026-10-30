@@ -34,9 +34,9 @@ def fake_host(monkeypatch,tmp_path):
         if argv[0]=="/usr/bin/git":
             return (M.HEAD+"\n").encode()
         if "list-unit-files" in argv:
-            return json.dumps([{"unit_file":n} for n in present]).encode()
+            return "\n".join(f"{n} enabled enabled" for n in present).encode()
         if "list-units" in argv:
-            return json.dumps([{"unit":n} for n in loaded]).encode()
+            return "\n".join(f"{n} loaded active running" for n in loaded).encode()
         if "show" in argv:
             name=argv[-1]
             p={k:"" for k in M.PROPS}
@@ -101,7 +101,9 @@ def test_r1112_has_no_original_writer_or_external_post_side_effect():
     assert all(x not in source for x in forbidden)
     assert "HEAD=" in source and "g5_finality" in source
     assert "STRICT_NO_GO" in source
-    assert "R1102" not in source
+    assert "R1102" not in source or "previously proven R1102" in source
+    assert '"--output=json"' not in source
+    assert '"--all","show"' in source
 
 
 def test_windows_wrapper_reuses_existing_strict_r987_readonly_transport():
@@ -137,10 +139,7 @@ def test_unrelated_linux_device_units_do_not_invalidate_flop_census(monkeypatch,
     def with_unrelated(argv,deadline):
         raw=original(argv,deadline)
         if "list-unit-files" in argv:
-            rows=json.loads(raw)
-            rows.append({"unit_file":"sys-devices-virtual-block-loop0.device"})
-            rows.append({"unit_file":"sys-kernel-debug.mount"})
-            return json.dumps(rows).encode()
+            return raw+b"\nsys-devices-virtual-block-loop0.device loaded\nsys-kernel-debug.mount loaded"
         return raw
     monkeypatch.setattr(M,"read_command",with_unrelated)
     result=M.witness()
@@ -155,9 +154,7 @@ def test_unrecognized_source_scoped_unit_extension_fails_closed(monkeypatch,tmp_
     def with_unknown(argv,deadline):
         raw=original(argv,deadline)
         if "list-unit-files" in argv:
-            rows=json.loads(raw)
-            rows.append({"unit_file":"technocore-safe-agent-unknown.device"})
-            return json.dumps(rows).encode()
+            return raw+b"\ntechnocore-safe-agent-unknown.device loaded"
         return raw
     monkeypatch.setattr(M,"read_command",with_unknown)
     with pytest.raises(M.Stop):
