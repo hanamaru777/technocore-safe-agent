@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "security/**"
+      - "codex/r1107-full-migration-readiness-onepass-v1"
   pull_request:
 
 permissions:
@@ -41,7 +42,12 @@ jobs:
         run: uv sync --frozen --group dev --extra oracle-signer --extra discord
 
       - name: R1089 targeted transport and preservation regression before full suite
+        if: github.ref != 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
         run: uv run pytest -q tests/test_r1089_migration.py tests/test_r1063_release_gates.py tests/test_r1084_offhost_ciphertext_stream.py tests/test_r1086_k137_disarmed_stream_restore.py
+
+      - name: R1107 targeted gates and directly reused regression before single full suite
+        if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
+        run: uv run pytest -q tests/test_r1107_readiness.py tests/test_r1103_g5_receipt_consistency.py tests/test_r1104_g1g4_coverage_consistency.py tests/test_r1106_technocore_export_readonly.py
 
       - name: Run tests
         run: uv run pytest -q
@@ -77,6 +83,20 @@ jobs:
         run: |
           python -m pytest -q tests/test_r1089_migration.py
           if ($LASTEXITCODE -ne 0) { throw 'R1089_TEST_STOP' }
+
+      - name: Test R1107 native PS5.1 dry-run gate without hosts or secrets
+        if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check httpx==0.28.1
+          if ($LASTEXITCODE -ne 0) { throw 'READONLY_TEST_DEPENDENCY_STOP' }
+          if (-not (Test-Path '.venv\Scripts\python.exe')) {
+            python -m venv --system-site-packages .venv
+            if ($LASTEXITCODE -ne 0) { throw 'LOCAL_TEST_ENV_STOP' }
+          }
+          $env:PYTHONPATH = 'src'
+          python -m pytest -q tests/test_r1107_readiness.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1107_TEST_STOP' }
 
       - name: Prove bootstrap remote shell source is LF-only
         shell: powershell
