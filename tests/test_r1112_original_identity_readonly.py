@@ -129,3 +129,36 @@ def test_windows_wrapper_pins_exact_guest_git_blob():
     assert "commit='0917c3ee4729c32894f350e2e033a9adc23cf1cb'" in ps
     assert "r1062_writer_attribution_one_shot_readonly.ps1" in ps
     assert "$script:SourcesCommit='b46d766bb165477a16d5a77ee204fc7bb5982725'" in ps
+
+
+def test_unrelated_linux_device_units_do_not_invalidate_flop_census(monkeypatch,tmp_path):
+    fake_host(monkeypatch,tmp_path)
+    original=M.read_command
+    def with_unrelated(argv,deadline):
+        raw=original(argv,deadline)
+        if "list-unit-files" in argv:
+            rows=json.loads(raw)
+            rows.append({"unit_file":"sys-devices-virtual-block-loop0.device"})
+            rows.append({"unit_file":"sys-kernel-debug.mount"})
+            return json.dumps(rows).encode()
+        return raw
+    monkeypatch.setattr(M,"read_command",with_unrelated)
+    result=M.witness()
+    assert result["expected"]==27
+    assert result["recognized"]==19
+    assert result["extras"]==11
+
+
+def test_unrecognized_source_scoped_unit_extension_fails_closed(monkeypatch,tmp_path):
+    fake_host(monkeypatch,tmp_path)
+    original=M.read_command
+    def with_unknown(argv,deadline):
+        raw=original(argv,deadline)
+        if "list-unit-files" in argv:
+            rows=json.loads(raw)
+            rows.append({"unit_file":"technocore-safe-agent-unknown.device"})
+            return json.dumps(rows).encode()
+        return raw
+    monkeypatch.setattr(M,"read_command",with_unknown)
+    with pytest.raises(M.Stop):
+        M.witness()
