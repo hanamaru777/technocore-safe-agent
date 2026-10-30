@@ -223,7 +223,7 @@ function Invoke-R1089Migration([string]$Enrollment, [string]$EnrollmentDigest,
         $rawPlan=(New-Object Text.UTF8Encoding($false,$true)).GetString($bytes)
         # Python's strict decoder validates the ORIGINAL bytes, including
         # duplicate JSON keys, before ConvertFrom-Json is used for presentation.
-        $pins=Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1089_source_pins.json') 'cc7de9f2fe5b6a93445281092721b18e035d98b9'
+        $pins=Read-R1066PinnedSource (Join-Path $script:R1066Root 'r1089_source_pins.json') 'a460177f3014a9cc0403e6d2ab18d4d54ff75992'
         $map=$pins | ConvertFrom-Json
         foreach ($entry in $map.PSObject.Properties) {
             $null=Read-R1066PinnedSource (Join-Path $script:R1066Root $entry.Name) $entry.Value

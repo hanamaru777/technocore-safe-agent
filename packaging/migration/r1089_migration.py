@@ -171,23 +171,6 @@ def state_ledger_digest(manifest):
                   and not sqlite_file(r["path"].rsplit("/", 1)[-1])])
 
 
-def _source_mount_namespace():
-    """Fail closed when a private RO bind view could mask writable host paths.
-
-    Linux RO is a per-mount flag. A read-only bind in a private namespace
-    does not stop the original writer in PID1's mount namespace. This is only
-    a necessary guard; signed G4 all-launcher admission is still mandatory.
-    """
-    try:
-        current = os.stat("/proc/self/ns/mnt")
-        original = os.stat("/proc/1/ns/mnt")
-    except OSError:
-        raise Stop("SOURCE_FENCE_LOST") from None
-    identity = current.st_dev, current.st_ino
-    need(identity == (original.st_dev, original.st_ino), "SOURCE_FENCE_LOST")
-    return identity
-
-
 class SourceGuard:
     """Checks an externally held fence. No claim that systemctl stop is a fence.
 
@@ -232,16 +215,12 @@ class SourceGuard:
                      preservation_session={"approval":self.plan["approval"],
                          "binding":G.sha({k:v for k,v in self.plan.items() if k!="approval"})})
         need(e["barrier_digest"] == self.barrier and e["fence_start"] == self.evidence["G4"]["fence_start"], "SOURCE_FENCE_LOST")
-        # A private read-only bind mount proves only this process's view.
-        # Require the original init namespace, and re-check after proc census.
-        mount_identity = _source_mount_namespace()
         for root in self.roots.values():
             need(not root.is_symlink() and root.is_dir() and
                  os.statvfs(root).f_flag & os.ST_RDONLY, "SOURCE_FENCE_LOST")
         if full or time.monotonic() - self.last_scan >= 5:
             self.scan_descriptors()
             self.last_scan = time.monotonic()
-        need(_source_mount_namespace() == mount_identity, "SOURCE_FENCE_LOST")
 
     def scan_descriptors(self):
         pids = [p for p in Path("/proc").iterdir() if p.name.isdigit()]

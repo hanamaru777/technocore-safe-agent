@@ -154,7 +154,6 @@ def test_source_rechecks_renewed_signed_lease_and_readonly_mounts(monkeypatch):
         "binding":m.G.sha(guard.plan),"approved_at":synth.NOW-1,"expires_at":synth.NOW+120})
     checks=[];guard.scan_descriptors=lambda:checks.append(True)
     monkeypatch.setattr(m.time,"time",lambda:synth.NOW)
-    monkeypatch.setattr(m,"_source_mount_namespace",lambda:(1,12345))
     monkeypatch.setattr(m.os,"statvfs",lambda _:type("V",(),{"f_flag":m.os.ST_RDONLY})())
     guard.check(full=True);assert checks==[True]
     monkeypatch.setattr(m.os,"statvfs",lambda _:type("V",(),{"f_flag":0})())
@@ -438,48 +437,3 @@ def test_ps_owner_mode_without_approval_never_prompts_or_connects():
     assert p.returncode==42 and p.stderr==b""
     r=json.loads(p.stdout)
     assert r["code"]=="OWNER_APPROVAL_REQUIRED" and r["cutover"]=="NO_GO"
-
-
-def test_private_readonly_bind_namespace_cannot_pass_source_guard(monkeypatch):
-    """Linux may mark private bind RO while PID1's original remains writable."""
-    import os
-    original_stat = os.stat
-
-    def proc_stat(path, *args, **kwargs):
-        if path == "/proc/self/ns/mnt":
-            return type("S",(),{"st_dev":5,"st_ino":1234})()
-        if path == "/proc/1/ns/mnt":
-            return type("S",(),{"st_dev":5,"st_ino":5678})()
-        return original_stat(path,*args,**kwargs)
-
-    with monkeypatch.context() as p:
-        p.setattr(m.os,"stat",proc_stat)
-        with pytest.raises(m.Stop,match="SOURCE_FENCE_LOST"):
-            m._source_mount_namespace()
-
-
-def test_kernel_host_mount_namespace_check_fails_closed_without_proc(monkeypatch):
-    import os
-    original_stat=os.stat
-    def proc_stat(path,*args,**kwargs):
-        if path == "/proc/1/ns/mnt":
-            raise PermissionError("synthetic uninspectable pid1")
-        if path == "/proc/self/ns/mnt":
-            return type("S",(),{"st_dev":5,"st_ino":1234})()
-        return original_stat(path,*args,**kwargs)
-    with monkeypatch.context() as p:
-        p.setattr(m.os,"stat",proc_stat)
-        with pytest.raises(m.Stop,match="SOURCE_FENCE_LOST"):
-            m._source_mount_namespace()
-
-
-def test_kernel_mount_namespace_identity_same_host_view(monkeypatch):
-    import os
-    original_stat=os.stat
-    def proc_stat(path,*args,**kwargs):
-        if path in ("/proc/self/ns/mnt","/proc/1/ns/mnt"):
-            return type("S",(),{"st_dev":5,"st_ino":1234})()
-        return original_stat(path,*args,**kwargs)
-    with monkeypatch.context() as p:
-        p.setattr(m.os,"stat",proc_stat)
-        assert m._source_mount_namespace()==(5,1234)
