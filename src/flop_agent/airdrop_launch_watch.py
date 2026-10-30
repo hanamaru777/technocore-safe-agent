@@ -14,6 +14,7 @@ import sys
 from urllib.parse import unquote, urlparse
 
 from . import airdrop_radar
+from . import airdrop_operator_testnet_watch as operator_watch
 
 SCHEMA_VERSION = 1
 _OPEN_KEYS = frozenset({"testnet_status", "faucet_status", "registration_status", "claim_status"})
@@ -175,7 +176,15 @@ def build_report(snapshot: dict) -> dict:
 
 
 def run() -> dict:
-    return build_report(airdrop_radar.scan_official_sources())
+    report = build_report(airdrop_radar.scan_official_sources())
+    # Separate first-party operator profile is a noncritical, read-only
+    # review signal. Its absence must never pretend that Testnet launched.
+    status, candidate = operator_watch.check()
+    report["operator_profile"] = status
+    if candidate is not None:
+        report["candidates"].append(candidate)
+        report["candidates"].sort(key=lambda row: row["fingerprint"])
+    return report
 
 
 def main() -> None:
