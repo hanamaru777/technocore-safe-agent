@@ -87,6 +87,43 @@ seed, private identity, Windows/OCI sealed transfer, locked signer
 runtime, sockets, activation policy or fresh G4/G5 are safe on K137.
 R1099 is not a runnable production import procedure.
 
+## R1100 — recipient-pinned ciphertext-only transport rehearsal (synthetic)
+
+`packaging/migration/r1100_synthetic_recipient_rewrap.py` tests a safe future
+**ciphertext-only** handoff route without accessing any production key.
+The test creates independent synthetic Oracle Ed25519 and K137 X25519
+keys in memory, derives the DID using the immutable original source,
+and seals that fake seed for **one fixed recipient** using ephemeral
+X25519 ECDH, HKDF-SHA256, and AES-256-GCM. Authentication binds:
+
+- Exact simulated source and destination host identity digests,
+  recipient public-key digest and exact synthetic DID.
+- A domain-separated, one-time *simulated* approval digest. A caller-provided
+  digest is NOT a verified signed approval; production must use the
+  separately authenticated R1063 owner/attestor trust framework.
+- Ciphertext protected from a wrong recipient private key, wrong
+  destination, swapped approval or modified bytes. No stdout/private
+  key printing, network access, plaintext file, OCI Vault, AWS K137
+  service, CloudShell, GitHub secret or paid dependency.
+
+A real production recipient enrollment needs a distinct independently
+attested K137 identity/host-key pin and separate dedicated signer UID
+(not the AWS CloudShell key, TradeBot service identity or the old OCI
+R987 SSH custody). Real original signer can fetch the actual seed
+only in an **explicitly authorized, fenced, narrowly isolated** source
+process. It MUST encrypt directly to a separately verified recipient;
+never send plaintext to Windows or store it in OCI/AWS temp. Only the
+encrypted envelope could traverse owner offhost. Original R1099
+passphrase envelope is a separate potential at-rest owner recovery
+layer, NOT an automatic license to decrypt or export R1100.
+
+**Do not promote the R1100 synthetic code to production.** It has no
+live signer seed import endpoint, no external independent approval
+verifier, no systemd unit, no owner credential ceremony, no transfer
+receipt, no replay-resistant live enrollment, and no host deployment.
+The next implementation must implement and independently review these
+controls rather than relying on the test's `PURPOSE=SYNTHETIC_NO_LIVE_SEED`.
+
 ## Next state transitions and hard STOP rules
 
 1. Independently acquire a no-replay complete source and signer inventory,
