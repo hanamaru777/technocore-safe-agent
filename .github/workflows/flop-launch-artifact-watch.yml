@@ -79,6 +79,7 @@ jobs:
             const allowedKinds = new Set([
               "official_status_open",
               "official_launch_link",
+              "official_operator_profile_review",
             ]);
 
             for (const candidate of report.candidates) {
