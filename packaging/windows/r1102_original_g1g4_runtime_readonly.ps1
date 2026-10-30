@@ -100,6 +100,13 @@ function Read-R1102Report([byte[]]$bytes) {
         foreach ($k in @($obj.PSObject.Properties.Name)) {
             if ($lists[$section] -cnotcontains $k) { throw 'REPORT_SCHEMA_STOP' }
             $v=$obj.$k
+            $boolFields=@('unit_execstart_and_all_aliases_verified',
+                'manual_and_transient_launchers_proven_absent',
+                'all_writers_fenced','pid1_mount_namespace_matches',
+                'all_original_mount_aliases_fenced')
+            if (($boolFields -ccontains $k) -ne ($v -is [bool])) {
+                throw 'REPORT_TYPE_STOP'
+            }
             if ($v -is [bool]) {
                 if ($k -cnotin @('unit_execstart_and_all_aliases_verified',
                     'manual_and_transient_launchers_proven_absent',
