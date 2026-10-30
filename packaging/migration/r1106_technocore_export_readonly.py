@@ -106,7 +106,7 @@ def audit_public_room(room=None, *, fetcher=None):
         result["public_room_export"]=report["result"]
         result["export_count"]=report["count"]
         result["export_sha256"]=report["bytes_sha256"]
-    except (Stop,ValueError,TypeError,RecursionError):
+    except (Stop, OSError, ValueError, TypeError, RecursionError):
         result["public_room_export"]="REJECTED_OR_UNAVAILABLE"
     return result
 
