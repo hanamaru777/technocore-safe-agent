@@ -890,3 +890,67 @@ jobs:
             throw 'R1095_REMOTE_COMMAND_SCOPE_STOP'
           }
           Write-Host 'R1095_PS51_LIMITED_CLEANUP_RECEIPT_PASS'
+
+      - name: Validate R1102 PS5.1 strict read-only live survey receipt
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $path=Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1102_original_g1g4_runtime_readonly.ps1'
+          $tokens=$null;$errors=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) { throw 'R1102_PARSE_STOP' }
+          $f=$ast.Find({param($n)
+            $n -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $n.Name -ceq 'Read-R1102Report'
+          },$true)
+          if ($null -eq $f) { throw 'R1102_FUNCTION_STOP' }
+          Invoke-Expression $f.Extent.Text
+          $units=[ordered]@{
+            expected_source_templates=27;recognized_installed_templates=26;
+            missing_expected_templates=1;extra_installed_names=4;
+            historical_four_extras_present=4;dropin_directories=0;
+            symlink_unit_aliases=0;loaded_matching_units=18;
+            active_matching_units=4;dynamic_tclk_instances=0;
+            unit_root_objects=512;unit_execstart_and_all_aliases_verified=$false}
+          $cron=[ordered]@{cron_objects=9;cron_content_matches=2;
+            cron_special_objects=1;cron_oversize=0;cron_unreadable=0;
+            manual_and_transient_launchers_proven_absent=$false}
+          $fds=[ordered]@{relevant_processes=4;relevant_file_descriptors=7;
+            writable_descriptors=5;proc_races_or_unknown_descriptors=1;
+            all_writers_fenced=$false}
+          $mounts=[ordered]@{pid1_mount_namespace_matches=$true;
+            all_original_mount_aliases_fenced=$false}
+          $sample=[ordered]@{phase='R1102';result='LIVE_G1_G4_DIAGNOSTIC_ONLY';
+            action='READ_ONLY';units=$units;cron=$cron;descriptors=$fds;mounts=$mounts;
+            signed_g4='NOT_PROVEN';all_five_upstream_post_verdicts='NOT_PROVEN';
+            source_archive='NOT_AUTHORIZED';cutover='NO_GO';
+            oci_retirement='STRICT_NO_GO'}
+          function Bytes([object]$x) {
+            return [Text.Encoding]::ASCII.GetBytes(($x | ConvertTo-Json -Compress -Depth 10))
+          }
+          $positive=Read-R1102Report (Bytes $sample)
+          if ($positive.units.missing_expected_templates -ne 1 -or
+              $positive.descriptors.writable_descriptors -ne 5 -or
+              $positive.source_archive -cne 'NOT_AUTHORIZED') {
+            throw 'R1102_POSITIVE_STOP'
+          }
+          foreach ($field in @('signed_g4','result','writable','bool','count')) {
+            $prior=$null
+            if ($field -eq 'signed_g4') {$prior=$sample.signed_g4;$sample.signed_g4='PASS'}
+            if ($field -eq 'result') {$prior=$sample.result;$sample.result='FENCED'}
+            if ($field -eq 'writable') {$prior=$sample.descriptors.writable_descriptors;
+              $sample.descriptors.writable_descriptors=8}
+            if ($field -eq 'bool') {$prior=$sample.descriptors.all_writers_fenced;
+              $sample.descriptors.all_writers_fenced=$true}
+            if ($field -eq 'count') {$prior=$sample.units.expected_source_templates;
+              $sample.units.expected_source_templates=26}
+            $denied=$false
+            try {$null=Read-R1102Report (Bytes $sample)} catch {$denied=$true}
+            if ($field -eq 'signed_g4') {$sample.signed_g4=$prior}
+            if ($field -eq 'result') {$sample.result=$prior}
+            if ($field -eq 'writable') {$sample.descriptors.writable_descriptors=$prior}
+            if ($field -eq 'bool') {$sample.descriptors.all_writers_fenced=$prior}
+            if ($field -eq 'count') {$sample.units.expected_source_templates=$prior}
+            if (-not $denied) {throw 'R1102_UNSAFE_RECEIPT_ACCEPTED'}
+          }
+          Write-Host 'R1102_PS51_LIVE_SURVEY_SCHEMA_PASS'
