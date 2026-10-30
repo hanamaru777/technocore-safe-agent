@@ -57,7 +57,7 @@ def test_complete_fake_manifest_never_proves_g4_or_archive():
     "unreviewed_edge", "duplicate_extra", "bad_digest", "writer", "unknown_fd", "directory_fd",
     "unscanned", "relaunch", "unknown_launcher", "removed_manual", "mount_ns_unseen",
     "mount_alias_unknown", "external_hardlinks", "stale", "false_freshness", "wrong_head",
-    "wrong_baseline", "wrong_type", "r1102_only", "unreadable", "bad_count", "unknown_unit_type"
+    "wrong_baseline", "bool_baseline", "expected_drift", "wrong_type", "r1102_only", "unreadable", "bad_count", "unknown_unit_type"
 ])
 def test_incomplete_or_r1102_count_only_never_passes_precheck(case):
     a = fixture()
@@ -105,6 +105,11 @@ def test_incomplete_or_r1102_count_only_never_passes_precheck(case):
         a["source_head"] = "a"*40
     elif case == "wrong_baseline":
         a["baseline"]["extras"] = 4
+    elif case == "bool_baseline":
+        a["baseline"]["unknown_fds"] = True
+    elif case == "expected_drift":
+        sorted_expected = sorted(a["units"]["expected"])
+        a["units"]["expected"][sorted_expected[0]]["status"] = "audited_present"
     elif case == "wrong_type":
         a["descriptors"]["unknown_fds"] = False
     elif case == "r1102_only":
