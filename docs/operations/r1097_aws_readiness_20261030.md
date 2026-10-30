@@ -65,6 +65,25 @@ credential exposure:
   export, but acknowledge this cannot retire Oracle. This is an interim
   architecture, not completed migration.
 
+**Ed25519 algorithm hard stop — verified against current official key specs**:
+The original DID signing algorithm is Ed25519. OCI Vault's remote asymmetric
+`SignData` API supports only RSA or ECDSA signatures (explicit documented
+algorithms do NOT include Ed25519):
+https://docs.oracle.com/en-us/iaas/Content/KeyManagement/Tasks/usingkeys_topic-To_sign_data_by_using_your_Vault_master_encryption_key.htm
+https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/kms/crypto/signed-data/sign.html
+Therefore replacing the original OCI Vault **Secret Bundle** with a call to
+the current OCI KMS remote signing API is NOT compatible with the existing
+Ed25519 DID. Do not run an algorithm-changing key migration or claim that it
+retains the DID. AWS KMS *does* document a new Ed25519 asymmetric signing key
+type, but a newly created public key changes the DID and KMS introduces
+unverified costs/permissions. It is not an authorized zero-extra-cost,
+no-export route for the existing original private key:
+https://docs.aws.amazon.com/kms/latest/developerguide/kms-cryptography.html
+Any theoretical import of the old key into AWS custody also crosses the
+currently forbidden seed-export boundary, and is not approved. **G3 remains
+blocked** until a specifically reviewed original-key-preserving custody
+architecture exists.
+
 No OCI IAM policy, cloud role, instance profile, secret or runtime was changed
 during this research. Fees and tenancy-specific token-exchange enablement are
 unverified; do not promise zero cost for a new identity-domain deployment.
