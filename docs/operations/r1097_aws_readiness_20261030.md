@@ -21,6 +21,54 @@ This is a short current operational checkpoint. **Production state and operator 
 - Gate **G3** same-original-DID signer portability: OCI Vault original uses `InstancePrincipalsSecurityTokenSigner`. AWS Lightsail cannot simply impersonate OCI instance principal; no enrolled zero-extra-cost no-seed-export identity bridge, permission, disarmed original-DID proof. Cannot retire original until actual supported source-backed approach established.
 - Gates G0/G1/G2/G6/G7/G8 need fresh signed authority epoch, evidence and distinct cutover/retirement approvals. Historical known AWS free alone does not make them PASS.
 
+## New 2026-10-30 signer portability finding (source and Oracle/AWS official docs)
+
+OCI **announced JWT→RPST external workload identity federation on 2026-08-26** (Oracle official release note:
+https://docs.oracle.com/en-us/iaas/releasenotes/identity/jwt_to_rpst_token_exchange_for_workload_identity_federation.htm).
+OCI officially documents validation of external issuer JWT, identity propagation trust,
+short-lived Resource Principal Session Token exchange, and authorized OAuth client or
+service/instance-principal signed token-exchange requests:
+https://docs.oracle.com/en-us/iaas/Content/Identity/api-getstarted/token_exchange_grant_type_workload_id-federation.htm
+
+This is a promising **OCI control-plane authentication candidate**, NOT an approved,
+implemented or tested Lightsail signer, and NOT a seed non-export scheme.
+An external trustworthy OIDC JWT issuer, OCI propagation-trust mapping, audience, client
+authorization and refresh route on the actual continuously running K137 are not
+enrolled or verified. AWS documentation for **Lightsail**, unlike EC2 instance profiles,
+says Lightsail does not support general service roles:
+https://docs.aws.amazon.com/lightsail/latest/userguide/security_iam_service-with-iam.html
+Do not apply EC2 `associate-iam-instance-profile` instructions to Lightsail.
+
+More importantly, original source `src/flop_agent/oracle_signer.py` lines 126–153
+uses `oci.auth.signers.InstancePrincipalsSecurityTokenSigner()` to obtain a
+`SecretsClient.get_secret_bundle(..., stage="CURRENT")` result. That bundle
+contains the original signing seed, which the process decodes into its own
+temporary memory. **Replacing OCI credentials with a federated RPST only
+authenticates this retrieval: it does not magically make seed signing remote
+or prevent secret data from crossing into the K137 process.** If the
+non-export seed-custody boundary is retained, simply running that code
+on AWS—even with perfect WIF—violates it.
+
+Therefore G3 stays **NO_GO** until the owner separately authorizes one verifiably
+safe concrete design, with full nonce/DID/receipt continuity and no unnecessary
+credential exposure:
+- A source-backed remote signing primitive or isolated signing endpoint that
+  can perform the existing DID algorithm without returning the signing seed
+  to an AWS workload. Whether OCI Vault supports the exact algorithm and
+  service model is **UNCONFIRMED**; do not assume OCI KMS can sign Ed25519 DID.
+- If explicit approval ever permits a changed custody boundary, a least-privilege
+  alternative with short-lived federated authentication, seed transient custody,
+  auditable revocation, disarmed exact-DID verification and complete five-route
+  continuity could be separately evaluated; this is a **new security decision**,
+  not implicit permission from a migration request.
+- Retain original OCI signer and K137 GET-only, if needed to avoid unsafe
+  export, but acknowledge this cannot retire Oracle. This is an interim
+  architecture, not completed migration.
+
+No OCI IAM policy, cloud role, instance profile, secret or runtime was changed
+during this research. Fees and tenancy-specific token-exchange enablement are
+unverified; do not promise zero cost for a new identity-domain deployment.
+
 ## Next authorized sequence
 
 1. **No more deletions on either host.** Accept current AWS FLOP space as ready and safely isolated. Keep the existing 20GiB protected margin for TradeBot/OS; no new paid infrastructure.
