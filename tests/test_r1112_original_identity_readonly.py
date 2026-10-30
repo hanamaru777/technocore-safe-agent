@@ -126,6 +126,6 @@ def test_windows_wrapper_pins_exact_guest_git_blob():
     raw=SOURCE.read_bytes()
     actual=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()
     assert re.search(r"blob='"+re.escape(actual)+r"'",ps)
-    assert "commit='41068ad0cbdeca7d3ceb384b7f6e517f03bb19a9'" in ps
+    assert "commit='0917c3ee4729c32894f350e2e033a9adc23cf1cb'" in ps
     assert "r1062_writer_attribution_one_shot_readonly.ps1" in ps
     assert "$script:SourcesCommit='b46d766bb165477a16d5a77ee204fc7bb5982725'" in ps
