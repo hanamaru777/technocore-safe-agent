@@ -128,4 +128,4 @@ def test_windows_wrapper_pins_exact_guest_git_blob():
     assert re.search(r"blob='"+re.escape(actual)+r"'",ps)
     assert "commit='41068ad0cbdeca7d3ceb384b7f6e517f03bb19a9'" in ps
     assert "r1062_writer_attribution_one_shot_readonly.ps1" in ps
-    assert "SourceCommit='b46d766bb165477a16d5a77ee204fc7bb5982725'" in ps
+    assert "$script:SourcesCommit='b46d766bb165477a16d5a77ee204fc7bb5982725'" in ps
