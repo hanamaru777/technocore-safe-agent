@@ -96,3 +96,46 @@ def test_candidate_is_deterministic_and_contains_no_source_body():
     b = op.inspect_public_profile(body)[1]
     assert a == b
     assert "SECRET_SHOULD_NOT_ESCAPE" not in json.dumps(a)
+
+
+def test_existing_launch_watch_keeps_main_radar_and_adds_review_only(monkeypatch):
+    from flop_agent import airdrop_launch_watch as launch
+    snapshot = {"read_only": True, "health": "ok", "sources": [],
+                "resolved_facts": {}, "scanned_at": "2026-10-30T12:00:00Z",
+                "snapshot_id": "a" * 64}
+    monkeypatch.setattr(launch.airdrop_radar, "scan_official_sources", lambda: snapshot)
+    monkeypatch.setattr(launch.operator_watch, "check",
+                        lambda: op.inspect_public_profile(page("live", "released")))
+    report = launch.run()
+    assert report["operator_profile"] == "changed_review_only"
+    assert len(report["candidates"]) == 1
+    assert report["candidates"][0]["kind"] == "official_operator_profile_review"
+    assert report["health"] == "ok"
+    assert "action_candidate" not in json.dumps(report)
+    assert "transaction" not in json.dumps(report)
+
+
+def test_operator_site_unavailable_does_not_mark_launch_or_block_existing_radar(monkeypatch):
+    from flop_agent import airdrop_launch_watch as launch
+    snapshot = {"read_only": True, "health": "ok", "sources": [],
+                "resolved_facts": {}, "scanned_at": "2026-10-30T12:00:00Z",
+                "snapshot_id": "a" * 64}
+    monkeypatch.setattr(launch.airdrop_radar, "scan_official_sources", lambda: snapshot)
+    monkeypatch.setattr(launch.operator_watch, "check", lambda: ("unavailable", None))
+    report = launch.run()
+    assert report["operator_profile"] == "unavailable"
+    assert report["candidates"] == []
+
+
+def test_scheduled_workflow_only_creates_manual_review_issue_from_operator_change():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/flop-launch-artifact-watch.yml").read_text("utf-8")
+    assert '"official_operator_profile_review"' in workflow
+    assert '"official_status_open"' in workflow
+    assert "read_only !== true" in workflow
+    assert 'state: "all"' in workflow
+    assert "github.rest.issues.create" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "pull_request:" not in workflow
+    assert "secrets." not in workflow
