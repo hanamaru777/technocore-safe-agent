@@ -371,7 +371,7 @@ def test_final_owner_gate_all_negative_proofs_fail_closed(f,case):
 def frozen(f,tmp_path):
     if os.name!="posix" or os.geteuid()==0:pytest.skip("POSIX read-only WAL fixture")
     app=tmp_path/"app";state=tmp_path/"state";origin=tmp_path/"origin"
-    app.mkdir();state.mkdir();origin.mkdir()
+    app.mkdir(mode=0o700);state.mkdir(mode=0o700);origin.mkdir(mode=0o700)
     (app/"module.py").write_bytes(b"# synthetic source")
     (state/"verified-did.json").write_bytes(raw({"did":f.did}))
     (state/"nonces.json").write_bytes(raw({f.did+"|lobby":200}))
