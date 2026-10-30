@@ -10,7 +10,7 @@ $script:SourceItems=@(
     @{path='packaging/migration/r1066_preflight_transport.cs';blob='305530a86db7e5cc8812fbac57c3e2c7c089a7be'},
     @{path='packaging/migration/r1079_profile_ssh_transport.cs';blob='b150af9fe7a335bc6c02e8fc1e5451599d124a97'},
     @{path='packaging/windows/r1062_writer_attribution_one_shot_readonly.ps1';blob='7ad3432b89b2aa2fe4a5e6b0142ec7578554baaa'},
-    @{path='packaging/oracle/r1112_original_identity_readonly.py';blob='fe78a8429cfaf19af546a313f38ce54b7befbb8d';commit='41068ad0cbdeca7d3ceb384b7f6e517f03bb19a9'}
+    @{path='packaging/oracle/r1112_original_identity_readonly.py';blob='6d05f65e7068bc2943244fb35955185189caa4fe';commit='0917c3ee4729c32894f350e2e033a9adc23cf1cb'}
 )
 
 function Get-R1112GitBlob([byte[]]$bytes) {
