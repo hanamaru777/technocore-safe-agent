@@ -38,6 +38,10 @@ MAX_PACKET_BYTES = 1024 * 1024
 MAX_ITEMS = 2048
 MAX_AGE = 900
 GIB = 1024**3
+# R1081 measured 30,682 original entries; match the strictly bounded R1066
+# archive and restorer limit.  This is an evidence maximum, not proof of
+# live acquisition, writer admission, original DID or cutover authority.
+MAX_ARCHIVE_ENTRIES = 100000
 DOMAIN = b"FLOP-R1063-EVIDENCE-v1\0"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 GATES = tuple(f"G{i}" for i in range(9))
@@ -199,7 +203,7 @@ def check_post_route(item, route, inventory_digest, trust, now, all_attempts, al
         all_attempts.add(attempt); all_nonces.add(nonce)
 
 
-def check_gate(gate, e, evidence, packets, trust, now):
+def check_gate(gate, e, evidence, packets, trust, now, *, preservation_session=None):
     """Strict evidence contracts; booleans only count inside authenticated packets."""
     if gate == "G0":
         shape(e, "scope_complete unrelated_hosts_excluded source_artifact identity_digest roots_digest")
@@ -215,15 +219,50 @@ def check_gate(gate, e, evidence, packets, trust, now):
         for name in ("special_cron", "proc_races", "unknown_authorities", "permission_failures"):
             zero(e[name])
     elif gate == "G2":
-        shape(e, "source_bytes encrypted_peak_bytes sqlite_bytes rollback_bytes free_bytes memory_bytes tradebot_peak_bytes flop_peak_bytes os_reserve_bytes margin_bytes cpu_psi_safe protected_cycles_safe zero_incremental_cost capacity_digest")
-        for name in set(e) - {"cpu_psi_safe", "protected_cycles_safe", "zero_incremental_cost", "capacity_digest"}:
+        budget = set("source_bytes encrypted_peak_bytes sqlite_bytes rollback_bytes free_bytes memory_bytes tradebot_peak_bytes flop_peak_bytes os_reserve_bytes margin_bytes cpu_psi_safe protected_cycles_safe zero_incremental_cost capacity_digest".split())
+        split = {"offhost_receipt", "offhost_approval"}
+        need(set(e) in (budget, budget | split), "CAPACITY_TOPOLOGY_STOP")
+        for name in budget - {"cpu_psi_safe", "protected_cycles_safe", "zero_incremental_cost", "capacity_digest"}:
             integer(e[name], 1)
         # Do not budget optimistic compression or discard rollback/original bytes.
         need(e["encrypted_peak_bytes"] >= e["source_bytes"]
              and e["rollback_bytes"] >= e["source_bytes"], "CAPACITY_UNDERCOUNT")
         need(e["free_bytes"] <= 60 * 1000**3, "DESTINATION_CAPACITY_DRIFT")
-        need(e["free_bytes"] >= e["source_bytes"] + e["encrypted_peak_bytes"] + e["sqlite_bytes"]
-             + e["rollback_bytes"] + 20 * GIB, "INSUFFICIENT_SPACE")
+        if split <= set(e):
+            # Alternative to an IMPOSSIBLE 26GB+26GB+rollback co-location on
+            # a 60GB K137: ciphertext is retained on an independent EXISTING
+            # offhost filesystem, while K137 holds only isolated restore bytes.
+            # The separate storage capacity is independently signed and the
+            # owner expressly authorizes that exact disk/capacity allocation.
+            receipt = e["offhost_receipt"]
+            offhost = verify(receipt, "independent", trust)
+            shape(offhost, "context observed_at filesystem_digest free_bytes reserve_bytes location existing_private_storage zero_incremental_cost")
+            need(offhost["context"] == trust.context
+                 and now - MAX_AGE <= integer(offhost["observed_at"]) <= now,
+                 "OFFHOST_RECEIPT_STALE")
+            digest(offhost["filesystem_digest"])
+            need(offhost["location"] == "EXISTING_OWNER_OFFHOST_NOT_OCI_OR_K137",
+                 "OFFHOST_LOCATION_STOP")
+            yes(offhost["existing_private_storage"])
+            yes(offhost["zero_incremental_cost"])
+            integer(offhost["free_bytes"], 1)
+            need(integer(offhost["reserve_bytes"], GIB) >= GIB,
+                 "OFFHOST_RESERVE_STOP")
+            need(offhost["free_bytes"] >= e["encrypted_peak_bytes"] + offhost["reserve_bytes"],
+                 "OFFHOST_INSUFFICIENT_SPACE")
+            authorization(e["offhost_approval"], "offhost_existing_disk",
+                          sha({"receipt": receipt, "encrypted_peak_bytes": e["encrypted_peak_bytes"],
+                               "source_bytes": e["source_bytes"], "destination_free_bytes": e["free_bytes"]}),
+                          trust, now)
+            # 20GiB physical headroom remains reserved ON K137 for TradeBot
+            # and OS, even when archive and rollback live elsewhere.
+            need(e["free_bytes"] >= e["source_bytes"] + e["sqlite_bytes"] + 20 * GIB,
+                 "INSUFFICIENT_SPACE")
+        else:
+            # Legacy one-filesystem contract remains unchanged and fail-closed.
+            need(e["free_bytes"] >= e["source_bytes"] + e["encrypted_peak_bytes"]
+                 + e["sqlite_bytes"] + e["rollback_bytes"] + 20 * GIB,
+                 "INSUFFICIENT_SPACE")
         need(e["memory_bytes"] <= 2 * GIB and e["margin_bytes"] >= 256 * 1024**2
              and e["tradebot_peak_bytes"] + e["flop_peak_bytes"] + e["os_reserve_bytes"]
              + e["margin_bytes"] <= e["memory_bytes"], "INSUFFICIENT_MEMORY")
@@ -250,8 +289,23 @@ def check_gate(gate, e, evidence, packets, trust, now):
             zero(e[name])
         digest(e["barrier_digest"])
         # Authorize the fixed barrier plan before acquisition, not hindsight facts.
+        approval_time = now
+        if preservation_session is not None:
+            # R1089 streaming can exceed a release assessment's 15-minute TTL.
+            # A separately signed, bounded owner session permits continuing an
+            # ALREADY authorized fence. Fresh independent G4 renewal, zero FDs,
+            # same barrier/epoch and the runtime kernel checks remain required.
+            # evaluate()/release gates never supply this optional session.
+            shape(preservation_session, "approval binding")
+            session = verify(preservation_session["approval"], "owner", trust)
+            shape(session, "action context binding approved_at expires_at")
+            need(session["action"] == "preserve_restore" and session["context"] == trust.context
+                 and session["binding"] == digest(preservation_session["binding"]), "APPROVAL_BINDING")
+            need(integer(session["approved_at"]) <= now < integer(session["expires_at"])
+                 <= session["approved_at"] + 14400, "APPROVAL_EXPIRED")
+            approval_time = e["fence_start"]
         authorization(e["approval"], "fence", sha({"barrier_digest": e["barrier_digest"],
-                                                  "coverage": e["coverage"]}), trust, now)
+                                                  "coverage": e["coverage"]}), trust, approval_time)
         need(e["approval"]["body"]["approved_at"] <= e["fence_start"], "APPROVAL_ORDER")
     elif gate == "G5":
         shape(e, "inventory_complete inventory_digest routes")
@@ -294,7 +348,7 @@ def check_gate(gate, e, evidence, packets, trust, now):
              and e["roots_digest"] == evidence["G0"]["roots_digest"]
              and e["images_digest"] == sha(evidence["G6"]["images"])
              and e["ledgers_digest"] == sha(evidence["G6"]["ledgers"]), "RESTORE_BINDING")
-        need(integer(e["source_files"], 1, 25000) == integer(e["restored_files"], 1, 25000), "FULL_SET_MISMATCH")
+        need(integer(e["source_files"], 1, MAX_ARCHIVE_ENTRIES) == integer(e["restored_files"], 1, MAX_ARCHIVE_ENTRIES), "FULL_SET_MISMATCH")
         need(integer(e["source_bytes"], 1) == integer(e["restored_bytes"], 1)
              == evidence["G2"]["source_bytes"], "FULL_BYTES_MISMATCH")
         need(integer(e["ciphertext_bytes"], 1) <= evidence["G2"]["encrypted_peak_bytes"], "CAPACITY_UNDERCOUNT")

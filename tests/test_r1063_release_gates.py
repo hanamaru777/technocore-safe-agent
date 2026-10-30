@@ -347,3 +347,87 @@ def test_reuses_audited_constants_and_protected_source_no_io(fixture, monkeypatc
     monkeypatch.setattr(subprocess, "Popen", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
     assert result(fixture)["assessment"] == "EVIDENCE_VALID"
+
+
+def test_r1082_real_oci_cardinality_can_be_attested_without_live_go(fixture):
+    """R1081 original counted 30,682, exceeding the old G7 ceiling."""
+    assert r.MAX_ARCHIVE_ENTRIES == 100000
+    fixture.e["G7"]["source_files"] = 30682
+    fixture.e["G7"]["restored_files"] = 30682
+    report = result(fixture)
+    assert next(x for x in report["gates"] if x["gate"] == "G7")["status"] == "PASS"
+    assert report["cutover"] == "NO_GO"
+    assert report["oci_retirement"] == "STRICT_NO_GO"
+    assert report["production_trust_enrolled"] is False
+
+
+@pytest.mark.parametrize("source_count,restored_count", [
+    (100001, 100001), (30682, 30681), (30682, 100001), (100001, 30682),
+])
+def test_r1082_g7_cardinality_still_fails_closed(fixture, source_count, restored_count):
+    fixture.e["G7"]["source_files"] = source_count
+    fixture.e["G7"]["restored_files"] = restored_count
+    denied(result(fixture), "G7", "SCHEMA_INVALID" if source_count > 100000 or restored_count > 100000 else "FULL_SET_MISMATCH")
+
+
+def _r1083_split_budget(fixture):
+    """Synthetic signatures model separate pre-existing disk capacity only."""
+    e = fixture.e["G2"]
+    e.update(source_bytes=26 * r.GIB, encrypted_peak_bytes=27 * r.GIB,
+             rollback_bytes=26 * r.GIB, sqlite_bytes=r.GIB, free_bytes=55 * r.GIB)
+    offhost = {"context": fixture.context, "observed_at": NOW - 2,
+               "filesystem_digest": h("distinct-owner-existing-filesystem"),
+               "free_bytes": 35 * r.GIB, "reserve_bytes": r.GIB,
+               "location": "EXISTING_OWNER_OFFHOST_NOT_OCI_OR_K137",
+               "existing_private_storage": True, "zero_incremental_cost": True}
+    e["offhost_receipt"] = fixture.sign("independent", offhost)
+    e["offhost_approval"] = fixture.approval("offhost_existing_disk", r.sha({
+        "receipt": e["offhost_receipt"], "encrypted_peak_bytes": e["encrypted_peak_bytes"],
+        "source_bytes": e["source_bytes"], "destination_free_bytes": e["free_bytes"]}))
+    return e
+
+
+def test_r1083_signed_split_disk_geometry_unblocks_only_g2_not_real_release(fixture):
+    _r1083_split_budget(fixture)
+    report = result(fixture)
+    assert next(x for x in report["gates"] if x["gate"] == "G2")["status"] == "PASS"
+    assert report["cutover"] == "NO_GO"
+    assert report["oci_retirement"] == "STRICT_NO_GO"
+    assert report["production_trust_enrolled"] is False
+
+
+def test_r1083_legacy_single_disk_remains_strict(fixture):
+    e = _r1083_split_budget(fixture)
+    del e["offhost_receipt"]
+    del e["offhost_approval"]
+    denied(result(fixture), "G2", "INSUFFICIENT_SPACE")
+
+
+@pytest.mark.parametrize("failure", [
+    "missing_approval", "unsigned_offhost_bytes", "offhost_exhausted",
+    "aws_headroom_exhausted", "untrusted_site", "unapproved_cost",
+    "stale_receipt", "no_private_custody",
+])
+def test_r1083_split_requires_fresh_independent_custody_and_space(fixture, failure):
+    e = _r1083_split_budget(fixture)
+    if failure == "missing_approval":
+        del e["offhost_approval"]
+    elif failure == "aws_headroom_exhausted":
+        e["free_bytes"] = 40 * r.GIB
+    else:
+        raw = copy.deepcopy(e["offhost_receipt"]["body"])
+        if failure == "unsigned_offhost_bytes":
+            e["offhost_receipt"]["body"]["free_bytes"] = 999 * r.GIB
+        else:
+            if failure == "offhost_exhausted": raw["free_bytes"] = 27 * r.GIB
+            if failure == "untrusted_site": raw["location"] = "K137"
+            if failure == "unapproved_cost": raw["zero_incremental_cost"] = False
+            if failure == "stale_receipt": raw["observed_at"] = NOW - r.MAX_AGE - 1
+            if failure == "no_private_custody": raw["existing_private_storage"] = False
+            e["offhost_receipt"] = fixture.sign("independent", raw)
+            e["offhost_approval"] = fixture.approval("offhost_existing_disk", r.sha({
+                "receipt": e["offhost_receipt"],
+                "encrypted_peak_bytes": e["encrypted_peak_bytes"],
+                "source_bytes": e["source_bytes"],
+                "destination_free_bytes": e["free_bytes"]}))
+    denied(result(fixture), "G2")
