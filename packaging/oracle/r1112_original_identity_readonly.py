@@ -40,12 +40,18 @@ def read_command(argv,deadline):
     return p.stdout
 
 def parse_rows(raw,field):
-    data=json.loads(raw)
-    need(type(data) is list and len(data)<=8192)
+    # The real original systemd may be v249; --output=json is not a
+    # portable list-units format (it controls journal output). Reuse the
+    # bounded, previously proven R1102 text-list API without executing it.
+    need(field in ("unit_file","unit"))
+    lines=raw.decode("utf-8","strict").splitlines()
+    need(len(lines)<=8192)
     names=[]
-    for obj in data:
-        need(type(obj) is dict and type(obj.get(field)) is str)
-        name=obj[field]
+    for line in lines:
+        cols=line.lstrip("● ").split()
+        if not cols:
+            continue
+        name=cols[0]
         if PREFIX.search(name):
             need(NAME.fullmatch(name))
             names.append(name)
@@ -54,7 +60,7 @@ def parse_rows(raw,field):
 
 def properties(name,deadline):
     need(NAME.fullmatch(name))
-    raw=read_command(["/usr/bin/systemctl","--no-pager","show",
+    raw=read_command(["/usr/bin/systemctl","--no-pager","--all","show",
         "--property="+",".join(PROPS),"--",name],deadline)
     result={}
     for line in raw.decode("utf-8","strict").splitlines():
@@ -77,9 +83,9 @@ def witness():
     need(head==(HEAD+"\n").encode())
     def get_names():
         files=parse_rows(read_command(["/usr/bin/systemctl","--no-pager",
-            "list-unit-files","--all","--output=json"],end),"unit_file")
+            "--no-legend","--full","list-unit-files","--all"],end),"unit_file")
         loaded=parse_rows(read_command(["/usr/bin/systemctl","--no-pager",
-            "list-units","--all","--output=json"],end),"unit")
+            "--no-legend","--plain","--full","list-units","--all"],end),"unit")
         return files,loaded
     files,loaded=get_names()
     names=sorted(set(files)|set(loaded)|EXPECTED)
