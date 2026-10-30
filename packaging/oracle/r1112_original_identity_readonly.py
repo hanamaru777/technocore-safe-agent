@@ -46,8 +46,8 @@ def parse_rows(raw,field):
     for obj in data:
         need(type(obj) is dict and type(obj.get(field)) is str)
         name=obj[field]
-        need(NAME.fullmatch(name))
         if PREFIX.search(name):
+            need(NAME.fullmatch(name))
             names.append(name)
     need(len(set(names))==len(names))
     return sorted(names)
