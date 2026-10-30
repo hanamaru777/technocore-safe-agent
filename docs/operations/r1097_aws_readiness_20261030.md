@@ -74,15 +74,51 @@ https://docs.oracle.com/en-us/iaas/tools/oci-cli/latest/oci_cli_docs/cmdref/kms/
 Therefore replacing the original OCI Vault **Secret Bundle** with a call to
 the current OCI KMS remote signing API is NOT compatible with the existing
 Ed25519 DID. Do not run an algorithm-changing key migration or claim that it
-retains the DID. AWS KMS *does* document a new Ed25519 asymmetric signing key
-type, but a newly created public key changes the DID and KMS introduces
-unverified costs/permissions. It is not an authorized zero-extra-cost,
-no-export route for the existing original private key:
-https://docs.aws.amazon.com/kms/latest/developerguide/kms-cryptography.html
-Any theoretical import of the old key into AWS custody also crosses the
-currently forbidden seed-export boundary, and is not approved. **G3 remains
-blocked** until a specifically reviewed original-key-preserving custody
-architecture exists.
+retains the DID. AWS KMS supports Ed25519 **asymmetric keys with imported existing
+private-key material** (not only newly generated keys), including key spec
+`ECC_NIST_EDWARDS25519`:
+https://docs.aws.amazon.com/kms/latest/developerguide/importing-keys-conceptual.html
+Importing the original Ed25519 private key could **theoretically** retain
+the original DID and then use remote KMS Sign without keeping plaintext seed
+persistently on Lightsail. **This corrects the earlier overly broad statement
+that AWS KMS necessarily changes the DID.** Nonetheless, this option
+requires exporting original OCI Vault seed material in the first place,
+securely wrapping/importing it and changing approved custody. It requires
+explicit owner/security authorization and a complete independent recovery,
+public-key/DID equality and nonce/receipt audit. **DO NOT extract or import
+the live seed under this draft.**
+
+This is NOT a zero-additional-cost option: official AWS KMS pricing lists
+**USD 1 per customer-managed key per month** for asymmetric and imported
+keys, with asymmetric Sign requests excluded from the general 20,000/month
+free tier, so per-signature charges may accrue:
+https://aws.amazon.com/kms/pricing/
+
+A second independent compatibility blocker applies even if the owner later
+authorizes paying for a KMS key and importing the original one: AWS KMS
+`Sign` accepts at most **4,096 message bytes**, while original
+`scripts/sign.py` supports 4,096 Unicode **characters** for signed `say`
+and 8,192 characters for signed `set`. Canonical message prefixes push
+even ASCII max-length `say` beyond 4,096 bytes, and Unicode UTF-8 can
+be longer. `ED25519_SHA_512` requires `MessageType=RAW`; the
+`ED25519_PH_SHA_512` option is NOT wire-signature-equivalent to the
+original standard Ed25519 protocol. Passing a pre-hash instead of the
+original canonical bytes is therefore not a valid compatibility workaround.
+Sources:
+https://docs.aws.amazon.com/kms/latest/APIReference/API_Sign.html
+https://docs.aws.amazon.com/kms/latest/developerguide/symm-asymm-choose-key-spec.html
+
+Independent immutable source/CI regression in
+`packaging/migration/r1098_ed25519_kms_portability.py`
+assesses this byte-limit without contacting KMS, accessing credentials,
+extracting secrets or changing runtime; `protocol_full_coverage=NO_GO`.
+A future signer adapter that silently truncates text, changes the Ed25519
+scheme, nonce, key, DID or allowed message lengths is NOT acceptable.
+Only a separately reviewed portable original-key custody path that supports
+the actual complete protocol could clear G3.
+
+**G3 remains blocked** until a specifically reviewed original-key-preserving
+custody architecture exists.
 
 No OCI IAM policy, cloud role, instance profile, secret or runtime was changed
 during this research. Fees and tenancy-specific token-exchange enablement are
