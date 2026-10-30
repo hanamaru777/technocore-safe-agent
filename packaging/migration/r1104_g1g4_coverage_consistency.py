@@ -122,11 +122,14 @@ def assess(bundle, *, now):
         need(bundle["observed_at"] <= now and now - bundle["observed_at"] <= 30, "STALE_STOP")
         baseline = bundle["baseline"]
         exact(baseline, "expected installed missing extras loaded active writable_fds unknown_fds")
-        need(baseline == {"expected": 27, "installed": 19, "missing": 8, "extras": 11,
-                          "loaded": 22, "active": 13, "writable_fds": 4, "unknown_fds": 1}, "BASELINE_STOP")
+        require_baseline = {"expected": 27, "installed": 19, "missing": 8, "extras": 11,
+                            "loaded": 22, "active": 13, "writable_fds": 4, "unknown_fds": 1}
+        need(all(type(baseline[k]) is int for k in require_baseline) and
+             baseline == require_baseline, "BASELINE_STOP")
         units = bundle["units"]
         exact(units, "expected extras unreadable_units unresolved_unit_types")
         absent = _check_expected(units["expected"])
+        need(absent == 8, "HISTORICAL_EXPECTED_DRIFT")
         extras = _check_extras(units["extras"])
         zero(units["unreadable_units"])
         zero(units["unresolved_unit_types"])
