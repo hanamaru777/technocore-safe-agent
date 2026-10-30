@@ -1,4 +1,4 @@
-# R1112: Windows PS5.1 existing R987 V2 -> pinned Oracle single-purpose cache cleanup.
+# R1112: Windows PS5.1 R987 V2 -> one-shot original G1 effective identity read-only witness.
 # No OCI Cloud Shell. Never an interactive shell or general remote command facility.
 param()
 Set-StrictMode -Version 2.0
