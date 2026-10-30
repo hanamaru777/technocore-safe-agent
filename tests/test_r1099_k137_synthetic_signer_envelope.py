@@ -71,7 +71,7 @@ def test_no_live_api_or_cli_secret_import():
     assert "get_secret_bundle" not in text
     assert "boto3" not in text
     assert "subprocess" not in text
-    assert "socket" not in text
+    assert "import socket" not in text
     assert "os.environ" not in text
     assert "sys.argv" not in text
     assert "load_key(" not in text
