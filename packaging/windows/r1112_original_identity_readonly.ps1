@@ -152,8 +152,27 @@ function Invoke-R1112 {
         $stage='LOCAL_ESCROW'
         $encrypted=Read-R1027Backup
         $stage='R987_CODE_PROMPT'
-        $password=Read-Host 'R987 V2 local recovery code (only on this PC)' -AsSecureString
-        if ($null -eq $password -or $password.Length -eq 0) { throw 'EMPTY_CODE_STOP' }
+        # This is an interactive *local* SecureString prompt. Never inspect,
+        # serialize, echo or log the entered value. Distinguish a host that
+        # cannot prompt from empty/cancelled input before trying SSH.
+        try {
+            $password=Read-Host 'R987 V2 local recovery code (only on this PC)' -AsSecureString -ErrorAction Stop
+        } catch {
+            $stage='R987_INPUT_HOST_STOP'
+            throw 'R987_INPUT_HOST_STOP'
+        }
+        if ($null -eq $password) {
+            $stage='R987_INPUT_EMPTY_STOP'
+            throw 'R987_INPUT_EMPTY_STOP'
+        }
+        if ($password -isnot [Security.SecureString]) {
+            $stage='R987_INPUT_HOST_STOP'
+            throw 'R987_INPUT_HOST_STOP'
+        }
+        if ($password.Length -eq 0) {
+            $stage='R987_INPUT_EMPTY_STOP'
+            throw 'R987_INPUT_EMPTY_STOP'
+        }
         $stage='LOCAL_ESCROW_DECRYPT'
         try { $plain=Unprotect-R1027 $encrypted $password }
         finally { $password.Dispose();$password=$null }
@@ -228,7 +247,8 @@ function Invoke-R1112 {
     }
     if ($null -eq $success) {
         $allow=@('PREPARE','PUBLIC_SOURCE_PIN','TRUSTED_HELPERS','SSH_REQUIREMENTS',
-            'LOCAL_ESCROW','R987_CODE_PROMPT','LOCAL_ESCROW_DECRYPT',
+            'LOCAL_ESCROW','R987_CODE_PROMPT','R987_INPUT_HOST_STOP',
+            'R987_INPUT_EMPTY_STOP','LOCAL_ESCROW_DECRYPT',
             'TEMPORARY_KEY_CUSTODY','SSH_CONNECT_OR_AUTH_STOP','ORACLE_GUARD_STOP',
             'SSH_CARRIER_STOP','RESPONSE_VALIDATION','REPORT_BOUND_STOP',
             'REPORT_ASCII_STOP','REPORT_SCHEMA_STOP','REPORT_DUPLICATE_STOP',
