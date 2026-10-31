@@ -66,7 +66,9 @@ def test_private_detail_count_and_effective_hash_no_names(monkeypatch,tmp_path):
     assert value["extras"]==11
     assert value["loaded"]==22
     assert len(value["unit_identity_sha256"])==64
-    assert len(value["effective_config_sha256"])==64
+    assert len(value["unit_observation_sha256"])==64
+    assert value["template_source_scope"]=="DISK_ONLY_NOT_LIVE_EQUIVALENCE"
+    assert value["live_template_equivalence_proven"] is False
     assert value["all_launchers_proven"] is False
     assert value["all_writers_fenced"] is False
     assert value["source_archive"]=="NO_GO"
@@ -138,7 +140,7 @@ def test_windows_wrapper_pins_exact_guest_git_blob():
     raw=SOURCE.read_bytes()
     actual=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()
     assert re.search(r"blob='"+re.escape(actual)+r"'",ps)
-    assert "commit='9b4684c12ad634e53d824c20f73b5686247a3b4c'" in ps
+    assert "commit='5cb573dab60359cd7c1fa6800648fa2a0957ff9d'" in ps
     assert "r1062_writer_attribution_one_shot_readonly.ps1" in ps
     assert "$script:SourcesCommit='b46d766bb165477a16d5a77ee204fc7bb5982725'" in ps
 
@@ -208,3 +210,20 @@ def test_strict_windows_nonzero_guest_diagnostic_is_redacted():
     assert "'READ_ONLY_WITNESS_UNAVAILABLE'" in ps
     assert "Write-Output $reply.Output" not in ps
     assert "Write-Output $_" not in ps
+
+
+def test_no_template_disk_digest_promoted_to_effective_runtime_proof(monkeypatch,tmp_path):
+    fake_host(monkeypatch,tmp_path)
+    result=M.witness()
+    assert result["template_source_scope"]=="DISK_ONLY_NOT_LIVE_EQUIVALENCE"
+    assert result["live_template_equivalence_proven"] is False
+    assert result["all_launchers_proven"] is False
+    assert result["all_writers_fenced"] is False
+    assert result["source_archive"]=="NO_GO"
+    assert result["cutover"]=="NO_GO"
+    assert result["oci_retirement"]=="STRICT_NO_GO"
+    assert "effective_config_sha256" not in result
+    script=WINDOWS.read_text("utf-8")
+    assert "DISK_ONLY_NOT_LIVE_EQUIVALENCE" in script
+    assert "$data.live_template_equivalence_proven -isnot [bool]" in script
+    assert "unit_observation_sha256" in script
