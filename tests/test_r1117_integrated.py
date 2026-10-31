@@ -491,7 +491,7 @@ def test_versioned_new_pin_map_preserves_all_legacy_dependency_blobs():
 
 def test_disarmed_service_no_key_provider_network_or_automatic_start():
     text=(PKG/"r1117-k137-signer-disarmed.service").read_text()
-    for required in ("User=flop-signer","PrivateNetwork=yes","RestrictAddressFamilies=AF_UNIX","ProtectSystem=strict","LimitCORE=0","--disarmed-public-check"):
+    for required in ("User=flop-signer","PrivateNetwork=yes","RestrictAddressFamilies=AF_UNIX","ProtectSystem=strict","LimitCORE=0","ExecCondition=/usr/bin/false","ExecStart=/usr/bin/false"):
         assert required in text
     for forbidden in ("[Install]","Restart=","EnvironmentFile=","SupplementaryGroups=","Vault","KMS"):
         assert forbidden not in text
