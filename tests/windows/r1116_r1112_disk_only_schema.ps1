@@ -31,7 +31,7 @@ $report=[ordered]@{
 }
 function Check-R1116($value,[bool]$shouldPass) {
     $raw=$value | ConvertTo-Json -Compress -Depth 4
-    $bytes=[Text.Encoding]::ASCII.GetBytes($raw+"\n")
+    $bytes=[Text.Encoding]::ASCII.GetBytes($raw+[char]10)
     $accepted=$false
     try {
         $out=Read-R1112Report $bytes
