@@ -37,12 +37,20 @@ def fake_host(monkeypatch,tmp_path):
             return "\n".join(f"{n} enabled enabled" for n in present).encode()
         if "list-units" in argv:
             return "\n".join(f"{n} loaded active running" for n in loaded).encode()
+        if "cat" in argv:
+            name=argv[-1]
+            assert name.endswith("@.service")
+            assert name in present
+            return ("# /etc/systemd/system/"+name+"\n[Service]\nExecStart=/usr/bin/true\n").encode()
         if "show" in argv:
             name=argv[-1]
-            p={k:"" for k in M.PROPS}
-            p.update({"Id":name,"Names":name,"LoadState":"loaded" if name in present else "not-found",
-                      "FragmentPath":"/etc/systemd/system/"+name if name in present else "",
-                      "ActiveState":"inactive"})
+            assert name in present or name in loaded
+            assert not name.endswith("@.service")
+            # systemd 247/249 does not emit service-only properties on timers.
+            p={"Id":name,"Names":name,"LoadState":"loaded",
+               "FragmentPath":"/etc/systemd/system/"+name,
+               "ActiveState":"inactive"}
+            if name.endswith(".service"):p["ExecStart"]="[path=/usr/bin/true]"
             return "\n".join(f"{k}={v}" for k,v in p.items()).encode()
         raise AssertionError("UNKNOWN_CALL")
     monkeypatch.setattr(M,"read_command",command)
@@ -65,7 +73,9 @@ def test_private_detail_count_and_effective_hash_no_names(monkeypatch,tmp_path):
     assert value["oci_retirement"]=="STRICT_NO_GO"
     assert "extra1" not in json.dumps(value)
     assert "ExecStart" not in json.dumps(value)
-    assert sum("show" in x for x in calls)>=2*(27+11)
+    assert sum("show" in x for x in calls)>0
+    assert sum("cat" in x for x in calls)>0
+    assert not any("show" in x and x[-1] in (M.EXPECTED-set(sorted(M.EXPECTED)[:19])) for x in calls)
 
 
 def test_source_head_drift_fails_closed(monkeypatch,tmp_path):
@@ -128,7 +138,7 @@ def test_windows_wrapper_pins_exact_guest_git_blob():
     raw=SOURCE.read_bytes()
     actual=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()
     assert re.search(r"blob='"+re.escape(actual)+r"'",ps)
-    assert "commit='0d67aae27a6ddec936db226e4a69afcb854410e1'" in ps
+    assert "commit='9b4684c12ad634e53d824c20f73b5686247a3b4c'" in ps
     assert "r1062_writer_attribution_one_shot_readonly.ps1" in ps
     assert "$script:SourcesCommit='b46d766bb165477a16d5a77ee204fc7bb5982725'" in ps
 
@@ -159,3 +169,42 @@ def test_unrecognized_source_scoped_unit_extension_fails_closed(monkeypatch,tmp_
     monkeypatch.setattr(M,"read_command",with_unknown)
     with pytest.raises(M.Stop):
         M.witness()
+
+
+def test_timer_does_not_require_service_only_execstart(monkeypatch,tmp_path):
+    calls=fake_host(monkeypatch,tmp_path)
+    report=M.witness()
+    assert report["result"]=="PRIVATE_G1_IDENTITY_WITNESS_ONLY"
+    assert any("show" in x and x[-1].endswith(".timer") for x in calls)
+
+
+def test_missing_expected_unit_never_requested_from_systemd(monkeypatch,tmp_path):
+    calls=fake_host(monkeypatch,tmp_path)
+    M.witness()
+    missing=M.EXPECTED-set(sorted(M.EXPECTED)[:19])
+    assert all((cmd[-1] not in missing) for cmd in calls if "show" in cmd or "cat" in cmd)
+
+
+def test_guest_stops_with_bounded_reason_when_systemd_show_fails(monkeypatch,tmp_path,capsys):
+    fake_host(monkeypatch,tmp_path)
+    real=M.read_command
+    def fail(argv,deadline):
+        if "show" in argv:raise M.Stop("READ_ONLY_WITNESS_UNAVAILABLE")
+        return real(argv,deadline)
+    monkeypatch.setattr(M,"read_command",fail)
+    assert M.main()==42
+    printed=json.loads(capsys.readouterr().out)
+    assert printed["reason"]=="UNIT_SHOW_STOP"
+    assert printed["source_archive"]=="NO_GO"
+    assert "systemd" not in json.dumps(printed).lower()
+
+
+def test_strict_windows_nonzero_guest_diagnostic_is_redacted():
+    ps=WINDOWS.read_text("utf-8")
+    assert "Read-R1112FixedStop $reply.Output" in ps
+    assert "$reply.ExitCode -eq 42" in ps
+    assert "'TEMPLATE_CAT_STOP'" in ps
+    assert "'UNIT_SHOW_STOP'" in ps
+    assert "'READ_ONLY_WITNESS_UNAVAILABLE'" in ps
+    assert "Write-Output $reply.Output" not in ps
+    assert "Write-Output $_" not in ps
