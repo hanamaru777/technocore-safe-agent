@@ -1,12 +1,19 @@
-# REVIEW ONLY. No install/enable/start authority. No live signing/unseal mode.
+# REVIEW ONLY. R1118 deliberately NON-STARTABLE on K137, even if copied
+# to systemd by mistake. No verified K137 release contains this new source.
+# A future reviewed source/identity/capacity deployment MUST replace this file.
+# NO signer unlock, import, POST, or network capability exists.
 [Unit]
-Description=FLOP R1117 isolated public continuity verifier (DISARMED)
+Description=FLOP R1117 INERT review-only template (NOT DEPLOYABLE)
+RefuseManualStart=yes
 
 [Service]
 Type=oneshot
 User=flop-signer
 Group=flop-signer
-ExecStart=/opt/technocore-safe-agent/.venv/bin/python -I -B /opt/technocore-safe-agent/packaging/migration/r1117_signer.py --disarmed-public-check
+# Two unconditional independent barriers prevent an accidental service action.
+# Never substitute a guessed /opt/technocore-safe-agent or stale stage path.
+ExecCondition=/usr/bin/false
+ExecStart=/usr/bin/false
 StandardInput=null
 StandardOutput=journal
 NoNewPrivileges=yes
@@ -27,5 +34,7 @@ LimitCORE=0
 MemoryMax=256M
 TasksMax=16
 CPUQuota=50%
-InaccessiblePaths=-/opt/tradebot -/var/lib/tradebot -/etc/technocore-safe-agent
+# Exact historically owner-observed K137 TradeBot directories, plus old
+# defensive aliases. Must be freshly rechecked before any future deployment.
+InaccessiblePaths=-/opt/tradebot-k137 -/var/lib/tradebot-k137-public -/home/ubuntu/k137-canonical-source -/home/ubuntu/k137q-public-only -/home/ubuntu/k137-public-state -/opt/tradebot -/var/lib/tradebot -/etc/technocore-safe-agent
 ReadOnlyPaths=/etc/flop-r1117/public-admission.json

@@ -106,3 +106,49 @@ retirement each need exact independent evidence and separate explicit approval.
 Permanent current result: **G3 real custody NO_GO; G4 NOT_PROVABLE; G5 UNKNOWN;
 G6 NO_SOURCE_EXPORT; G7 NOT_PERFORMED; CUTOVER NO_GO;
 OCI_RETIREMENT STRICT_NO_GO.** Synthetic success is code evidence only.
+
+
+## R1118 safety correction — 2026-10-31 (source-only, not a migration)
+
+The example `r1117-k137-signer-disarmed.service` in R1117 had an
+`ExecStart` path under `/opt/technocore-safe-agent`, which is NOT
+the independently observed K137 versioned Flop staging arrangement. It also
+listed generic TradeBot paths instead of the historically observed protected
+K137 roots. It must **never** be copied and started as a deployed service.
+
+R1118 makes this unit deliberately non-startable even if copied:
+`RefuseManualStart=yes`, unconditional `ExecCondition=/usr/bin/false`,
+and `ExecStart=/usr/bin/false`. This is an INERT reference, not a real
+service installer and not proof of AWS continuity. It adds the historically
+observed protected TradeBot directories
+`/opt/tradebot-k137`, `/var/lib/tradebot-k137-public`,
+`/home/ubuntu/k137-canonical-source`, `/home/ubuntu/k137q-public-only`,
+`/home/ubuntu/k137-public-state`. These are historical names; current
+systemd/cgroup mounts, ownership, available memory and free disk must be
+freshly verified before any actual K137 application installation. Do not
+guess a replacement Flop release path or install/enable/start this unit.
+
+Additional G5 first-party source and upstream issue review:
+- `flop-labs/technocore-chat` `src/app.py:room_post` issues a write then
+  responds with a room-view; the current `GET /r/{room}/export` reads only
+  retained JSONL from `store.export_room` with acknowledged generation race.
+  A source-side HTTP 200, current room tail, exported ring miss or duplicate
+  nonce rejection is NOT historical acceptance or definitive nonacceptance.
+- https://github.com/flop-labs/technocore-chat/issues/141 documents a
+  timed-out signed claim that had actually committed and consumed its nonce.
+- https://github.com/flop-labs/technocore-chat/issues/775 documents a moving
+  retention floor lacking a dedicated window bound.
+- https://github.com/flop-labs/technocore-chat/issues/919 is an OPEN,
+  unverified caller report of HTTP 200 but absent stored writes. It is a risk
+  to investigate, NOT confirmed proof the service drops data.
+- https://github.com/flop-labs/technocore-chat/issues/711 documents why
+  JavaScript number parsing can lose 19-digit nonce precision; source
+  verification must preserve exact decimal digits and signed bytes.
+
+Concrete G5 missing authority is an authenticated append/finality index for
+ALL original five route/nonce/leg attempts, including historically evicted
+room records, NOTE compare-and-set claims, original DID, exact text/hash,
+server-assigned seq or a durable proven negative outcome, and a consistent
+G4-held epoch. Unless such independently attested authority is available,
+retain UNKNOWN and prohibit replay, live POST, cutover and OCI retirement.
+Do not misreport these external blockers as locally code-fixable.

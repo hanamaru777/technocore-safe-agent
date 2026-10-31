@@ -497,3 +497,24 @@ def test_disarmed_service_no_key_provider_network_or_automatic_start():
         assert forbidden not in text
     p=subprocess.run([old.sys.executable,str(PKG/"r1117_migration.py"),"--execute"],capture_output=True,timeout=20)
     assert p.returncode==42 and json.loads(p.stdout)["G6"]=="NO_SOURCE_EXPORT"
+
+
+def test_r1118_k137_review_service_cannot_accidentally_execute_or_touch_tradebot():
+    """A source-only reference unit cannot be installed as a real signer."""
+    service = (PKG / "r1117-k137-signer-disarmed.service").read_text("utf-8")
+    assert "RefuseManualStart=yes" in service
+    assert "ExecCondition=/usr/bin/false" in service
+    assert "ExecStart=/usr/bin/false" in service
+    assert "ExecStart=/opt/technocore-safe-agent/" not in service
+    assert "ExecStart=/opt/flop-shadow/" not in service
+    for protected in (
+        "/opt/tradebot-k137",
+        "/var/lib/tradebot-k137-public",
+        "/home/ubuntu/k137-canonical-source",
+        "/home/ubuntu/k137q-public-only",
+        "/home/ubuntu/k137-public-state",
+    ):
+        assert protected in service
+    assert "PrivateNetwork=yes" in service
+    assert "CapabilityBoundingSet=" in service
+    assert "User=flop-signer" in service
