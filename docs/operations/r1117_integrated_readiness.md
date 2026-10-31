@@ -60,7 +60,7 @@ bound to the full state hash index. Missing sidecars, duplicate nonces, changing
 epochs, forged/malformed receipts and source/upstream mismatch do not produce
 terminal acceptance or negative finality.
 
-The official retained export/200-message window cannot prove a missing old
+The ordinary room read can show only a newest tail (up to 200 records), while the official export streams the entire currently retained on-disk ring. Neither proves that an older, evicted attempt was never accepted. In particular, a missing old
 attempt was never accepted. Timeout, HTTP 409, ring miss, compaction, unknown
 generation, claim-CAS or incomplete batch evidence stays UNKNOWN. The concrete
 retained verifier has no release implementation. Only explicitly synthetic
