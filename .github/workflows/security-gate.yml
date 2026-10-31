@@ -116,6 +116,17 @@ jobs:
             if (-not $?) { throw 'R1115_OFFLINE_TEST_STOP' }
           }
 
+      - name: Test R1116 disk-only original G1 report on native PowerShell 5.1 (offline only)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $test = 'tests/windows/r1116_r1112_disk_only_schema.ps1'
+          if (Test-Path -LiteralPath $test) {
+            if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1116_PS51_REQUIRED' }
+            & $test
+            if (-not $?) { throw 'R1116_OFFLINE_TEST_STOP' }
+          }
+
       - name: Test R1107 native PS5.1 dry-run gate without hosts or secrets
         if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
         shell: powershell
