@@ -95,6 +95,8 @@ def template_properties(name,deadline):
     except Stop:
         raise Stop("TEMPLATE_CAT_STOP") from None
     need(0<len(body)<=131072,"TEMPLATE_CAT_STOP")
+    # DISK-ONLY: systemctl cat may disagree with manager-loaded state
+    # until daemon-reload. Never turn this digest into G1 runtime proof.
     return {"template_source_sha256":hashlib.sha256(body).hexdigest()}
 
 def witness():
@@ -140,8 +142,11 @@ def witness():
     return {"phase":"R1112","result":"PRIVATE_G1_IDENTITY_WITNESS_ONLY",
         "action":"READ_ONLY","source_head":HEAD,"expected":len(EXPECTED),
         "recognized":len(present),"missing":len(missing),"extras":len(extras),
-        "loaded":len(loaded),"effective_config_sha256":effective,
-        "unit_identity_sha256":identities,"all_launchers_proven":False,
+        "loaded":len(loaded),"unit_observation_sha256":effective,
+        "unit_identity_sha256":identities,
+        "template_source_scope":"DISK_ONLY_NOT_LIVE_EQUIVALENCE",
+        "live_template_equivalence_proven":False,
+        "all_launchers_proven":False,
         "all_writers_fenced":False,"g5_finality":"NOT_PROVEN",
         "source_archive":"NO_GO","cutover":"NO_GO",
         "oci_retirement":"STRICT_NO_GO"}
