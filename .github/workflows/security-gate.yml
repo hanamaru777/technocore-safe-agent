@@ -113,7 +113,7 @@ jobs:
           if (Test-Path -LiteralPath $test) {
             if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1115_PS51_REQUIRED' }
             & $test
-            if ($LASTEXITCODE -ne 0) { throw 'R1115_OFFLINE_TEST_STOP' }
+            if (-not $?) { throw 'R1115_OFFLINE_TEST_STOP' }
           }
 
       - name: Test R1107 native PS5.1 dry-run gate without hosts or secrets
