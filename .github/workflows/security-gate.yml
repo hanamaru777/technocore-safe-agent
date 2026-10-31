@@ -105,6 +105,17 @@ jobs:
             Write-Host 'R1112_PS51_READONLY_PARSE_PASS'
           }
 
+      - name: Test R1115 fixed Oracle STOP response taxonomy on Windows PS5.1 (offline only)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $test = 'tests/windows/r1115_r1112_fixed_stop_parser.ps1'
+          if (Test-Path -LiteralPath $test) {
+            if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1115_PS51_REQUIRED' }
+            & $test
+            if ($LASTEXITCODE -ne 0) { throw 'R1115_OFFLINE_TEST_STOP' }
+          }
+
       - name: Test R1107 native PS5.1 dry-run gate without hosts or secrets
         if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
         shell: powershell
