@@ -10,7 +10,7 @@ $script:SourceItems=@(
     @{path='packaging/migration/r1066_preflight_transport.cs';blob='305530a86db7e5cc8812fbac57c3e2c7c089a7be'},
     @{path='packaging/migration/r1079_profile_ssh_transport.cs';blob='b150af9fe7a335bc6c02e8fc1e5451599d124a97'},
     @{path='packaging/windows/r1062_writer_attribution_one_shot_readonly.ps1';blob='7ad3432b89b2aa2fe4a5e6b0142ec7578554baaa'},
-    @{path='packaging/oracle/r1112_original_identity_readonly.py';blob='91a1c96574660f8440481276129885b62f645a09';commit='9b4684c12ad634e53d824c20f73b5686247a3b4c'}
+    @{path='packaging/oracle/r1112_original_identity_readonly.py';blob='85fca46b956843b74a87cf488a4995d76ddcf982';commit='5cb573dab60359cd7c1fa6800648fa2a0957ff9d'}
 )
 
 function Get-R1112GitBlob([byte[]]$bytes) {
@@ -56,7 +56,8 @@ function Read-R1112Report([byte[]]$bytes) {
     $text=[Text.Encoding]::ASCII.GetString($bytes)
     $data=$text | ConvertFrom-Json
     $fields=@('phase','result','action','source_head','expected','recognized','missing','extras',
-      'loaded','effective_config_sha256','unit_identity_sha256','all_launchers_proven',
+      'loaded','unit_observation_sha256','unit_identity_sha256',
+      'template_source_scope','live_template_equivalence_proven','all_launchers_proven',
       'all_writers_fenced','g5_finality','source_archive','cutover','oci_retirement')
     if (@($data.PSObject.Properties.Name).Count -ne $fields.Count) { throw 'REPORT_SCHEMA_STOP' }
     foreach ($key in $data.PSObject.Properties.Name) {
@@ -65,6 +66,9 @@ function Read-R1112Report([byte[]]$bytes) {
     if ($data.phase -cne 'R1112' -or $data.result -cne 'PRIVATE_G1_IDENTITY_WITNESS_ONLY' -or
         $data.action -cne 'READ_ONLY' -or
         $data.source_head -cne 'ec4bc4892d40cdd2a03e102faa44d72c89e01b99' -or
+        $data.template_source_scope -cne 'DISK_ONLY_NOT_LIVE_EQUIVALENCE' -or
+        $data.live_template_equivalence_proven -isnot [bool] -or
+        $data.live_template_equivalence_proven -or
         $data.all_launchers_proven -isnot [bool] -or $data.all_launchers_proven -or
         $data.all_writers_fenced -isnot [bool] -or $data.all_writers_fenced -or
         $data.g5_finality -cne 'NOT_PROVEN' -or $data.source_archive -cne 'NO_GO' -or
@@ -80,7 +84,7 @@ function Read-R1112Report([byte[]]$bytes) {
     if ($data.expected -ne 27 -or $data.expected -ne ($data.recognized + $data.missing)) {
       throw 'REPORT_TOTAL_STOP'
     }
-    foreach ($key in @('effective_config_sha256','unit_identity_sha256')) {
+    foreach ($key in @('unit_observation_sha256','unit_identity_sha256')) {
       if ($data.$key -isnot [string] -or
           $data.$key -cnotmatch '\A[0-9a-f]{64}\z') { throw 'REPORT_DIGEST_STOP' }
     }
@@ -89,8 +93,10 @@ function Read-R1112Report([byte[]]$bytes) {
       source_head=$data.source_head
       expected=[long]$data.expected;recognized=[long]$data.recognized
       missing=[long]$data.missing;extras=[long]$data.extras;loaded=[long]$data.loaded
-      effective_config_sha256=$data.effective_config_sha256
+      unit_observation_sha256=$data.unit_observation_sha256
       unit_identity_sha256=$data.unit_identity_sha256
+      template_source_scope='DISK_ONLY_NOT_LIVE_EQUIVALENCE'
+      live_template_equivalence_proven=$false
       all_launchers_proven=$false;all_writers_fenced=$false
       g5_finality='NOT_PROVEN';source_archive='NO_GO'
       cutover='NO_GO';oci_retirement='STRICT_NO_GO'
