@@ -49,6 +49,10 @@ jobs:
         if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
         run: uv run pytest -q tests/test_r1107_readiness.py tests/test_r1103_g5_receipt_consistency.py tests/test_r1104_g1g4_coverage_consistency.py tests/test_r1106_technocore_export_readonly.py
 
+      - name: R1117 integrated offline tests and directly reused Linux regression
+        if: github.head_ref == 'codex/r1117-g3g4g5g6-integrated-onepass-20261031'
+        run: uv run pytest -q tests/test_r1117_integrated.py tests/test_r1099_k137_synthetic_signer_envelope.py tests/test_r1100_synthetic_recipient_rewrap.py tests/test_r1107_readiness.py tests/test_r1112_original_identity_readonly.py tests/test_r1113_prompt_codes.py
+
       - name: Run tests
         run: uv run pytest -q
 
@@ -84,6 +88,20 @@ jobs:
           python -m pytest -q tests/test_r1089_migration.py
           if ($LASTEXITCODE -ne 0) { throw 'R1089_TEST_STOP' }
 
+      - name: R1117 native PS5.1 disarmed contract and synthetic integration
+        if: github.head_ref == 'codex/r1117-g3g4g5g6-integrated-onepass-20261031'
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check httpx==0.28.1
+          if ($LASTEXITCODE -ne 0) { throw 'R1117_DEPENDENCY_STOP' }
+          if (-not (Test-Path '.venv\Scripts\python.exe')) {
+            python -m venv --system-site-packages .venv
+            if ($LASTEXITCODE -ne 0) { throw 'R1117_LOCAL_ENV_STOP' }
+          }
+          $env:PYTHONPATH='src'
+          python -m pytest -q tests/test_r1117_integrated.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1117_TARGETED_STOP' }
+
       - name: Parse new R1112 pinned one-shot read-only wrapper on native PS5.1
         shell: powershell
         run: |
@@ -103,6 +121,28 @@ jobs:
               if (-not $raw.Contains($required)) { throw 'R1112_WRAPPER_CONTRACT_STOP' }
             }
             Write-Host 'R1112_PS51_READONLY_PARSE_PASS'
+          }
+
+      - name: Test R1115 fixed Oracle STOP response taxonomy on Windows PS5.1 (offline only)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $test = 'tests/windows/r1115_r1112_fixed_stop_parser.ps1'
+          if (Test-Path -LiteralPath $test) {
+            if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1115_PS51_REQUIRED' }
+            & $test
+            if (-not $?) { throw 'R1115_OFFLINE_TEST_STOP' }
+          }
+
+      - name: Test R1116 disk-only original G1 report on native PowerShell 5.1 (offline only)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $test = 'tests/windows/r1116_r1112_disk_only_schema.ps1'
+          if (Test-Path -LiteralPath $test) {
+            if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1116_PS51_REQUIRED' }
+            & $test
+            if (-not $?) { throw 'R1116_OFFLINE_TEST_STOP' }
           }
 
       - name: Test R1107 native PS5.1 dry-run gate without hosts or secrets
