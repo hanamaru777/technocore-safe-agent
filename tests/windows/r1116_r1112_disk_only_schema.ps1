@@ -48,12 +48,19 @@ function Check-R1116($value,[bool]$shouldPass) {
     }
     if ($accepted -ne $shouldPass) {throw 'R1116_CONTRACT_STOP'}
 }
+function Copy-R1116($original) {
+    $copy=[ordered]@{}
+    foreach ($entry in $original.GetEnumerator()) {
+        $copy[$entry.Key]=$entry.Value
+    }
+    return $copy
+}
 Check-R1116 $report $true
-$bad=$report.Clone();$bad.template_source_scope='LIVE_PROVEN';Check-R1116 $bad $false
-$bad=$report.Clone();$bad.live_template_equivalence_proven=$true;Check-R1116 $bad $false
-$bad=$report.Clone();$bad.all_launchers_proven=$true;Check-R1116 $bad $false
-$bad=$report.Clone();$bad.all_writers_fenced=$true;Check-R1116 $bad $false
-$bad=$report.Clone();$bad.unit_observation_sha256='c';Check-R1116 $bad $false
-$bad=$report.Clone();$bad.Remove('template_source_scope');Check-R1116 $bad $false
-$bad=$report.Clone();$bad.source_archive='GO';Check-R1116 $bad $false
+$bad=(Copy-R1116 $report);$bad.template_source_scope='LIVE_PROVEN';Check-R1116 $bad $false
+$bad=(Copy-R1116 $report);$bad.live_template_equivalence_proven=$true;Check-R1116 $bad $false
+$bad=(Copy-R1116 $report);$bad.all_launchers_proven=$true;Check-R1116 $bad $false
+$bad=(Copy-R1116 $report);$bad.all_writers_fenced=$true;Check-R1116 $bad $false
+$bad=(Copy-R1116 $report);$bad.unit_observation_sha256='c';Check-R1116 $bad $false
+$bad=(Copy-R1116 $report);$bad.Remove('template_source_scope');Check-R1116 $bad $false
+$bad=(Copy-R1116 $report);$bad.source_archive='GO';Check-R1116 $bad $false
 Write-Output 'R1116_DISK_ONLY_WITNESS_SCHEMA_PASS'
