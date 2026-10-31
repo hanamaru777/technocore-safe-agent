@@ -10,7 +10,7 @@ $script:SourceItems=@(
     @{path='packaging/migration/r1066_preflight_transport.cs';blob='305530a86db7e5cc8812fbac57c3e2c7c089a7be'},
     @{path='packaging/migration/r1079_profile_ssh_transport.cs';blob='b150af9fe7a335bc6c02e8fc1e5451599d124a97'},
     @{path='packaging/windows/r1062_writer_attribution_one_shot_readonly.ps1';blob='7ad3432b89b2aa2fe4a5e6b0142ec7578554baaa'},
-    @{path='packaging/oracle/r1112_original_identity_readonly.py';blob='f3046c583404d660edf28a7ae3ea90d72387cf11';commit='0d67aae27a6ddec936db226e4a69afcb854410e1'}
+    @{path='packaging/oracle/r1112_original_identity_readonly.py';blob='91a1c96574660f8440481276129885b62f645a09';commit='9b4684c12ad634e53d824c20f73b5686247a3b4c'}
 )
 
 function Get-R1112GitBlob([byte[]]$bytes) {
@@ -95,6 +95,34 @@ function Read-R1112Report([byte[]]$bytes) {
       g5_finality='NOT_PROVEN';source_archive='NO_GO'
       cutover='NO_GO';oci_retirement='STRICT_NO_GO'
     }
+}
+
+
+function Read-R1112FixedStop([byte[]]$bytes) {
+    # A nonzero SSH exit can be an explicit, fixed original-host
+    # read-only STOP. Never echo stderr or arbitrary stdout.
+    if ($null -eq $bytes -or $bytes.Length -lt 100 -or $bytes.Length -gt 500) {
+        return $null
+    }
+    foreach ($v in $bytes) {
+        if ($v -ne 10 -and ($v -lt 32 -or $v -gt 126)) { return $null }
+    }
+    try { $value=[Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json }
+    catch { return $null }
+    $keys=@('phase','result','reason','source_archive','cutover','oci_retirement')
+    if (@($value.PSObject.Properties.Name).Count -ne $keys.Count) { return $null }
+    foreach ($key in $value.PSObject.Properties.Name) {
+        if ($keys -cnotcontains $key) { return $null }
+    }
+    $reasons=@('UNIT_NAME_STOP','UNIT_SHOW_STOP','UNIT_SCHEMA_STOP',
+      'UNIT_IDENTITY_STOP','TEMPLATE_CAT_STOP','UNIT_RACE_STOP',
+      'UNIT_BOUND_STOP','TIME_BUDGET_STOP','READ_ONLY_WITNESS_UNAVAILABLE')
+    if ($value.phase -cne 'R1112' -or $value.result -cne 'STOP' -or
+        $reasons -cnotcontains $value.reason -or
+        $value.source_archive -cne 'NO_GO' -or
+        $value.cutover -cne 'NO_GO' -or
+        $value.oci_retirement -cne 'STRICT_NO_GO') { return $null }
+    return [string]$value.reason
 }
 
 function Invoke-R1112 {
@@ -206,8 +234,15 @@ function Invoke-R1112 {
         $stage='SSH_AND_ORACLE'
         $reply=[FlopR1079.Transport]::Run($ssh,($quoted -join ' '),$guest,58000)
         if ($reply.ExitCode -ne 0) {
-            if ($reply.ExitCode -eq 255) { $stage='SSH_CONNECT_OR_AUTH_STOP' }
-            else { $stage='ORACLE_GUARD_STOP' }
+            if ($reply.ExitCode -eq 255) {
+                $stage='SSH_CONNECT_OR_AUTH_STOP'
+            } elseif ($reply.ExitCode -eq 42) {
+                $publicStop=Read-R1112FixedStop $reply.Output
+                if ($null -ne $publicStop) { $stage=$publicStop }
+                else { $stage='ORACLE_GUARD_STOP' }
+            } else {
+                $stage='ORACLE_GUARD_STOP'
+            }
             throw 'NO_SUCCESS_RECEIPT'
         }
         $stage='RESPONSE_VALIDATION'
@@ -254,6 +289,9 @@ function Invoke-R1112 {
             'REPORT_ASCII_STOP','REPORT_SCHEMA_STOP','REPORT_DUPLICATE_STOP',
             'REPORT_UNKNOWN_FIELD_STOP','REPORT_UNKNOWN_CATEGORY_STOP',
             'REPORT_VALUE_STOP','REPORT_REQUIRED_STOP','REPORT_GUARD_STOP',
+            'UNIT_NAME_STOP','UNIT_SHOW_STOP','UNIT_SCHEMA_STOP','UNIT_IDENTITY_STOP',
+            'TEMPLATE_CAT_STOP','UNIT_RACE_STOP','UNIT_BOUND_STOP',
+            'TIME_BUDGET_STOP','READ_ONLY_WITNESS_UNAVAILABLE',
             'REPORT_MODE_STOP','REPORT_COUNT_STOP','REPORT_UNCLASSIFIED_STOP')
         if ($allow -cnotcontains $stage) { $stage='GUARD_STOP' }
         Write-Output ('{"phase":"R1112","result":"STOP","code":"'+$stage+'"}')
