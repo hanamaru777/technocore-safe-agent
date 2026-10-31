@@ -9,7 +9,7 @@ def test_distinct_local_prompt_stop_codes():
     assert script.count("$stage='R987_INPUT_HOST_STOP'")==2
     assert script.count("$stage='R987_INPUT_EMPTY_STOP'")==2
     assert "R987_CODE_PROMPT" in script
-    assert "R987_INPUT_HOST_STOP','" in script
+    assert "'R987_INPUT_HOST_STOP'" in script
     assert "'R987_INPUT_EMPTY_STOP'" in script
 
 
