@@ -1,0 +1,31 @@
+# REVIEW ONLY. No install/enable/start authority. No live signing/unseal mode.
+[Unit]
+Description=FLOP R1117 isolated public continuity verifier (DISARMED)
+
+[Service]
+Type=oneshot
+User=flop-signer
+Group=flop-signer
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -I -B /opt/technocore-safe-agent/packaging/migration/r1117_signer.py --disarmed-public-check
+StandardInput=null
+StandardOutput=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+LimitCORE=0
+MemoryMax=256M
+TasksMax=16
+CPUQuota=50%
+InaccessiblePaths=-/opt/tradebot -/var/lib/tradebot -/etc/technocore-safe-agent
+ReadOnlyPaths=/etc/flop-r1117/public-admission.json
