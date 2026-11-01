@@ -21,6 +21,7 @@ BASE = Path("/var/lib")
 PARENT_NAME = "flop-migration-r1066"
 CHILD_NAME = "disarmed"
 TARGET_UID = 1000
+ROOT_UID = 0
 MIN_FREE_BYTES = 20 * 1024**3 + 1024**3 + 32 * 1024**2
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -97,7 +98,7 @@ def provision(expected_machine_sha256, *, apply=False):
                 created_parent = True
             finally:
                 os.umask(old_umask)
-        expected_parent_owner = 0 if created_parent else owner
+        expected_parent_owner = ROOT_UID if created_parent else owner
         expected_parent_group = os.getegid() if created_parent else group
         parent = open_checked(base, PARENT_NAME,
                               expected_parent_owner, expected_parent_group)
@@ -115,7 +116,7 @@ def provision(expected_machine_sha256, *, apply=False):
         if created_child:
             child = os.open(CHILD_NAME, OPEN_FLAGS, dir_fd=parent)
             s = os.fstat(child)
-            need(s.st_uid == 0 and stat.S_IMODE(s.st_mode) == 0o700,
+            need(s.st_uid == ROOT_UID and stat.S_IMODE(s.st_mode) == 0o700,
                  "NEW_CHILD_RACE_STOP")
             os.fchown(child, owner, group)
         else:
@@ -123,8 +124,9 @@ def provision(expected_machine_sha256, *, apply=False):
         if created_parent:
             # Keep new parent root-owned until child is in place to limit race.
             os.fchown(parent, owner, group)
-        for fd in (child, parent, base):
-            os.fsync(fd)
+        if created_parent or created_child:
+            for fd in (child, parent, base):
+                os.fsync(fd)
         # Fresh no-follow checks after all changes.
         need(inspect_entry(base, PARENT_NAME, owner, group),
              "POST_PARENT_STOP")
