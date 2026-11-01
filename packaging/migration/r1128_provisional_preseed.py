@@ -151,14 +151,37 @@ def _original_host(scope):
     need(sys.platform == "linux" and os.geteuid() == 0,
          "ORIGINAL_HOST_STOP")
     need(type(scope) is dict and set(scope) ==
-         {"expected_machine_sha256", "owner_provisional_authorization"},
+         {"expected_machine_sha256", "destination_machine_sha256",
+          "independent_trust", "signed_owner_approval"},
          "OWNER_AUTH_REQUIRED")
-    # Only an external independently verified admission issuer may construct
-    # an approved scope. A bare boolean or operator string is NOT sufficient.
-    need(scope["owner_provisional_authorization"] is True and
-         type(scope["expected_machine_sha256"]) is str and
-         re.fullmatch(r"[0-9a-f]{64}", scope["expected_machine_sha256"]),
+    for key in ("expected_machine_sha256", "destination_machine_sha256"):
+        need(type(scope[key]) is str and
+             re.fullmatch(r"[0-9a-f]{64}", scope[key]),
+             "OWNER_AUTH_REQUIRED")
+    need(scope["expected_machine_sha256"] != scope["destination_machine_sha256"],
          "OWNER_AUTH_REQUIRED")
+    G = load("r1063_release_gates.py", "r1128_signed_release")
+    trust = scope["independent_trust"]
+    need(isinstance(trust, G.Trust), "OWNER_AUTH_REQUIRED")
+    G.context_valid(trust.context)
+    need(trust.context["host"] == scope["expected_machine_sha256"] and
+         trust.context["destination"] == scope["destination_machine_sha256"] and
+         trust.context["source_head"] == HEAD, "OWNER_AUTH_REQUIRED")
+    # This is an independently signed owner authorization for source DATA
+    # export to a specifically identified offhost destination. The trust keys
+    # cannot originate from the source data, approval packet or an SSH response.
+    binding = G.sha({
+        "purpose": "provisional_preseed_ciphertext_only",
+        "source": scope["expected_machine_sha256"],
+        "destination": scope["destination_machine_sha256"],
+        "source_head": HEAD,
+        "files": [name for name, _ in SELECTED],
+        "max_plaintext_bytes": MAX_TOTAL,
+        "non_authoritative": True,
+    })
+    G.authorization(scope["signed_owner_approval"],
+                    "provisional_preseed_offhost", binding, trust,
+                    int(time.time()))
     got = hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()
     need(got == scope["expected_machine_sha256"], "ORIGINAL_HOST_STOP")
     p = subprocess.run(
@@ -170,7 +193,6 @@ def _original_host(scope):
              "GIT_OPTIONAL_LOCKS": "0"})
     need(p.returncode == 0 and p.stdout == (HEAD + "\n").encode(),
          "SOURCE_HEAD_STOP")
-
 
 def preseed_live_to_stream(scope, recovery, output):
     """Never publish a live evidence GO; ciphertext-only output, no disk writes.
