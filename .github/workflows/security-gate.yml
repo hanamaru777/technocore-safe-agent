@@ -145,6 +145,52 @@ jobs:
             if (-not $?) { throw 'R1116_OFFLINE_TEST_STOP' }
           }
 
+      - name: Validate R1125 PowerShell 5.1 carrier and strict report parser (offline only)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1125_PS51_REQUIRED' }
+          $path = 'packaging/windows/r1125_original_root_mount_readonly.ps1'
+          $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+          $tok = $null; $err = $null
+          $ast = [Management.Automation.Language.Parser]::ParseInput($text, [ref]$tok, [ref]$err)
+          if ($err.Count -gt 0) { throw 'R1125_PARSE_STOP' }
+          foreach ($name in @('Read-R1125Report','Read-R1125FixedStop')) {
+            $found = @($ast.FindAll({
+              param($n)
+              $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq $name
+            }, $true))
+            if ($found.Count -ne 1) { throw 'R1125_FUNCTION_STOP' }
+            Invoke-Expression $found[0].Extent.Text
+          }
+          $good = [ordered]@{
+            phase='R1125'; result='PRIVATE_ROOT_MOUNT_WITNESS_ONLY'; action='READ_ONLY'
+            source_head='ec4bc4892d40cdd2a03e102faa44d72c89e01b99'
+            app_on_root_fs=$true; state_on_root_fs=$true
+            root_local_block_fs=$true; mount_table_stable=$true
+            nested_mounts=0; internal_symlinks_complete=$false
+            two_sqlite_epoch='NOT_PROVEN'; source_archive='NO_GO'
+            cutover='NO_GO'; oci_retirement='STRICT_NO_GO'
+          }
+          $goodBytes = [Text.Encoding]::ASCII.GetBytes(($good | ConvertTo-Json -Compress))
+          $accepted = Read-R1125Report $goodBytes
+          if ($accepted.result -cne 'PRIVATE_ROOT_MOUNT_WITNESS_ONLY' -or
+              $accepted.internal_symlinks_complete -ne $false) { throw 'R1125_GOOD_REPORT_STOP' }
+          $good.source_archive = 'GO'
+          $forged = [Text.Encoding]::ASCII.GetBytes(($good | ConvertTo-Json -Compress))
+          $rejected = $false
+          try { $null = Read-R1125Report $forged } catch { $rejected = $true }
+          if (-not $rejected) { throw 'R1125_FORGED_REPORT_ACCEPTED' }
+          $stopPayload = [ordered]@{
+            phase='R1125'; result='STOP'; reason='MOUNT_RACE_STOP'
+            source_archive='NO_GO'; cutover='NO_GO'; oci_retirement='STRICT_NO_GO'
+          }
+          $stopBytes = [Text.Encoding]::ASCII.GetBytes(($stopPayload | ConvertTo-Json -Compress))
+          if ((Read-R1125FixedStop $stopBytes) -cne 'MOUNT_RACE_STOP') {
+            throw 'R1125_STOP_CODE_UNREADABLE'
+          }
+          Write-Host 'WINDOWS_PS51_R1125_OFFLINE=PASS'
+
       - name: Test R1107 native PS5.1 dry-run gate without hosts or secrets
         if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
         shell: powershell
