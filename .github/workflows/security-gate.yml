@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "security/**"
+      - "codex/r1107-full-migration-readiness-onepass-v1"
   pull_request:
 
 permissions:
@@ -40,6 +41,18 @@ jobs:
       - name: Sync locked dependencies
         run: uv sync --frozen --group dev --extra oracle-signer --extra discord
 
+      - name: R1089 targeted transport and preservation regression before full suite
+        if: github.ref != 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
+        run: uv run pytest -q tests/test_r1089_migration.py tests/test_r1063_release_gates.py tests/test_r1084_offhost_ciphertext_stream.py tests/test_r1086_k137_disarmed_stream_restore.py
+
+      - name: R1107 targeted gates and directly reused regression before single full suite
+        if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
+        run: uv run pytest -q tests/test_r1107_readiness.py tests/test_r1103_g5_receipt_consistency.py tests/test_r1104_g1g4_coverage_consistency.py tests/test_r1106_technocore_export_readonly.py
+
+      - name: R1117 integrated offline tests and directly reused Linux regression
+        if: github.head_ref == 'codex/r1117-g3g4g5g6-integrated-onepass-20261031'
+        run: uv run pytest -q tests/test_r1117_integrated.py tests/test_r1099_k137_synthetic_signer_envelope.py tests/test_r1100_synthetic_recipient_rewrap.py tests/test_r1107_readiness.py tests/test_r1112_original_identity_readonly.py tests/test_r1113_prompt_codes.py
+
       - name: Run tests
         run: uv run pytest -q
 
@@ -55,6 +68,96 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Test R1066 two-host preflight with synthetic metadata and mocked SSH only
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --disable-pip-version-check pytest==9.1.1 cryptography==50.0.1
+          if ($LASTEXITCODE -ne 0) { throw 'PYTEST_INSTALL_STOP' }
+          python -m pytest -q tests/test_r1066_preflight.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1066_TEST_STOP' }
+          python -m pytest -q tests/test_r1085_windows_offhost_sink.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1085_TEST_STOP' }
+          python -m pytest -q tests/test_r1088_windows_ciphertext_custody.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1066_TEST_STOP' }
+
+      - name: Test R1089 binary custody and authenticated owner transport offline
+        shell: powershell
+        run: |
+          python -m pytest -q tests/test_r1089_migration.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1089_TEST_STOP' }
+
+      - name: R1117 native PS5.1 disarmed contract and synthetic integration
+        if: github.head_ref == 'codex/r1117-g3g4g5g6-integrated-onepass-20261031'
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check httpx==0.28.1
+          if ($LASTEXITCODE -ne 0) { throw 'R1117_DEPENDENCY_STOP' }
+          if (-not (Test-Path '.venv\Scripts\python.exe')) {
+            python -m venv --system-site-packages .venv
+            if ($LASTEXITCODE -ne 0) { throw 'R1117_LOCAL_ENV_STOP' }
+          }
+          $env:PYTHONPATH='src'
+          python -m pytest -q tests/test_r1117_integrated.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1117_TARGETED_STOP' }
+
+      - name: Parse new R1112 pinned one-shot read-only wrapper on native PS5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $file = 'packaging/windows/r1112_original_identity_readonly.ps1'
+          if (Test-Path -LiteralPath $file) {
+            if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1112_PS51_REQUIRED' }
+            $tokens = $null
+            $issues = $null
+            $ast = [Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $file).Path,[ref]$tokens,[ref]$issues)
+            if ($null -eq $ast -or @($issues).Count -ne 0) { throw 'R1112_PS51_PARSE_STOP' }
+            $raw = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $file).Path)
+            foreach ($required in @('StrictHostKeyChecking=yes','Unprotect-R1027',
+                                     'Remove-R1027Custody','PRIVATE_G1_IDENTITY_WITNESS_ONLY',
+                                     'r1112_original_identity_readonly.py','STRICT_NO_GO')) {
+              if (-not $raw.Contains($required)) { throw 'R1112_WRAPPER_CONTRACT_STOP' }
+            }
+            Write-Host 'R1112_PS51_READONLY_PARSE_PASS'
+          }
+
+      - name: Test R1115 fixed Oracle STOP response taxonomy on Windows PS5.1 (offline only)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $test = 'tests/windows/r1115_r1112_fixed_stop_parser.ps1'
+          if (Test-Path -LiteralPath $test) {
+            if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1115_PS51_REQUIRED' }
+            & $test
+            if (-not $?) { throw 'R1115_OFFLINE_TEST_STOP' }
+          }
+
+      - name: Test R1116 disk-only original G1 report on native PowerShell 5.1 (offline only)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $test = 'tests/windows/r1116_r1112_disk_only_schema.ps1'
+          if (Test-Path -LiteralPath $test) {
+            if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1116_PS51_REQUIRED' }
+            & $test
+            if (-not $?) { throw 'R1116_OFFLINE_TEST_STOP' }
+          }
+
+      - name: Test R1107 native PS5.1 dry-run gate without hosts or secrets
+        if: github.ref == 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check httpx==0.28.1
+          if ($LASTEXITCODE -ne 0) { throw 'READONLY_TEST_DEPENDENCY_STOP' }
+          if (-not (Test-Path '.venv\Scripts\python.exe')) {
+            python -m venv --system-site-packages .venv
+            if ($LASTEXITCODE -ne 0) { throw 'LOCAL_TEST_ENV_STOP' }
+          }
+          $env:PYTHONPATH = 'src'
+          python -m pytest -q tests/test_r1107_readiness.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1107_TEST_STOP' }
 
       - name: Prove bootstrap remote shell source is LF-only
         shell: powershell
@@ -377,3 +480,558 @@ jobs:
             throw 'R1059_UNRECOGNIZED_ACCEPT'
           }
           Write-Host 'WINDOWS_PS51_R1059_FIXED_STAGE_DIAGNOSTIC=PASS'
+
+      - name: Validate R1061 immutable R987 Windows witness offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'PS51_REQUIRED' }
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1061_partial_writer_witness_one_shot_readonly.ps1'
+          $tokens = $null
+          $parseErrors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            $path, [ref]$tokens, [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) { throw 'R1061_PS_PARSE_STOP' }
+          $text = [IO.File]::ReadAllText($path)
+          $pattern = "-TypeDefinition @'\r?\n(?<src>.*?)\r?\n'@"
+          $match = [Text.RegularExpressions.Regex]::Match(
+            $text, $pattern, [Text.RegularExpressions.RegexOptions]::Singleline
+          )
+          if (-not $match.Success) { throw 'R1061_CSHARP_SOURCE_STOP' }
+          Add-Type -ReferencedAssemblies 'System.dll','System.Core.dll','System.Security.dll','System.Web.Extensions.dll' -TypeDefinition $match.Groups['src'].Value
+          $original = 'ec4bc4892d40cdd2a03e102faa44d72c89e01b99'
+          $sample = @{
+            schema_version = 1
+            original_source_head = $original
+            units = @{
+              loaded_unit_names = 3
+              unitfile_names = 4
+              flop_prefixed_total = 3
+              flop_dynamic_instance_or_template_names = 1
+              dynamic_or_manual_instance_proven_absent = 'NO'
+              unprefixed_unit_exec_targets_proven_exhaustive = 'NO'
+              unit_restart_or_reboot_fence = 'NOT_PROVEN'
+            }
+            cron = @{
+              cron_regular_read = 4
+              cron_unverified_entries = 1
+              cron_direct_flop_line_matches = 0
+              cron_indirect_launch_exhaustively_proven = 'NO'
+            }
+            processes = @{
+              scanned_pids = 100
+              flop_commandline_matches = 3
+              open_flop_state_write_file_descriptors = 2
+              unknown_or_raced_process_fd_objects = 1
+              fd_snapshot_is_durable_fence = 'NO'
+            }
+            writer_snapshot_complete_and_future_proof = 'NO'
+            all_writers_fenced = 'NO'
+            external_signer_post_resolved = 'NO'
+            both_sqlite_common_epoch = 'NOT_PROVEN'
+            no_service_file_or_network_mutation = 'YES'
+            oci_retirement = 'STRICT_NO_GO'
+            systemd_loaded_status = 'OK'
+            systemd_unitfiles_status = 'OK'
+            cron_collection_status = 'OK'
+            proc_collection_status = 'OK'
+          }
+          $bytes = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $summary = [FlopR1061.Guards]::ValidateR1061($bytes)
+          if (-not $summary.Contains('FLOP_R1061_READONLY=COLLECTED')) { throw 'R1061_ACCEPT_STOP' }
+          if (-not $summary.Contains('FLOP_R1061_WRITABLE_STATE_FDS=2')) { throw 'R1061_FD_RESULT_STOP' }
+          if (-not $summary.Contains('FLOP_R1061_OCI_RETIREMENT=STRICT_NO_GO')) { throw 'R1061_RETIRED_STOP' }
+
+          # Even if systemd is unavailable, the remaining read-only proof is
+          # explicitly marked PARTIAL. Never convert unknown counts into zero.
+          $sample.systemd_loaded_status = 'TIMEOUT'
+          $sample.units.loaded_unit_names = 0
+          $sample.units.unitfile_names = 0
+          $sample.units.flop_prefixed_total = 0
+          $sample.units.flop_dynamic_instance_or_template_names = 0
+          $partialBytes = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $partialSummary = [FlopR1061.Guards]::ValidateR1061($partialBytes)
+          if (-not $partialSummary.Contains('FLOP_R1061_READONLY=PARTIAL')) { throw 'R1061_PARTIAL_BYPASS' }
+          if (-not $partialSummary.Contains('FLOP_R1061_FLOP_UNITS=UNVERIFIED')) { throw 'R1061_UNVERIFIED_BYPASS' }
+          $sample.systemd_loaded_status = 'SURPRISE'
+          $malformed = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $blocked = $false
+          try { $null = [FlopR1061.Guards]::ValidateR1061($malformed) } catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1061_INVALID_STATUS_ACCEPTED' }
+          $sample.systemd_loaded_status = 'OK'
+          $sample.units.loaded_unit_names = 3
+          $sample.units.unitfile_names = 4
+          $sample.units.flop_prefixed_total = 3
+          $sample.units.flop_dynamic_instance_or_template_names = 1
+          $sample.all_writers_fenced = 'YES'
+          $bad = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $blocked = $false
+          try { $null = [FlopR1061.Guards]::ValidateR1061($bad) } catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1061_FAKE_FENCE_ACCEPTED' }
+          Write-Host 'WINDOWS_PS51_R1061_OFFLINE=PASS'
+
+          $fn = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Get-R1061GuestStop'
+          }, $true)
+          if ($null -eq $fn) { throw 'R1061_GUEST_STOP_FUNCTION_MISSING' }
+          Invoke-Expression $fn.Extent.Text
+          foreach ($item in @('PREFLIGHT_SCOPE', 'PREFLIGHT_HEAD', 'UNITS',
+                               'CRON', 'PROCESS', 'REPORT', 'GUARD')) {
+            $raw = [Text.Encoding]::ASCII.GetBytes("FLOP_R1061_STOP=$($item)_STOP" + [char]10)
+            $seen = Get-R1061GuestStop $raw
+            if ($seen -cne ('GUEST_' + $item + '_STOP')) { throw 'R1061_ENUM_REJECTED' }
+          }
+          $bad = [Text.Encoding]::ASCII.GetBytes("FLOP_R1061_STOP=UNITS_STOP" + [char]10 + "private")
+          if ((Get-R1061GuestStop $bad) -cne 'GUEST_UNRECOGNIZED_STOP') {
+            throw 'R1061_STOP_CONTENT_LEAK'
+          }
+          $bad = [Text.Encoding]::ASCII.GetBytes("FLOP_R1061_STOP=FENCE_GO_STOP" + [char]10)
+          if ((Get-R1061GuestStop $bad) -cne 'GUEST_UNRECOGNIZED_STOP') {
+            throw 'R1061_UNRECOGNIZED_ACCEPT'
+          }
+          Write-Host 'WINDOWS_PS51_R1061_FIXED_STAGE_DIAGNOSTIC=PASS'
+
+      - name: Validate R1062 immutable R987 Windows witness offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'PS51_REQUIRED' }
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1062_writer_attribution_one_shot_readonly.ps1'
+          $tokens = $null
+          $parseErrors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            $path, [ref]$tokens, [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) { throw 'R1062_PS_PARSE_STOP' }
+          $text = [IO.File]::ReadAllText($path)
+          $pattern = "-TypeDefinition @'\r?\n(?<src>.*?)\r?\n'@"
+          $match = [Text.RegularExpressions.Regex]::Match(
+            $text, $pattern, [Text.RegularExpressions.RegexOptions]::Singleline
+          )
+          if (-not $match.Success) { throw 'R1062_CSHARP_SOURCE_STOP' }
+          Add-Type -ReferencedAssemblies 'System.dll','System.Core.dll','System.Security.dll','System.Web.Extensions.dll' -TypeDefinition $match.Groups['src'].Value
+          $original = 'ec4bc4892d40cdd2a03e102faa44d72c89e01b99'
+          $sample = @{
+            schema_version = 1
+            original_source_head = $original
+            units = @{
+              loaded_unit_names = 3
+              unitfile_names = 4
+              flop_prefixed_total = 3
+              flop_dynamic_instance_or_template_names = 1
+              dynamic_or_manual_instance_proven_absent = 'NO'
+              unprefixed_unit_exec_targets_proven_exhaustive = 'NO'
+              unit_restart_or_reboot_fence = 'NOT_PROVEN'
+              expected_template_present = 3
+              expected_template_missing = 24
+              historical_extra_present = 0
+              new_or_unknown_unit_names = 0
+              dynamic_actual_instances = 0
+              signer_route_template_present = 1
+            }
+            cron = @{
+              cron_regular_read = 4
+              cron_unverified_entries = 1
+              cron_unverified_links = 0
+              cron_unverified_specials = 1
+              cron_unverified_regulars = 0
+              cron_direct_flop_line_matches = 0
+              cron_indirect_launch_exhaustively_proven = 'NO'
+            }
+            processes = @{
+              scanned_pids = 100
+              flop_commandline_matches = 3
+              open_flop_state_write_file_descriptors = 2
+              writable_fd_signer = 1
+              writable_fd_capture = 1
+              writable_fd_tclk = 0
+              writable_fd_close1 = 0
+              writable_fd_other = 0
+              unknown_or_raced_process_fd_objects = 1
+              proc_unknown_race = 1
+              proc_unknown_permission = 0
+              proc_unknown_other = 0
+              fd_snapshot_is_durable_fence = 'NO'
+            }
+            writer_snapshot_complete_and_future_proof = 'NO'
+            all_writers_fenced = 'NO'
+            external_signer_post_resolved = 'NO'
+            both_sqlite_common_epoch = 'NOT_PROVEN'
+            no_service_file_or_network_mutation = 'YES'
+            oci_retirement = 'STRICT_NO_GO'
+            systemd_loaded_status = 'OK'
+            systemd_unitfiles_status = 'OK'
+            cron_collection_status = 'OK'
+            proc_collection_status = 'OK'
+          }
+          $bytes = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $summary = [FlopR1062.Guards]::ValidateR1062($bytes)
+          if (-not $summary.Contains('FLOP_R1062_READONLY=COLLECTED')) { throw 'R1062_ACCEPT_STOP' }
+          if (-not $summary.Contains('FLOP_R1062_WRITABLE_STATE_FDS=2')) { throw 'R1062_FD_RESULT_STOP' }
+          if (-not $summary.Contains('FLOP_R1062_OCI_RETIREMENT=STRICT_NO_GO')) { throw 'R1062_RETIRED_STOP' }
+
+          # Even if systemd is unavailable, the remaining read-only proof is
+          # explicitly marked PARTIAL. Never convert unknown counts into zero.
+          if (-not $summary.Contains('FLOP_R1062_KNOWN_TEMPLATE_MISSING=24')) {
+            throw 'R1062_MISSING_TEMPLATE_TEST_STOP'
+          }
+          if (-not $summary.Contains('FLOP_R1062_WRITABLE_FD_CAPTURE=1')) {
+            throw 'R1062_WRITER_CLASS_TEST_STOP'
+          }
+          # Reject a count that could understate live unknowns, and never allow
+          # a source-only schema to certify writer exclusion.
+          $sample.units.new_or_unknown_unit_names = 1
+          $tamper = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $blocked = $false
+          try { $null = [FlopR1062.Guards]::ValidateR1062($tamper) } catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1062_BROKEN_UNIT_SUM_ACCEPTED' }
+          $sample.units.new_or_unknown_unit_names = 0
+          $sample.systemd_loaded_status = 'TIMEOUT'
+          $sample.units.loaded_unit_names = 0
+          $sample.units.unitfile_names = 0
+          $sample.units.flop_prefixed_total = 0
+          $sample.units.flop_dynamic_instance_or_template_names = 0
+          $sample.units.expected_template_present = 0
+          $sample.units.expected_template_missing = 0
+          $sample.units.historical_extra_present = 0
+          $sample.units.new_or_unknown_unit_names = 0
+          $sample.units.dynamic_actual_instances = 0
+          $sample.units.signer_route_template_present = 0
+          $partialBytes = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $partialSummary = [FlopR1062.Guards]::ValidateR1062($partialBytes)
+          if (-not $partialSummary.Contains('FLOP_R1062_READONLY=PARTIAL')) { throw 'R1062_PARTIAL_BYPASS' }
+          if (-not $partialSummary.Contains('FLOP_R1062_FLOP_UNITS=UNVERIFIED')) { throw 'R1062_UNVERIFIED_BYPASS' }
+          $sample.systemd_loaded_status = 'SURPRISE'
+          $malformed = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $blocked = $false
+          try { $null = [FlopR1062.Guards]::ValidateR1062($malformed) } catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1062_INVALID_STATUS_ACCEPTED' }
+          $sample.systemd_loaded_status = 'OK'
+          $sample.units.loaded_unit_names = 3
+          $sample.units.unitfile_names = 4
+          $sample.units.flop_prefixed_total = 3
+          $sample.units.flop_dynamic_instance_or_template_names = 1
+          $sample.units.expected_template_present = 3
+          $sample.units.expected_template_missing = 24
+          $sample.units.signer_route_template_present = 1
+          $sample.all_writers_fenced = 'YES'
+          $bad = [Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 9))
+          $blocked = $false
+          try { $null = [FlopR1062.Guards]::ValidateR1062($bad) } catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1062_FAKE_FENCE_ACCEPTED' }
+          Write-Host 'WINDOWS_PS51_R1062_OFFLINE=PASS'
+
+          $fn = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Get-R1062GuestStop'
+          }, $true)
+          if ($null -eq $fn) { throw 'R1062_GUEST_STOP_FUNCTION_MISSING' }
+          Invoke-Expression $fn.Extent.Text
+          foreach ($item in @('PREFLIGHT_SCOPE', 'PREFLIGHT_HEAD', 'UNITS',
+                               'CRON', 'PROCESS', 'REPORT', 'GUARD')) {
+            $raw = [Text.Encoding]::ASCII.GetBytes("FLOP_R1062_STOP=$($item)_STOP" + [char]10)
+            $seen = Get-R1062GuestStop $raw
+            if ($seen -cne ('GUEST_' + $item + '_STOP')) { throw 'R1062_ENUM_REJECTED' }
+          }
+          $bad = [Text.Encoding]::ASCII.GetBytes("FLOP_R1062_STOP=UNITS_STOP" + [char]10 + "private")
+          if ((Get-R1062GuestStop $bad) -cne 'GUEST_UNRECOGNIZED_STOP') {
+            throw 'R1062_STOP_CONTENT_LEAK'
+          }
+          $bad = [Text.Encoding]::ASCII.GetBytes("FLOP_R1062_STOP=FENCE_GO_STOP" + [char]10)
+          if ((Get-R1062GuestStop $bad) -cne 'GUEST_UNRECOGNIZED_STOP') {
+            throw 'R1062_UNRECOGNIZED_ACCEPT'
+          }
+          Write-Host 'WINDOWS_PS51_R1062_FIXED_STAGE_DIAGNOSTIC=PASS'
+
+      - name: Validate R1092 Windows owner cleanup runner without network or credentials
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'R1092_REQUIRES_PS51' }
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1092_original_cache_cleanup.ps1'
+          $tok = $null; $err = $null
+          $ast = [Management.Automation.Language.Parser]::ParseFile($path,[ref]$tok,[ref]$err)
+          if ($err.Count -ne 0) { throw 'R1092_SYNTAX_STOP' }
+          $fn = $ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -ceq 'Read-R1092Report'
+          },$true)
+          if ($null -eq $fn) { throw 'R1092_REPORT_FUNCTION_MISSING' }
+          Invoke-Expression $fn.Extent.Text
+          $sample = (@(
+            'R1091_ORIGINAL_SCOPE=PINNED'
+            'OBJECTS_INSPECTED=30682'
+            'APP_PROVEN_CACHE_ALLOCATED_BYTES=8192'
+            'STATE_SIGNER_ALLOCATED_BYTES=270000'
+            'PROVEN_CACHE_DIR_COUNT=2'
+            'PROVEN_CACHE_ESTIMATED_BYTES=8192'
+            'DELETED_CACHE_DIR_COUNT=2'
+            'DISK_FREE_BEFORE=11852025856'
+            'DISK_FREE_AFTER=11852034048'
+            'STATE_GIT_VENV_LOG_SIGNER_DB_DELETE=NONE'
+            'RESULT=COMPLETE'
+          ) -join [char]10) + [char]10
+          $bytes = [Text.Encoding]::ASCII.GetBytes($sample)
+          $ok = Read-R1092Report $bytes $true
+          if ($ok.result -cne 'CACHE_CLEANUP_COMPLETED' -or
+              $ok.deleted_cache_dirs -ne 2 -or
+              $ok.allocated_by_category['STATE_SIGNER_ALLOCATED_BYTES'] -ne 270000 -or
+              $ok.cutover -cne 'NO_GO') {
+            throw 'R1092_RECEIPT_POSITIVE_STOP'
+          }
+          foreach ($bad in @(
+            $sample + 'EXTRA_FIELD=NOPE' + [char]10,
+            $sample.Replace('RESULT=COMPLETE','RESULT=GO'),
+            $sample.Replace('DELETED_CACHE_DIR_COUNT=2','DELETED_CACHE_DIR_COUNT=30000')
+          )) {
+            $blocked = $false
+            try { $null=Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($bad)) $true }
+            catch { $blocked=$true }
+            if (-not $blocked) { throw 'R1092_UNSAFE_RECEIPT_ACCEPTED' }
+          }
+          $whole = [IO.File]::ReadAllText($path)
+          if (-not $whole.Contains('DELETE_ONE_SHOT_CONSUMED')) {
+            throw 'R1092_DELETE_ONE_SHOT_GUARD_MISSING'
+          }
+          $readOnlySample = $sample.Replace('DELETED_CACHE_DIR_COUNT=2' + [char]10,
+                                             'DELETE=NOT_REQUESTED' + [char]10)
+          $safe = Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($readOnlySample)) $false
+          if ($safe.result -cne 'CATEGORY_INVENTORY_ONLY' -or
+              $safe.deleted_cache_dirs -ne 0 -or
+              $safe.allocated_by_category.Count -ne 2) {
+            throw 'R1092_READONLY_RECEIPT_STOP'
+          }
+          # Reproduce an actual stdout key emitted when app/local-state exists.
+          # The REST of the original OCI script and its Git blob are unchanged.
+          $hyphenReport = $readOnlySample.Replace(
+            'APP_PROVEN_CACHE_ALLOCATED_BYTES=8192',
+            'APP_LOCAL-STATE_PROTECTED_ALLOCATED_BYTES=8192'
+          )
+          $normalized = Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($hyphenReport)) $false
+          if ($normalized.allocated_by_category['APP_LOCAL_STATE_PROTECTED_ALLOCATED_BYTES'] -ne 8192) {
+            throw 'R1092_ACTUAL_CATEGORY_LABEL_STOP'
+          }
+          $duplicate = $hyphenReport + 'APP_LOCAL_STATE_PROTECTED_ALLOCATED_BYTES=1' + [char]10
+          $blocked = $false
+          try { $null = Read-R1092Report ([Text.Encoding]::ASCII.GetBytes($duplicate)) $false }
+          catch { $blocked = $true }
+          if (-not $blocked) { throw 'R1092_CATEGORY_CANONICAL_COLLISION_STOP' }
+          Write-Host 'R1092_PS51_SOURCE_AND_REPORT=PASS'
+
+      - name: Validate R1093 original hotspot PS5.1 JSON guard offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1093_original_hotspots_readonly.ps1'
+          $tok=$null; $err=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tok,[ref]$err)
+          if ($err.Count -ne 0) { throw 'R1093_PS51_SYNTAX_STOP' }
+          $fn=$ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq 'Read-R1093Report'
+          },$true)
+          if ($null -eq $fn) { throw 'R1093_REPORT_FUNCTION_MISSING' }
+          Invoke-Expression $fn.Extent.Text
+          $item=@{ token='abcdef012345';kind='CAPTURE_DB';allocated_bytes=[long]102400;
+                  logical_bytes=[long]101000;age_days=[long]3 }
+          $root=@{ allocated_bytes=[long]204800;objects=[long]7;
+                   regular_files=[long]2;symlinks=[long]0;largest=@($item) }
+          $sample=@{schema_version=1;phase='R1093';result='HOTSPOTS_ONLY';
+            head='MATCH';roots=@{observer=$root;autopilot=$root};
+            disk_free_bytes=[long]11800000000;action='READ_ONLY';
+            cutover='NO_GO';oci_retirement='STRICT_NO_GO'}
+          $bytes=[Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 7))
+          $ok=Read-R1093Report $bytes
+          if ($ok.result -cne 'HOTSPOTS_ONLY' -or
+              $ok.roots.observer.largest[0].kind -cne 'CAPTURE_DB' -or
+              $ok.action -cne 'READ_ONLY') { throw 'R1093_REPORT_POSITIVE_STOP' }
+          $sample.action='DELETE'
+          $blocked=$false
+          try {
+            $b=[Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 7))
+            $null=Read-R1093Report $b
+          } catch { $blocked=$true }
+          if (-not $blocked) { throw 'R1093_MUTATING_RESULT_ACCEPTED' }
+          $sample.action='READ_ONLY'
+          $sample.roots.observer.largest[0].token='../../../secret'
+          $blocked=$false
+          try {
+            $b=[Text.Encoding]::ASCII.GetBytes(($sample | ConvertTo-Json -Compress -Depth 7))
+            $null=Read-R1093Report $b
+          } catch { $blocked=$true }
+          if (-not $blocked) { throw 'R1093_PATH_RESULT_ACCEPTED' }
+          Write-Host 'R1093_PS51_READONLY_REPORT=PASS'
+
+      - name: Validate R1094 PS5.1 hot-file attribution schema offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1094_original_attribution_readonly.ps1'
+          $tokens=$null; $errors=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) { throw 'R1094_PS_PARSE_STOP' }
+          $fn=$ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -ceq 'Read-R1094Report'
+          },$true)
+          if ($null -eq $fn) { throw 'R1094_REPORT_FUNCTION_STOP' }
+          Invoke-Expression $fn.Extent.Text
+          $audit=[ordered]@{files=1;allocated_bytes=[long]5166563328;
+            over_7d_files=1;over_7d_bytes=[long]5166563328;
+            over_30d_files=1;over_30d_bytes=[long]5166563328}
+          $one=[ordered]@{token='aa2b53f61777';basename='archive.jsonl';
+            class='OTHER_JSONL';allocated_bytes=[long]5166563328;
+            logical_bytes=[long]5166537629;age_days=55;hardlinks=1}
+          $root=[ordered]@{objects=2;regular_files=1;
+            allocated_bytes=[long]5166563328;categories=@{OTHER_JSONL=$audit};top=@($one)}
+          $report=[ordered]@{schema=1;phase='R1094';result='ATTRIBUTION_READONLY';
+            roots=@{observer=$root;autopilot=$root};action='READ_ONLY';
+            cutover='NO_GO';oci_retirement='STRICT_NO_GO'}
+          $bytes=[Text.Encoding]::ASCII.GetBytes(($report|ConvertTo-Json -Compress -Depth 9))
+          $got=Read-R1094Report $bytes
+          if ($got.result -cne 'ATTRIBUTION_READONLY' -or
+              $got.roots.autopilot.top[0].allocated_bytes -ne 5166563328 -or
+              $got.roots.autopilot.categories.OTHER_JSONL.files -ne 1) {
+            throw 'R1094_POSITIVE_RECEIPT_STOP'
+          }
+          foreach ($tamper in @('action','basename','total')) {
+            $originalAction=$report.action
+            $originalName=$report.roots.observer.top[0].basename
+            $originalSize=$report.roots.observer.allocated_bytes
+            if ($tamper -eq 'action') { $report.action='DELETE' }
+            if ($tamper -eq 'basename') { $report.roots.observer.top[0].basename='../private' }
+            if ($tamper -eq 'total') { $report.roots.observer.allocated_bytes=[long]1 }
+            $blocked=$false
+            try {
+              $bytes=[Text.Encoding]::ASCII.GetBytes(($report|ConvertTo-Json -Compress -Depth 9))
+              $null=Read-R1094Report $bytes
+            } catch { $blocked=$true }
+            $report.action=$originalAction
+            $report.roots.observer.top[0].basename=$originalName
+            $report.roots.observer.allocated_bytes=$originalSize
+            if (-not $blocked) { throw 'R1094_MALFORMED_RECEIPT_ACCEPTED' }
+          }
+          Write-Host 'R1094_PS51_HOTSPOTS_READONLY_PASS'
+
+      - name: Validate R1095 PS5.1 orphan removal restricted receipt offline
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path=Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1095_original_orphan_cleanup.ps1'
+          $tokens=$null;$errors=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) { throw 'R1095_PS51_PARSE_STOP' }
+          $f=$ast.Find({
+            param($node)
+            $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -ceq 'Read-R1095Report'
+          },$true)
+          if ($null -eq $f) { throw 'R1095_REPORT_FUNCTION_STOP' }
+          Invoke-Expression $f.Extent.Text
+          $sample=[ordered]@{
+            phase='R1095';result='APPLIED';dry_run=$false;
+            entries=2470;matching_tmp=2440;skipped_tmp=2;unknown_tmp=4;
+            eligible=2438;eligible_bytes=[long]19292643328;
+            deleted=2438;deleted_allocated_bytes=[long]19292643328;
+            disk_free_before=[long]11827724288;disk_free_after=[long]31120367616;
+            source='ORIGINAL_PINNED';protected_data='UNTOUCHED';
+            historical_autopilot_archive='PRESERVED';cutover='NO_GO';
+            oci_retirement='STRICT_NO_GO'
+          }
+          $raw=[Text.Encoding]::ASCII.GetBytes(($sample|ConvertTo-Json -Compress -Depth 6))
+          $ok=Read-R1095Report $raw
+          if ($ok.result -cne 'APPLIED' -or $ok.deleted -ne 2438 -or
+              $ok.deleted_allocated_bytes -ne 19292643328 -or
+              $ok.historical_autopilot_archive -cne 'PRESERVED') {
+            throw 'R1095_VALID_RECEIPT_REJECTED'
+          }
+          foreach ($field in @('protected_data','result','deleted','dry_run')) {
+            $prior=$sample[$field]
+            if ($field -eq 'protected_data') {$sample[$field]='REMOVED'}
+            if ($field -eq 'result') {$sample[$field]='INVENTORY_ONLY'}
+            if ($field -eq 'deleted') {$sample[$field]=2437}
+            if ($field -eq 'dry_run') {$sample[$field]=$true}
+            $blocked=$false
+            try {
+              $raw=[Text.Encoding]::ASCII.GetBytes(($sample|ConvertTo-Json -Compress -Depth 6))
+              $null=Read-R1095Report $raw
+            } catch {$blocked=$true}
+            $sample[$field]=$prior
+            if (-not $blocked) {throw 'R1095_UNSAFE_RECEIPT_ACCEPTED'}
+          }
+          $rawScript=[IO.File]::ReadAllText($path)
+          if (-not $rawScript.Contains('sudo -n /usr/bin/python3 -I -B - --apply-obsolete-atomic-temp')) {
+            throw 'R1095_REMOTE_COMMAND_SCOPE_STOP'
+          }
+          Write-Host 'R1095_PS51_LIMITED_CLEANUP_RECEIPT_PASS'
+
+      - name: Validate R1102 PS5.1 strict read-only live survey receipt
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $path=Join-Path $env:GITHUB_WORKSPACE 'packaging\windows\r1102_original_g1g4_runtime_readonly.ps1'
+          $tokens=$null;$errors=$null
+          $ast=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+          if ($errors.Count -ne 0) { throw 'R1102_PARSE_STOP' }
+          $f=$ast.Find({param($n)
+            $n -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $n.Name -ceq 'Read-R1102Report'
+          },$true)
+          if ($null -eq $f) { throw 'R1102_FUNCTION_STOP' }
+          Invoke-Expression $f.Extent.Text
+          $units=[ordered]@{
+            expected_source_templates=27;recognized_installed_templates=26;
+            missing_expected_templates=1;extra_installed_names=4;
+            historical_four_extras_present=4;dropin_directories=0;
+            symlink_unit_aliases=0;loaded_matching_units=18;
+            active_matching_units=4;dynamic_tclk_instances=0;
+            unit_root_objects=512;unit_execstart_and_all_aliases_verified=$false}
+          $cron=[ordered]@{cron_objects=9;cron_content_matches=2;
+            cron_special_objects=1;cron_oversize=0;cron_unreadable=0;
+            manual_and_transient_launchers_proven_absent=$false}
+          $fds=[ordered]@{relevant_processes=4;relevant_file_descriptors=7;
+            writable_descriptors=5;proc_races_or_unknown_descriptors=1;
+            all_writers_fenced=$false}
+          $mounts=[ordered]@{pid1_mount_namespace_matches=$true;
+            all_original_mount_aliases_fenced=$false}
+          $sample=[ordered]@{phase='R1102';result='LIVE_G1_G4_DIAGNOSTIC_ONLY';
+            action='READ_ONLY';units=$units;cron=$cron;descriptors=$fds;mounts=$mounts;
+            signed_g4='NOT_PROVEN';all_five_upstream_post_verdicts='NOT_PROVEN';
+            source_archive='NOT_AUTHORIZED';cutover='NO_GO';
+            oci_retirement='STRICT_NO_GO'}
+          function Bytes([object]$x) {
+            return [Text.Encoding]::ASCII.GetBytes(($x | ConvertTo-Json -Compress -Depth 10))
+          }
+          $positive=Read-R1102Report (Bytes $sample)
+          if ($positive.units.missing_expected_templates -ne 1 -or
+              $positive.descriptors.writable_descriptors -ne 5 -or
+              $positive.source_archive -cne 'NOT_AUTHORIZED') {
+            throw 'R1102_POSITIVE_STOP'
+          }
+          foreach ($field in @('signed_g4','result','writable','bool','count')) {
+            $prior=$null
+            if ($field -eq 'signed_g4') {$prior=$sample.signed_g4;$sample.signed_g4='PASS'}
+            if ($field -eq 'result') {$prior=$sample.result;$sample.result='FENCED'}
+            if ($field -eq 'writable') {$prior=$sample.descriptors.writable_descriptors;
+              $sample.descriptors.writable_descriptors=8}
+            if ($field -eq 'bool') {$prior=$sample.descriptors.all_writers_fenced;
+              $sample.descriptors.all_writers_fenced=$true}
+            if ($field -eq 'count') {$prior=$sample.units.expected_source_templates;
+              $sample.units.expected_source_templates=26}
+            $denied=$false
+            try {$null=Read-R1102Report (Bytes $sample)} catch {$denied=$true}
+            if ($field -eq 'signed_g4') {$sample.signed_g4=$prior}
+            if ($field -eq 'result') {$sample.result=$prior}
+            if ($field -eq 'writable') {$sample.descriptors.writable_descriptors=$prior}
+            if ($field -eq 'bool') {$sample.descriptors.all_writers_fenced=$prior}
+            if ($field -eq 'count') {$sample.units.expected_source_templates=$prior}
+            if (-not $denied) {throw 'R1102_UNSAFE_RECEIPT_ACCEPTED'}
+          }
+          Write-Host 'R1102_PS51_LIVE_SURVEY_SCHEMA_PASS'
