@@ -56,7 +56,8 @@ def test_real_r1084_aead_provisional_ciphertext_not_plaintext(tmp_path, monkeypa
     archive = parent / "preseed"
     receipt = W.receive_offhost_ciphertext(io.BytesIO(cipher), archive,
                                             quota_bytes=20 * 1024**2)
-    assert receipt["files"] >= 3
+    assert receipt["ciphertext_files"] >= 3
+    assert receipt["aead_verified"] is False
     raw = b"".join(T.decrypt(archive, recovery))
     assert b"example-only-not-real" in raw
     assert b"fixture" in raw
