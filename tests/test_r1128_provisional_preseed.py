@@ -32,6 +32,7 @@ def fixture_roots(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "STATE", state)
     monkeypatch.setattr(P, "_original_host", lambda scope: None)
     monkeypatch.setattr(P, "pressure", lambda: None)
+    monkeypatch.setattr(P, "_mount_guard", lambda: None)
     return app, state
 
 
@@ -185,6 +186,7 @@ def test_independent_ed25519_owner_approval_binds_exact_preseed_scope(monkeypatc
         "signed_owner_approval": packet,
     }
     monkeypatch.setattr(P.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(P, "_mount_guard", lambda: None)
     monkeypatch.setattr(P.subprocess, "run", lambda *a, **kw:
                         SimpleNamespace(returncode=0,
                             stdout=(P.HEAD + "\n").encode()))
