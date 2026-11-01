@@ -83,6 +83,19 @@ def pressure():
         raise Stop("PRESSURE_UNAVAILABLE") from None
 
 
+def _mount_guard():
+    """Reuse the accepted R1126 exact-root mount predicate fresh, never the
+    consumed R1126 SSH operation. The future code bundle MUST pin this module.
+    """
+    M = load("../oracle/r1126_original_root_mount_readonly.py", "r1128_mount")
+    raw = Path("/proc/self/mountinfo").read_bytes()
+    observed = M.parse_mounts(raw)
+    M.mount_scope(observed, (APP, STATE))
+    device = os.stat("/").st_dev
+    need(APP.stat().st_dev == device and STATE.stat().st_dev == device,
+         "MOUNT_DEVICE_STOP")
+
+
 def _file(root, tail):
     return root.joinpath(*tail.split("/"))
 
@@ -189,6 +202,7 @@ def _original_host(scope):
                     int(time.time()))
     got = hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()
     need(got == scope["expected_machine_sha256"], "ORIGINAL_HOST_STOP")
+    _mount_guard()
     p = subprocess.run(
         ["/usr/bin/git", "-c", "safe.directory=" + str(APP), "-C", str(APP),
          "rev-parse", "--verify", "HEAD"], capture_output=True,
@@ -222,8 +236,10 @@ def preseed_live_to_stream(scope, recovery, output):
 
     def census():
         guard()
+        _mount_guard()
         _, manifest, ids = selected_manifest(roots, T)
         guard()
+        _mount_guard()
         return roots, manifest, ids
 
     roots, manifest, ids = census()
