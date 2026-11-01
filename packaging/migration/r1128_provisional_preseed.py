@@ -161,8 +161,13 @@ def _original_host(scope):
     need(scope["expected_machine_sha256"] != scope["destination_machine_sha256"],
          "OWNER_AUTH_REQUIRED")
     G = load("r1063_release_gates.py", "r1128_signed_release")
-    trust = scope["independent_trust"]
-    need(isinstance(trust, G.Trust), "OWNER_AUTH_REQUIRED")
+    enrolled = scope["independent_trust"]
+    # Trusted configuration may have been constructed with the same audited
+    # schema in a separately loaded R1063 module. Never rely on Python class
+    # identity across an importlib bootstrap boundary.
+    need(all(hasattr(enrolled, name) for name in
+             ("context", "keys", "source_key_ids")), "OWNER_AUTH_REQUIRED")
+    trust = G.Trust(enrolled.context, enrolled.keys, enrolled.source_key_ids)
     G.context_valid(trust.context)
     need(trust.context["host"] == scope["expected_machine_sha256"] and
          trust.context["destination"] == scope["destination_machine_sha256"] and
