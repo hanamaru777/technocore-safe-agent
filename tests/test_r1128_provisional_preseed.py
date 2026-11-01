@@ -126,3 +126,75 @@ def test_output_failure_does_not_create_source_backup(tmp_path, monkeypatch):
         P.preseed_live_to_stream({}, b"not-a-production-secret-test-only-32+bytes",
                                  BreakOutput())
     assert sorted(x.name for x in tmp_path.iterdir()) == ["flop-app", "flop-state"]
+
+
+def test_independent_ed25519_owner_approval_binds_exact_preseed_scope(monkeypatch):
+    # Synthetic, non-network proof of R1063 signed owner admission. A forged
+    # boolean or altered source/destination must not release the source.
+    if sys.platform != "linux":
+        pytest.skip("Linux-only original-host source admission")
+    import hashlib
+    from types import SimpleNamespace
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    G = P.load("r1063_release_gates.py", "r1128_test_independent_gates")
+    signing_key = Ed25519PrivateKey.generate()
+    pub = signing_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    kid = hashlib.sha256(pub).hexdigest()
+    host = hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()
+    destination = "f" * 64 if host != "f" * 64 else "e" * 64
+    context = {
+        "campaign": "1" * 64,
+        "host": host,
+        "destination": destination,
+        "did": "2" * 64,
+        "source_head": P.HEAD,
+        "generation": 1,
+    }
+    enrolled_elsewhere = G.Trust(context, {
+        kid: (pub, frozenset({"owner"}))}, frozenset())
+    binding = G.sha({
+        "purpose": "provisional_preseed_ciphertext_only",
+        "source": host,
+        "destination": destination,
+        "source_head": P.HEAD,
+        "files": [x[0] for x in P.SELECTED],
+        "max_plaintext_bytes": P.MAX_TOTAL,
+        "non_authoritative": True,
+    })
+    import time
+    stamp = int(time.time())
+    body = {
+        "action": "provisional_preseed_offhost",
+        "context": context,
+        "binding": binding,
+        "approved_at": stamp - 2,
+        "expires_at": stamp + 240,
+    }
+    packet = {
+        "signer": kid,
+        "body": body,
+        "signature": signing_key.sign(G.DOMAIN + G.canonical(body)).hex(),
+    }
+    scope = {
+        "expected_machine_sha256": host,
+        "destination_machine_sha256": destination,
+        "independent_trust": enrolled_elsewhere,
+        "signed_owner_approval": packet,
+    }
+    monkeypatch.setattr(P.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(P.subprocess, "run", lambda *a, **kw:
+                        SimpleNamespace(returncode=0,
+                            stdout=(P.HEAD + "\n").encode()))
+    P._original_host(scope)
+    altered = dict(scope, destination_machine_sha256="a" * 64)
+    with pytest.raises(P.Stop, match="OWNER_AUTH_REQUIRED"):
+        P._original_host(altered)
+    unsigned = dict(scope, signed_owner_approval={
+        **packet, "signature": "0" * 128})
+    with pytest.raises(Exception):
+        P._original_host(unsigned)
+    with pytest.raises(P.Stop, match="OWNER_AUTH_REQUIRED"):
+        P._original_host({"owner_provisional_authorization": True})
