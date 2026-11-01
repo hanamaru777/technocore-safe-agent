@@ -40,7 +40,7 @@ def test_nfs_root_fails_closed():
 
 def test_bad_mountinfo_and_duplicate_root_stop():
     with pytest.raises(mod.Stop, match="MOUNT_FORMAT_STOP"):
-        mod.parse_mounts(b"not-mountinfo\\n")
+        mod.parse_mounts(b"not-mountinfo\n")
     stacked = mod.parse_mounts((ROOT_LINE + ROOT_LINE).encode("ascii"))
     with pytest.raises(mod.Stop, match="ROOT_MOUNT_ALIAS_STOP"):
         mod.mount_scope(stacked, (mod.APP, mod.STATE))
@@ -48,14 +48,14 @@ def test_bad_mountinfo_and_duplicate_root_stop():
 
 def test_unrelated_duplicate_mount_allowed_but_nested_still_fails():
     # Real Linux may expose duplicate mountpoints in unrelated subtrees.
-    unrelated = "33 31 0:12 / /proc rw - proc proc rw\\n"
+    unrelated = "33 31 0:12 / /proc rw - proc proc rw\n"
     mounts = mod.parse_mounts(
         (ROOT_LINE + unrelated + unrelated).encode("ascii")
     )
     assert mod.mount_scope(mounts, (mod.APP, mod.STATE)) is True
 
     relevant = (
-        "34 31 0:13 / /var/lib/technocore-safe-agent rw - tmpfs tmpfs rw\\n"
+        "34 31 0:13 / /var/lib/technocore-safe-agent rw - tmpfs tmpfs rw\n"
     )
     mounts2 = mod.parse_mounts(
         (ROOT_LINE + unrelated + unrelated + relevant).encode("ascii")
