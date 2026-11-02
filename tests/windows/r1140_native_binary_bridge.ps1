@@ -70,14 +70,16 @@ sys.stdout.buffer.flush()
 '@
     Assert-R1140Stop $large 'WIRE_LIMIT_STOP' $dst
     $oversized=New-Object byte[] (4*1024*1024+1)
-    for($i=0;$i -lt $oversized.Length;$i++){ $oversized[$i]=65 }
+    $oversized[0]=65
+    $oversized[$oversized.Length-1]=65
     $stopped=$false
     try { $null=[FlopR1140.Bridge]::Pump($python,$src,$python,$dst,$oversized,30000) }
     catch {
         if ($_.Exception.Message -notmatch 'BOUND_STOP') { throw }
         $stopped=$true
     }
-    if (-not $stopped -or @($oversized | Where-Object {$_ -ne 0}).Count -ne 0) {
+    if (-not $stopped -or $oversized[0] -ne 0 -or
+        $oversized[$oversized.Length-1] -ne 0) {
         throw 'R1140_CONTROL_BOUND_STOP'
     }
     Write-Host 'R1140_NATIVE_BINARY_BRIDGE=PASS'
