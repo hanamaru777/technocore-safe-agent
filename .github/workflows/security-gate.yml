@@ -175,6 +175,14 @@ jobs:
           [IO.File]::WriteAllBytes($path,$sentinel)
           try {
             $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $syntheticAcl=Get-Acl -LiteralPath $path
+            if ($syntheticAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $owner) {
+              # GitHub's elevated runner can own fixtures as Administrators.
+              # Reassign ONLY this synthetic disposable file to the test
+              # principal; never relax the production owner-check contract.
+              $syntheticAcl.SetOwner([Security.Principal.SecurityIdentifier]::new($owner))
+              Set-Acl -LiteralPath $path -AclObject $syntheticAcl -ErrorAction Stop
+            }
             if ((Get-Acl -LiteralPath $path).GetOwner(
                 [Security.Principal.SecurityIdentifier]).Value -cne $owner) {
               throw 'R1138_SYNTHETIC_OWNER_STOP'
