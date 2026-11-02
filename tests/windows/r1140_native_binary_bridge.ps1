@@ -27,7 +27,9 @@ try {
     $sink=Join-Path $temp 'synthetic_sink.py'
     $consumer=@'
 import sys
+import time
 data=sys.stdin.buffer.read()
+time.sleep(4)
 sys.stdout.buffer.write(b'RECIPIENT-CIPHERTEXT-ONLY')
 '@
     [IO.File]::WriteAllText($sink,$consumer,[Text.Encoding]::ASCII)
