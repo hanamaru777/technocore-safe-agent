@@ -145,6 +145,13 @@ jobs:
             if (-not $?) { throw 'R1116_OFFLINE_TEST_STOP' }
           }
 
+      - name: Validate R1144 original metadata readonly carrier and strict result parser (offline)
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          & 'tests/windows/r1144_original_source_metadata_parser.ps1'
+          if (-not $?) { throw 'R1144_PS51_PARSER_STOP' }
+
       - name: Validate R1141 strict native recipient receipt acceptance (offline)
         shell: powershell
         run: |
