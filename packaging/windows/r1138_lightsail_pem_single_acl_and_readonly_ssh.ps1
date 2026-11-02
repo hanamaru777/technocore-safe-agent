@@ -48,14 +48,14 @@ function Set-R1138SinglePemAcl([string]$path) {
             $updated.RemoveAccessRuleSpecific($rule)
         }
     }
-    $userRule=New-Object Security.AccessControl.FileSystemAccessRule(
+    $userRule=[Security.AccessControl.FileSystemAccessRule]::new(
         $owner,[Security.AccessControl.FileSystemRights]::FullControl,
         [Security.AccessControl.AccessControlType]::Allow)
     $updated.SetAccessRule($userRule)
     # Preserve OS management access but eliminate all other principals.
     foreach ($sid in @($systemSid,$adminsSid)) {
-        $id=New-Object Security.Principal.SecurityIdentifier($sid)
-        $rule=New-Object Security.AccessControl.FileSystemAccessRule(
+        $id=[Security.Principal.SecurityIdentifier]::new($sid)
+        $rule=[Security.AccessControl.FileSystemAccessRule]::new(
             $id,[Security.AccessControl.FileSystemRights]::FullControl,
             [Security.AccessControl.AccessControlType]::Allow)
         $updated.SetAccessRule($rule)
