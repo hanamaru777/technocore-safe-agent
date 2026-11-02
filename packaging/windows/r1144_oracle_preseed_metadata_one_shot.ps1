@@ -60,7 +60,7 @@ function Read-R1144Report([byte[]]$bytes) {
     }
     $text=[Text.Encoding]::ASCII.GetString($bytes)
     if ($text.Contains('\') -or
-        [regex]::Matches($text,'"[a-z_-]+"\s*:').Count -ne 26) {
+        [regex]::Matches($text,'"[a-z_-]+"\s*:').Count -ne 29) {
         throw 'REPORT_SCHEMA_STOP'
     }
     $value=$text | ConvertFrom-Json -ErrorAction Stop
