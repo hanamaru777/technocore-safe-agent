@@ -24,7 +24,7 @@ function Assert-R1141R1129Receipt([byte[]]$Raw,[long]$ForwardedBytes) {
         'signer_portability','activated','cutover','oci_retirement')
     $found=[regex]::Matches($rawText,'(?<=[{,])\s*"([a-z_]+)"\s*:')
     if ($found.Count -ne $keys.Count) { throw 'RECEIPT_SCHEMA_STOP' }
-    $seen=New-Object 'System.Collections.Generic.HashSet[string]' (
+    $seen=[System.Collections.Generic.HashSet[string]]::new(
         [StringComparer]::Ordinal)
     foreach($hit in $found) {
         $key=$hit.Groups[1].Value
