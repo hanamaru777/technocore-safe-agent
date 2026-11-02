@@ -50,78 +50,119 @@ function Import-R1144TrustedFunctions([string]$path) {
 
 
 function Read-R1144Report([byte[]]$bytes) {
-    if ($null -eq $bytes -or $bytes.Length -lt 250 -or $bytes.Length -gt 1800) {
+    if ($null -eq $bytes -or $bytes.Length -lt 400 -or $bytes.Length -gt 3500) {
         throw 'REPORT_BOUND_STOP'
     }
-    foreach ($v in $bytes) {
-        if ($v -ne 10 -and ($v -lt 32 -or $v -gt 126)) { throw 'REPORT_ASCII_STOP' }
+    foreach ($b in $bytes) {
+        if ($b -ne 10 -and ($b -lt 32 -or $b -gt 126)) {
+            throw 'REPORT_ASCII_STOP'
+        }
     }
-    $value=[Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json
-    $names=@('phase','result','action','source_head','app_on_root_fs',
-        'state_on_root_fs','root_local_block_fs','mount_table_stable',
-        'nested_mounts','internal_symlinks_complete','two_sqlite_epoch',
-        'source_archive','cutover','oci_retirement')
-    if (@($value.PSObject.Properties.Name).Count -ne $names.Count) {
+    $text=[Text.Encoding]::ASCII.GetString($bytes)
+    if ($text.Contains('\') -or
+        [regex]::Matches($text,'"[a-z_-]+"\s*:').Count -ne 26) {
+        throw 'REPORT_SCHEMA_STOP'
+    }
+    $value=$text | ConvertFrom-Json -ErrorAction Stop
+    $names=@('phase','result','action','source_head','machine_sha256','files',
+        'data_bytes_exported','common_sqlite_epoch','source_archive',
+        'cutover','oci_retirement')
+    if ($value -isnot [Management.Automation.PSCustomObject] -or
+        @($value.PSObject.Properties.Name).Count -ne $names.Count) {
         throw 'REPORT_SCHEMA_STOP'
     }
     foreach ($name in $value.PSObject.Properties.Name) {
         if ($names -cnotcontains $name) { throw 'REPORT_SCHEMA_STOP' }
     }
-    if ($value.phase -cne 'R1144' -or
-        $value.result -cne 'PRIVATE_ROOT_MOUNT_WITNESS_ONLY' -or
+    if ($value.phase -cne 'R1139' -or
+        $value.result -cnotin @('SOURCE_PRESEED_METADATA_READY','SOURCE_PRESEED_METADATA_GAPS') -or
         $value.action -cne 'READ_ONLY' -or
         $value.source_head -cne 'ec4bc4892d40cdd2a03e102faa44d72c89e01b99' -or
-        $value.app_on_root_fs -isnot [bool] -or -not $value.app_on_root_fs -or
-        $value.state_on_root_fs -isnot [bool] -or -not $value.state_on_root_fs -or
-        $value.root_local_block_fs -isnot [bool] -or -not $value.root_local_block_fs -or
-        $value.mount_table_stable -isnot [bool] -or -not $value.mount_table_stable -or
-        ($value.nested_mounts -isnot [int] -and $value.nested_mounts -isnot [long]) -or
-        $value.nested_mounts -ne 0 -or
-        $value.internal_symlinks_complete -isnot [bool] -or
-        $value.internal_symlinks_complete -or
-        $value.two_sqlite_epoch -cne 'NOT_PROVEN' -or
+        $value.machine_sha256 -cnotmatch '\A[0-9a-f]{64}\z' -or
+        ($value.data_bytes_exported -isnot [int] -and $value.data_bytes_exported -isnot [long]) -or
+        $value.data_bytes_exported -ne 0 -or
+        $value.common_sqlite_epoch -cne 'NOT_PROVEN' -or
         $value.source_archive -cne 'NO_GO' -or
         $value.cutover -cne 'NO_GO' -or
         $value.oci_retirement -cne 'STRICT_NO_GO') {
         throw 'REPORT_GUARD_STOP'
     }
+    $cats=@('verified-did','nonces','signer-receipts')
+    $caps=@{'verified-did'=16384;'nonces'=1048576;'signer-receipts'=8388608}
+    if ($value.files -isnot [Management.Automation.PSCustomObject] -or
+        @($value.files.PSObject.Properties.Name).Count -ne 3) {
+        throw 'REPORT_SCHEMA_STOP'
+    }
+    $selected=[ordered]@{}
+    $ready=$true
+    foreach ($name in $cats) {
+        $prop=$value.files.PSObject.Properties[$name]
+        if ($null -eq $prop) { throw 'REPORT_SCHEMA_STOP' }
+        $row=$prop.Value
+        $attrs=@('exists','regular','single_link','within_limit','size_bytes')
+        if ($row -isnot [Management.Automation.PSCustomObject] -or
+            @($row.PSObject.Properties.Name).Count -ne 5) {
+            throw 'REPORT_SCHEMA_STOP'
+        }
+        foreach ($attr in $row.PSObject.Properties.Name) {
+            if ($attrs -cnotcontains $attr) { throw 'REPORT_SCHEMA_STOP' }
+        }
+        foreach ($attr in @('exists','regular','single_link','within_limit')) {
+            if ($row.$attr -isnot [bool]) { throw 'REPORT_GUARD_STOP' }
+        }
+        if (($row.size_bytes -isnot [int] -and $row.size_bytes -isnot [long]) -or
+            $row.size_bytes -lt 0 -or $row.size_bytes -gt $caps[$name]) {
+            throw 'REPORT_GUARD_STOP'
+        }
+        if ($row.within_limit -ne ($row.exists -and $row.regular -and
+             $row.single_link -and $row.size_bytes -gt 0)) {
+            throw 'REPORT_GUARD_STOP'
+        }
+        if (-not $row.within_limit) { $ready=$false }
+        $selected[$name]=[ordered]@{
+            exists=[bool]$row.exists;regular=[bool]$row.regular
+            single_link=[bool]$row.single_link
+            within_limit=[bool]$row.within_limit
+            size_bytes=[long]$row.size_bytes
+        }
+    }
+    if (($value.result -ceq 'SOURCE_PRESEED_METADATA_READY') -ne $ready) {
+        throw 'REPORT_GUARD_STOP'
+    }
     return [ordered]@{
-        phase='R1144';result='PRIVATE_ROOT_MOUNT_WITNESS_ONLY'
-        action='READ_ONLY';source_head=$value.source_head
-        app_on_root_fs=$true;state_on_root_fs=$true
-        root_local_block_fs=$true;mount_table_stable=$true
-        nested_mounts=0;internal_symlinks_complete=$false
-        two_sqlite_epoch='NOT_PROVEN'
+        phase='R1144';result=$value.result;action='READ_ONLY'
+        source_head=$value.source_head;machine_sha256=$value.machine_sha256
+        files=$selected;data_bytes_exported=0
+        common_sqlite_epoch='NOT_PROVEN'
         source_archive='NO_GO';cutover='NO_GO'
         oci_retirement='STRICT_NO_GO'
     }
 }
-
 function Read-R1144FixedStop([byte[]]$bytes) {
-    if ($null -eq $bytes -or $bytes.Length -lt 95 -or $bytes.Length -gt 500) {
-        return $null
+    if ($null -eq $bytes -or $bytes.Length -lt 90 -or $bytes.Length -gt 500) { return $null }
+    foreach ($b in $bytes) {
+        if ($b -ne 10 -and ($b -lt 32 -or $b -gt 126)) { return $null }
     }
-    foreach ($v in $bytes) {
-        if ($v -ne 10 -and ($v -lt 32 -or $v -gt 126)) { return $null }
-    }
-    try { $value=[Text.Encoding]::ASCII.GetString($bytes) | ConvertFrom-Json }
+    $raw=[Text.Encoding]::ASCII.GetString($bytes)
+    if ($raw.Contains('\') -or
+        [regex]::Matches($raw,'"[a-z_-]+"\s*:').Count -ne 6) { return $null }
+    try { $v=$raw | ConvertFrom-Json -ErrorAction Stop }
     catch { return $null }
-    $names=@('phase','result','reason','source_archive','cutover','oci_retirement')
-    if (@($value.PSObject.Properties.Name).Count -ne $names.Count) { return $null }
-    foreach ($name in $value.PSObject.Properties.Name) {
-        if ($names -cnotcontains $name) { return $null }
+    $keys=@('phase','result','code','source_archive','cutover','oci_retirement')
+    if (@($v.PSObject.Properties.Name).Count -ne 6) { return $null }
+    foreach ($key in $v.PSObject.Properties.Name) {
+        if ($keys -cnotcontains $key) { return $null }
     }
-    $reasons=@('ORIGINAL_ROOT_STOP','ROOT_PATH_STOP','ORIGINAL_HEAD_STOP',
-        'MOUNT_UNAVAILABLE','MOUNT_BOUND_STOP','MOUNT_FORMAT_STOP',
-        'ROOT_MOUNT_ALIAS_STOP','ROOT_FILESYSTEM_STOP','NONROOT_MOUNT_STOP',
-        'NESTED_MOUNT_STOP','DEVICE_SCOPE_STOP','MOUNT_RACE_STOP',
-        'DEVICE_RACE_STOP','READ_ONLY_UNAVAILABLE')
-    if ($value.phase -cne 'R1144' -or $value.result -cne 'STOP' -or
-        $reasons -cnotcontains $value.reason -or
-        $value.source_archive -cne 'NO_GO' -or
-        $value.cutover -cne 'NO_GO' -or
-        $value.oci_retirement -cne 'STRICT_NO_GO') { return $null }
-    return [string]$value.reason
+    $reasons=@('MOUNT_STOP','ROOT_FS_STOP','SOURCE_MOUNT_STOP',
+        'ORIGINAL_SCOPE_STOP','ORIGINAL_ROOT_LINK_STOP','ORIGINAL_HEAD_STOP',
+        'SOURCE_DEVICE_STOP','SOURCE_FILE_LINK_STOP','MOUNT_RACE_STOP',
+        'DEVICE_RACE_STOP','MACHINE_ID_STOP','SOURCE_METADATA_STOP')
+    if ($v.phase -cne 'R1139' -or $v.result -cne 'STOP' -or
+        $reasons -cnotcontains $v.code -or
+        $v.source_archive -cne 'NO_GO' -or
+        $v.cutover -cne 'NO_GO' -or
+        $v.oci_retirement -cne 'STRICT_NO_GO') { return $null }
+    return [string]$v.code
 }
 
 function Invoke-R1144 {
@@ -292,7 +333,9 @@ function Invoke-R1144 {
             'MOUNT_UNAVAILABLE','MOUNT_BOUND_STOP','MOUNT_FORMAT_STOP',
             'ROOT_MOUNT_ALIAS_STOP','ROOT_FILESYSTEM_STOP','NONROOT_MOUNT_STOP',
             'NESTED_MOUNT_STOP','DEVICE_SCOPE_STOP','MOUNT_RACE_STOP',
-            'DEVICE_RACE_STOP','READ_ONLY_UNAVAILABLE',
+            'DEVICE_RACE_STOP','READ_ONLY_UNAVAILABLE','MACHINE_ID_STOP',
+            'SOURCE_FILE_LINK_STOP','SOURCE_METADATA_STOP','MOUNT_STOP',
+            'ROOT_FS_STOP','SOURCE_MOUNT_STOP',
             'REPORT_MODE_STOP','REPORT_COUNT_STOP','REPORT_UNCLASSIFIED_STOP')
         if ($allow -cnotcontains $stage) { $stage='GUARD_STOP' }
         Write-Output ('{"phase":"R1144","result":"STOP","code":"'+$stage+'"}')
