@@ -145,6 +145,13 @@ jobs:
             if (-not $?) { throw 'R1116_OFFLINE_TEST_STOP' }
           }
 
+      - name: Validate R1140 Windows native binary-only ciphertext bridge (offline)
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          & 'tests/windows/r1140_native_binary_bridge.ps1'
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'R1140_NATIVE_STOP' }
+
       - name: Validate R1138 single PEM ACL protection with synthetic file (offline)
         shell: powershell
         run: |
