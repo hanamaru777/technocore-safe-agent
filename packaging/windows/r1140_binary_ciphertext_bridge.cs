@@ -95,9 +95,12 @@ namespace FlopR1140 {
     public static Result Pump(string sourceExe, string sourceArgs,
                               string recipientExe, string recipientArgs,
                               byte[] sourceRequest, int timeoutMillis) {
-      Need(sourceRequest != null && sourceRequest.Length <= SourceControlLimit
-           && timeoutMillis >= 1000 && timeoutMillis <= 180000,
-           "BOUND_STOP");
+      if (sourceRequest == null) throw new InvalidOperationException("BOUND_STOP");
+      if (sourceRequest.Length > SourceControlLimit ||
+          timeoutMillis < 1000 || timeoutMillis > 180000) {
+        Array.Clear(sourceRequest,0,sourceRequest.Length);
+        throw new InvalidOperationException("BOUND_STOP");
+      }
       Process source = null, recipient = null;
       Thread inputThread = null, fromErr = null, toErr = null, toOut = null;
       Timer timeout = null;
