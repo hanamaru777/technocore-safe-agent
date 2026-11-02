@@ -145,6 +145,13 @@ jobs:
             if (-not $?) { throw 'R1116_OFFLINE_TEST_STOP' }
           }
 
+      - name: Validate R1141 strict native recipient receipt acceptance (offline)
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          & 'tests/windows/r1141_native_receipt_gate.ps1'
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'R1141_WINDOWS_STOP' }
+
       - name: Validate R1140 Windows native binary-only ciphertext bridge (offline)
         shell: powershell
         run: |
