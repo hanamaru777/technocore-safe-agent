@@ -75,8 +75,14 @@ def status(bundle=None, trust=None, *, now=None):
         if error:
             gates["official_source"]={"state":"BLOCKED","reason":error}
         else:
-            for name in ("official_source","network_identity","genesis","rpc","gateway","original_existing_DID_public_binding"):
-                gates[name]={"state":"VERIFIED","reason":"PINNED_OFFLINE_REVIEW_NOT_LIVE_AUTHORITY"}
+            # A locally supplied reviewer key and signed snapshot prove only
+            # internal consistency, NOT first-party publication or that the
+            # supplied public DID belongs to the original OCI signer. Keep
+            # these explicitly unverified until separately anchored live facts.
+            for name in ("official_source","network_identity","genesis","rpc","gateway"):
+                gates[name]={"state":"UNKNOWN","reason":"LOCAL_REVIEW_ONLY_OFFICIAL_LIVE_PROOF_MISSING"}
+            gates["original_existing_DID_public_binding"]={
+                "state":"UNKNOWN","reason":"SIGNED_PUBLIC_RECORD_NOT_BOUND_TO_ORIGINAL_OCI_SIGNER"}
             gates["launch_release"]={"state":"UNKNOWN","reason":"REVIEWED_LIVE_DECLARATION_REQUIRES_INDEPENDENT_LIVE_PROOF"}
     for name in ("signature_wire_schema","official_faucet_endpoint_terms_caps","signed_inference_endpoint_request_caps"):
         gates[name]={"state":"BLOCKED","reason":"AUDITED_OFFICIAL_ACTION_ADAPTER_UNAVAILABLE"}
