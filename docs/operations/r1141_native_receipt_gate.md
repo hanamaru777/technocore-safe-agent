@@ -1,0 +1,13 @@
+# R1141 — strict R1129 ciphertext-only receipt verification for Windows native R1140 bridge
+
+Date: 2026-11-02. Development only, no owner executable transport or real OCI/AWS data transfer.
+
+The existing R1140 C# bridge forwards at most 32MiB in RAM between two independently authenticated child processes; its untrusted recipient stdout is not acceptance authority. R1141 is the missing Windows PowerShell 5.1 fixed-structure parser that may be used after a future independently authenticated owner source-destination bridge. It does not open an SSH connection, load any credential, decrypt, restore, issue orders or call OCI Vault.
+
+R1141 rejects any unsupported ASCII, JSON escapes, nested arrays, duplicate/unknown/missing keys, non-boolean safety claims, raw success beyond NO_GO, foreign SQLite epoch/finality or original DID signer proof, unsigned activated claim, negative/oversized file/byte counts, and recipient claimed ciphertext bytes exceeding the actual R1140 forwarded byte count. Success remains strictly CIPHERTEXT_RECEIPT_STRUCTURALLY_ACCEPTED_ONLY, aead_verified=false, source_complete=false, activated=false, history_finality=UNKNOWN, cutover=NO_GO, OCI retirement STRICT_NO_GO. Structural receipt success is NOT an independent AES-GCM decrypt or original-source provenance proof.
+
+Native Windows CI runs synthetic R1129-schema JSON, accepts only nonauthoritative exact schema and rejects forged activated=true, cutover=GO, aead_verified=true, source_complete=true, duplicate JSON key, escaped value, wrong type/extra keys and inflated bytes.
+
+Missing production prerequisites: original R987 source SSH code/host proof and signed independent owner approval bound to original+K137 machine IDs, an independent trusted source issuer, actual source exact three-file metadata check, distinct secure archive recovery secret and source custody, real K137 host-pinned receiver bootstrap/readback, original DID signer seed/OCI Vault custody, G4 global deny, G5 five-route finality, SQLite same-epoch full backup, independent destination AEAD, and disarmed K137 isolated recovery. No original state bytes moved by this PR. Existing R1138 Windows↔K137 SSH real read-only PASS, R1126 Windows↔Oracle real read-only PASS and R1132 K137 private landing PASS remain accepted and must not be rerun.
+
+Do not run R1140/R1141 directly with real SSH, change production service, merge Draft PRs, or retire Oracle; no data-source permission may be inferred from general development instructions. Full cutover NO_GO, OCI retirement STRICT_NO_GO.
