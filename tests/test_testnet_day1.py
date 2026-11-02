@@ -78,7 +78,12 @@ def test_reviewed_future_manifest_is_only_offline_admission_not_live_or_signer(f
     manifest=R.admit(future.bundle,future.trust,now=NOW)
     assert manifest==future.bundle["manifest"]
     result=day1.status(future.bundle,future.trust,now=NOW)
-    assert result["gates"]["original_existing_DID_public_binding"]["state"]=="VERIFIED"
+    # A user-supplied reviewer key and synthetically signed public DID
+    # cannot establish first-party LIVE or actual original OCI signer custody.
+    for name in ("official_source","network_identity","genesis","rpc","gateway",
+                 "original_existing_DID_public_binding"):
+        assert result["gates"][name]["state"]=="UNKNOWN"
+    assert result["gates"]["original_existing_DID_public_binding"]["reason"]=="SIGNED_PUBLIC_RECORD_NOT_BOUND_TO_ORIGINAL_OCI_SIGNER"
     assert result["gates"]["audited_original_signer"]["state"]=="UNKNOWN"
     assert result["gates"]["signature_wire_schema"]["state"]=="BLOCKED"
     assert result["gates"]["authentic_final_settlement_receipt_rule"]["state"]=="BLOCKED"
