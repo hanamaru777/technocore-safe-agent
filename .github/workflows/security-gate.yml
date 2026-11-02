@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - "security/**"
+      - "codex/t1150-testnet-day1-agent-readiness-20261102"
   pull_request:
 
 permissions:
@@ -40,6 +41,10 @@ jobs:
       - name: Sync locked dependencies
         run: uv sync --frozen --group dev --extra oracle-signer --extra discord
 
+      - name: T1150 offline targeted and essential regression before full suite
+        if: github.ref == 'refs/heads/codex/t1150-testnet-day1-agent-readiness-20261102' || github.head_ref == 'codex/t1150-testnet-day1-agent-readiness-20261102'
+        run: uv run pytest -q tests/test_testnet_day1.py tests/test_r1060_testnet_budget.py tests/test_r1064_testnet_journal.py tests/test_r1057_offline_agent_launch_gate.py tests/test_r1105_agent_public_readiness.py tests/test_airdrop_approval.py tests/test_airdrop_action_stager.py tests/test_airdrop_executor.py tests/test_airdrop_adapter_readiness.py tests/test_airdrop_operator_testnet_watch.py
+
       - name: Run tests
         run: uv run pytest -q
 
@@ -55,6 +60,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: T1150 Windows offline status and plan
+        if: github.ref == 'refs/heads/codex/t1150-testnet-day1-agent-readiness-20261102' || github.head_ref == 'codex/t1150-testnet-day1-agent-readiness-20261102'
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check pytest==9.1.1 cryptography==50.0.1
+          if ($LASTEXITCODE -ne 0) { throw 'T1150_TEST_DEPENDENCY_STOP' }
+          $env:PYTHONPATH='src'
+          python -m pytest -q tests/test_testnet_day1.py
+          if ($LASTEXITCODE -ne 0) { throw 'T1150_OFFLINE_TEST_STOP' }
 
       - name: Prove bootstrap remote shell source is LF-only
         shell: powershell
