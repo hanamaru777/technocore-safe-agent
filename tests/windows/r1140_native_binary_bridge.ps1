@@ -34,12 +34,15 @@ sys.stdout.buffer.write(b'RECIPIENT-CIPHERTEXT-ONLY')
     $dst='-I -B "'+$sink+'"'
     $good=@'
 import sys
-sys.stdin.buffer.read()
+request=sys.stdin.buffer.read()
+expected=bytes.fromhex('00524646312d5241572d494e5055542dff0d0a')
+if request!=expected:
+    sys.exit(67)
 sys.stdout.buffer.write(b'FLOPST01'+b'A'*100000)
 sys.stdout.buffer.flush()
 '@
     $src=Set-R1140Source $good
-    $request=[Text.Encoding]::ASCII.GetBytes('OFFLINE-OWNER-FIXTURE')
+    $request=[byte[]]@(0,82,70,70,49,45,82,65,87,45,73,78,80,85,84,45,255,13,10)
     $r=[FlopR1140.Bridge]::Pump($python,$src,$python,$dst,$request,30000)
     if ($r.ForwardedBytes -ne 100008 -or $r.SourceExit -ne 0 -or
         $r.RecipientExit -ne 0 -or
