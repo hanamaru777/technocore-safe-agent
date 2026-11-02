@@ -21,6 +21,21 @@ namespace FlopR1140 {
     const int Chunk = 65536;
     const int StderrLimit = 65536;
     static readonly byte[] Magic = Encoding.ASCII.GetBytes("FLOPST01");
+    // In .NET Framework / PowerShell 5.1, Process.Start can initialize
+    // StandardInput with a UTF-8 BOM BEFORE callers access BaseStream.
+    // Mirror accepted R1079's narrowly scoped, no-BOM launch policy.
+    static readonly object LaunchLock = new object();
+    static bool StartNoBom(Process process) {
+      lock (LaunchLock) {
+        Encoding previous = Console.InputEncoding;
+        try {
+          Console.InputEncoding = new UTF8Encoding(false);
+          return process.Start();
+        } finally {
+          Console.InputEncoding = previous;
+        }
+      }
+    }
 
     static void Need(bool valid, string reason) {
       if (!valid) throw new InvalidOperationException(reason);
@@ -114,13 +129,14 @@ namespace FlopR1140 {
         failure = reason;
         Interlocked.Exchange(ref failed, 1);
       };
+      Stopwatch clock = Stopwatch.StartNew();
       try {
         ProcessStartInfo sourceStart = Program(sourceExe, sourceArgs);
         ProcessStartInfo recipientStart = Program(recipientExe, recipientArgs);
         recipient = new Process(); recipient.StartInfo = recipientStart;
-        Need(recipient.Start(), "RECIPIENT_LAUNCH_STOP");
+        Need(StartNoBom(recipient), "RECIPIENT_LAUNCH_STOP");
         source = new Process(); source.StartInfo = sourceStart;
-        Need(source.Start(), "SOURCE_LAUNCH_STOP");
+        Need(StartNoBom(source), "SOURCE_LAUNCH_STOP");
         Process aliveSource = source, aliveRecipient = recipient;
         timeout = new Timer(delegate(object ignored) {
           Interlocked.Exchange(ref timedOut, 1);
@@ -155,7 +171,17 @@ namespace FlopR1140 {
           recipient.StandardInput.BaseStream.Write(buffer,0,read);
         }
         recipient.StandardInput.BaseStream.Close();
-        Need(source.WaitForExit(3000) && recipient.WaitForExit(3000),
+        // The recipient may need time to fsync and atomically reveal the
+        // complete ciphertext commit after EOF. The old fixed 3s wait would
+        // reject valid >3s finalization and strand an incomplete archive.
+        // Honour the original global deadline instead of an arbitrary 3s.
+        int remaining = timeoutMillis - (int)Math.Min(
+             (long)timeoutMillis, clock.ElapsedMilliseconds);
+        Need(remaining > 0 && source.WaitForExit(remaining),
+             "CHILD_TIMEOUT_STOP");
+        remaining = timeoutMillis - (int)Math.Min(
+             (long)timeoutMillis, clock.ElapsedMilliseconds);
+        Need(remaining > 0 && recipient.WaitForExit(remaining),
              "CHILD_TIMEOUT_STOP");
         Need(inputThread.Join(3000) && toErr.Join(3000) &&
              fromErr.Join(3000) && toOut.Join(3000), "THREAD_TIMEOUT_STOP");
