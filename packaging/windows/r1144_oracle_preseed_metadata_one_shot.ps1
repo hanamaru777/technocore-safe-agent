@@ -60,7 +60,7 @@ function Read-R1144Report([byte[]]$bytes) {
     }
     $text=[Text.Encoding]::ASCII.GetString($bytes)
     if ($text.Contains('\') -or
-        [regex]::Matches($text,'"[a-z_-]+"\s*:').Count -ne 29) {
+        [regex]::Matches($text,'"[a-z0-9_-]+"\s*:').Count -ne 29) {
         throw 'REPORT_SCHEMA_STOP'
     }
     $value=$text | ConvertFrom-Json -ErrorAction Stop
@@ -145,7 +145,7 @@ function Read-R1144FixedStop([byte[]]$bytes) {
     }
     $raw=[Text.Encoding]::ASCII.GetString($bytes)
     if ($raw.Contains('\') -or
-        [regex]::Matches($raw,'"[a-z_-]+"\s*:').Count -ne 6) { return $null }
+        [regex]::Matches($raw,'"[a-z0-9_-]+"\s*:').Count -ne 6) { return $null }
     try { $v=$raw | ConvertFrom-Json -ErrorAction Stop }
     catch { return $null }
     $keys=@('phase','result','code','source_archive','cutover','oci_retirement')
