@@ -7,6 +7,7 @@ on:
       - "security/**"
       - "codex/r1107-full-migration-readiness-onepass-v1"
       - "codex/r1151-oci-k137-preseed-owner-bridge-20261102"
+      - "codex/r1154-app-only-warm-cutover-20261103"
   pull_request:
 
 permissions:
@@ -43,7 +44,7 @@ jobs:
         run: uv sync --frozen --group dev --extra oracle-signer --extra discord
 
       - name: R1089 targeted transport and preservation regression before full suite
-        if: github.ref != 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1'
+        if: github.ref != 'refs/heads/codex/r1107-full-migration-readiness-onepass-v1' && github.ref != 'refs/heads/codex/r1154-app-only-warm-cutover-20261103'
         run: uv run pytest -q tests/test_r1089_migration.py tests/test_r1063_release_gates.py tests/test_r1084_offhost_ciphertext_stream.py tests/test_r1086_k137_disarmed_stream_restore.py
 
       - name: R1107 targeted gates and directly reused regression before single full suite
@@ -57,6 +58,10 @@ jobs:
       - name: R1151 offline admission and reused ciphertext-only boundaries
         if: github.ref == 'refs/heads/codex/r1151-oci-k137-preseed-owner-bridge-20261102'
         run: uv run pytest -q tests/test_r1151_preseed_owner_bridge.py tests/test_r1128_provisional_preseed.py tests/test_r1129_k137_ciphertext_receive.py tests/test_r1130_ephemeral_binary_relay.py
+
+      - name: R1154 executable warm controller and custody regression
+        if: github.ref == 'refs/heads/codex/r1154-app-only-warm-cutover-20261103'
+        run: uv run pytest -q tests/test_r1154_warm.py
 
       - name: Run tests
         run: uv run pytest -q
@@ -73,6 +78,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: R1154 PS5.1 signed preflight and audited helper definitions only
+        if: github.ref == 'refs/heads/codex/r1154-app-only-warm-cutover-20261103'
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check pytest==9.1.1 cryptography==50.0.1 httpx==0.28.1
+          if ($LASTEXITCODE -ne 0) { throw 'R1154_DEPENDENCY_STOP' }
+          python -m venv --system-site-packages .venv
+          if ($LASTEXITCODE -ne 0) { throw 'R1154_TEST_ENV_STOP' }
+          $env:PYTHONPATH='src'
+          python -m pytest -q tests/test_r1154_warm.py
+          if ($LASTEXITCODE -ne 0) { throw 'R1154_TARGETED_STOP' }
 
       - name: R1151 native PS5.1 synthetic peers, custody and readiness STOP
         if: github.ref == 'refs/heads/codex/r1151-oci-k137-preseed-owner-bridge-20261102'
