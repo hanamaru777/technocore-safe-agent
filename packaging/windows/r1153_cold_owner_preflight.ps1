@@ -27,7 +27,7 @@ try {
     foreach($entry in ($map|ConvertFrom-Json).PSObject.Properties){
         $null=Read-R1153Code ('..\..\'+$entry.Name.Replace('/','\')) $entry.Value
     }
-    $null=Read-R1153Code '..\migration\r1153_cold_migration.py' 'e79141e0ca4ab9c0b712090f22852f9e6046309f'
+    $null=Read-R1153Code '..\migration\r1153_cold_migration.py' 'd734164eb8ab2108b7ced683133c21ae9a2cd596'
     # Public ACL/hash reader ONLY; never invoke the old owner operation.
     $old=Read-R1153Code '..\migration\r1107_owner_dryrun.ps1' 'ec7aa52aeae5e56d564b428197ab91ee8f33e2ab'
     $tokens=$null;$errors=$null

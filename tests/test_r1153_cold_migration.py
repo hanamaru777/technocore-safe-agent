@@ -317,7 +317,8 @@ def test_altered_ciphertext_and_manifest_rejected_before_restore_write(case, mon
     shard = next(archive.glob("part-*.bin")); data = bytearray(shard.read_bytes()); data[len(data)//2] ^= 1; shard.write_bytes(data)
     monkeypatch.setattr(m.D, "restore_stream", lambda *a, **k: pytest.fail("no plaintext restore after auth failure"))
     attempt = journal(case, "restore-journal")
-    with pytest.raises(ValueError): m.restore_peer(case.authority, case.bundle, archive, recovery, p, attempt, now=case.f.now)
+    with pytest.raises(m.Stop, match="COLD_ARCHIVE_AUTHENTICATION_STOP"):
+        m.restore_peer(case.authority, case.bundle, archive, recovery, p, attempt, now=case.f.now)
     assert attempt.latest is None
 
 

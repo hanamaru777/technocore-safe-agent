@@ -371,8 +371,15 @@ def restore_peer(authority, bundle, archive, recovery, policy, journal, *, now, 
     need(isinstance(journal, J.UndoJournal) and J.UndoJournal(journal.root).latest is None, "COLD_DURABLE_JOURNAL_REQUIRED")
     need(policy.check() == checked["policy_sha"] and journal.latest is None, "COLD_ATTEMPT_OR_POLICY_STOP")
     need(not any(Path(archive) == Path(p) or Path(p) in Path(archive).parents for p in PROTECTED), "COLD_PROTECTED_ROOT_STOP")
-    with R.LockedArchive(archive, windows_validator=windows_validator) as locked:
-        manifest, meta = locked.verify(recovery)
+    try:
+        locked = R.LockedArchive(archive, windows_validator=windows_validator)
+    except Exception:
+        raise Stop("COLD_ARCHIVE_CUSTODY_STOP") from None
+    with locked:
+        try:
+            manifest, meta = locked.verify(recovery)
+        except Exception:
+            raise Stop("COLD_ARCHIVE_AUTHENTICATION_STOP") from None
         need(manifest == bundle["manifest"] and meta["manifest_sha256"] == checked["manifest_sha"], "COLD_ARCHIVE_MANIFEST_STOP")
         journal.save(dict(phase="RESTORE_ATTEMPTING", binding_sha=checked["binding_sha"]))
         try:
