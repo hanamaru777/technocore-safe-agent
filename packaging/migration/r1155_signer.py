@@ -67,9 +67,9 @@ def ensure_runtime(config):
     sys.path.insert(0,path+"/src")
 
 
-def local_gate(config,*,publisher=False,now=None):
+def local_gate(config,*,publisher=False,now=None,admit=activation):
     now=int(time.time()) if now is None else now
-    a=activation(config,now)
+    a=admit(config,now)
     H.need(sys.platform=="linux" and os.geteuid()==config["publisher_uid" if publisher else "signer_uid"],"RUNTIME_USER_STOP")
     H.need(hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()==H.B.K137 and
         hashlib.sha256(Path("/proc/sys/kernel/random/boot_id").read_bytes().strip()).hexdigest()==config["lease"]["boot_sha"],"RUNTIME_HOST_BOOT_STOP")
@@ -130,15 +130,16 @@ def render(request,did,key=None):
 
 
 class Broker:
-    def __init__(self,config,open_seed,journal,*,clock=time.time,gate=local_gate):
+    def __init__(self,config,open_seed,journal,*,clock=time.time,gate=local_gate,admission=approved,renderer=render):
         self.config=config;self.open_seed=open_seed;self.journal=journal;self.clock=clock;self.gate=gate
+        self.admission=admission;self.renderer=renderer
         H.need(callable(open_seed),"RUNTIME_KEY_PROVIDER_STOP")
 
     def sign(self,request,peer_uid):
         now=int(self.clock());a=self.gate(self.config,now=now)
         H.need(peer_uid==self.config["publisher_uid"],"RUNTIME_PEER_STOP")
-        approved(self.config,request,now)
-        text=render(request,a.profile["source_did"])
+        self.admission(self.config,request,now)
+        text=self.renderer(request,a.profile["source_did"])
         state=self.journal.latest or dict(used={},nonces=dict(self.config["baseline"]["nonces"]),history=list(self.config["baseline"]["rate_history"]))
         state=C.decode(C.G.canonical(state))
         H.need(len(state["used"])<10000,"RUNTIME_STATE_BOUND_STOP")
@@ -212,10 +213,10 @@ def receive_unlock():
         finally:path.unlink()
 
 
-def unlock_local():
+def unlock_local(admit=activation):
     H.need(sys.platform=="linux" and os.geteuid()==0 and sys.stdin.isatty() and
         hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()==H.B.K137,"RUNTIME_LOCAL_ROOT_TTY_REQUIRED")
-    config=secured(CONFIG);activation(config,int(time.time()))
+    config=secured(CONFIG);admit(config,int(time.time()))
     path=SOCKET.with_name("unlock.sock");meta=path.lstat()
     H.need(stat.S_ISSOCK(meta.st_mode) and meta.st_uid==config["signer_uid"] and stat.S_IMODE(meta.st_mode)==0o600,"RUNTIME_UNLOCK_SOCKET_STOP")
     with warnings.catch_warnings():
@@ -229,12 +230,12 @@ def unlock_local():
     finally:password[:]=b"\0"*len(password)
 
 
-def main():
+def main(*,broker_type=Broker,gate=local_gate,admit=activation):
     password=None
     try:
-        if sys.argv[1:]==["--unlock-local"]:return unlock_local()
+        if sys.argv[1:]==["--unlock-local"]:return unlock_local(admit)
         H.need(sys.platform=="linux" and not sys.argv[1:],"RUNTIME_ARGUMENT_STOP")
-        config=secured(CONFIG);a=local_gate(config);ensure_runtime(config)
+        config=secured(CONFIG);a=gate(config);ensure_runtime(config)
         H.private_dir(STORE)
         lock=(STORE/"lock").open("ab");fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         # Secret passphrase is entered by the LOCAL K137 owner. No Windows
@@ -252,7 +253,7 @@ def main():
         at=document["owner"]["body"]["observed_at"]
         def open_seed():return K.unseal(a,document["binding"],document["owner"],document["witness"],document["envelope"],recipient,now=at)
         with open_seed():pass  # startup continuity check; immediately wiped
-        broker=Broker(config,open_seed,H.J.UndoJournal(H.private_dir(STORE/"records")))
+        broker=broker_type(config,open_seed,H.J.UndoJournal(H.private_dir(STORE/"records")),gate=gate)
         H.need(not SOCKET.exists() and not SOCKET.is_symlink(),"RUNTIME_SOCKET_EXISTS_STOP")
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as server:
             server.bind(str(SOCKET));os.chmod(SOCKET,0o660);server.listen(4)

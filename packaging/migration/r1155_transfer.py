@@ -22,9 +22,19 @@ WAL=load("r1155_wal","r1155_wal.py");H=WAL.H;C=H.C;R=C.R
 O=load("r1155_old_owner","r1154_owner.py")
 
 
-def admit(plan,now):
-    H.shape(plan,"enrollment enrollment_sha run_id scope preserve_owner preserve_witness destination_policy offhost_parent quota_bytes custody owner witness")
+def admit(plan,now,renewal=None):
+    fields="enrollment enrollment_sha run_id scope preserve_owner preserve_witness destination_policy offhost_parent quota_bytes custody owner witness"
+    H.shape(plan,fields+(" renewal" if "renewal" in plan else ""))
     a=H.Authority(plan["enrollment"],plan["enrollment_sha"])
+    if "renewal" in plan:
+        N=load("r1156_transfer_renewal","r1156_renewal.py")
+        H.shape(plan["renewal"],"anchor initial")
+        if renewal is not None:
+            H.need(renewal.anchor==plan["renewal"]["anchor"],"TRANSFER_RENEWAL_BINDING_STOP")
+            renewal.check(now)
+        else:N.peek(a,plan["renewal"]["anchor"],plan["renewal"]["initial"],now)
+        H.need(plan["renewal"]["anchor"]["capture_sha"]==C.G.sha(plan["preserve_owner"]["body"]["data"]),"TRANSFER_RENEWAL_CAPTURE_STOP")
+        now=plan["owner"]["body"]["observed_at"]
     # The past HOLD grant is not renewed; fresh preservation/transfer grants
     # and the actual held journal are independently rechecked at acquisition.
     H.validate_scope(a,plan["scope"],now=plan["scope"]["owner"]["body"]["observed_at"])
@@ -74,20 +84,20 @@ def bundle():
 
 
 def command(base,operation,sources,machine,enrollment):
-    H.need(operation in ("source","capacity","restore","verify"),"TRANSFER_OPERATION_STOP")
+    H.need(operation in ("source","capacity","restore","verify","renew-source"),"TRANSFER_OPERATION_STOP")
     for value in (machine,enrollment):C.digest(value)
     # R1154's pinned, bounded staging/authentication, with a fixed streaming
     # dispatch. No EOF read before source/restore binary material.
     code=O.bootstrap(C.G.sha(sources),enrollment,machine)
     code=code.replace(" if sys.stdin.buffer.read(1)!=b'':raise ValueError()\n","")
-    code=code.replace(" if os.geteuid()!=0 or", " if os.geteuid()!="+("0" if operation in ("source","verify") else "1000")+" or")
+    code=code.replace(" if os.geteuid()!=0 or", " if os.geteuid()!="+("0" if operation in ("source","verify","renew-source") else "1000")+" or")
     code=code.replace("root/'packaging/migration/r1154_app_hold.py'","root/'packaging/migration/r1155_transfer.py'")
     code=code.replace("not name.startswith(('packaging/migration/','packaging/archive/','src/flop_agent/','scripts/'))",
         "not (name.startswith(('packaging/migration/','packaging/archive/','src/flop_agent/','scripts/','packaging/oracle/')) or name=='public-profile.json')")
     code=code.replace("  response=m.peer(request)\n  sys.stdout.buffer.write(canonical(response)+b'\\n');sys.stdout.buffer.flush()",
         "  m.peer(request,sys.stdin.buffer,sys.stdout.buffer)")
     H.need("response=m.peer(request)" not in code and "m.peer(request,sys.stdin.buffer" in code,"TRANSFER_BOOTSTRAP_STOP")
-    if operation in ("source","verify"):
+    if operation in ("source","verify","renew-source"):
         args=["sudo","-n","/opt/technocore-safe-agent/.venv/bin/python","-I","-B","-c",code]
     else:
         args=["sudo","-n","/usr/bin/systemd-run","--quiet","--pipe","--wait","--collect",
@@ -113,11 +123,24 @@ def meta_check(meta,plan):
 
 
 def peer(request,incoming,outgoing):
-    H.shape(request,"enrollment enrollment_sha operation plan meta")
-    plan=request["plan"];a=admit(plan,int(time.time()))
+    H.shape(request,"enrollment enrollment_sha operation plan meta"+(" renewal_packet" if "renewal_packet" in request else ""))
+    plan=request["plan"];renewal=None;mode=request["operation"]
+    if "renewal" in plan:
+        N=load("r1156_peer_renewal","r1156_renewal.py");a=H.Authority(plan["enrollment"],plan["enrollment_sha"])
+        if mode=="renew-source":
+            H.need(os.geteuid()==0 and H.Linux().reader.identity()["host_digest"]==a.trust.context["host"],"TRANSFER_RENEWAL_HOST_STOP")
+            R.frame_write(outgoing,R.META,N.install_source(a,plan["renewal"]["anchor"],request["renewal_packet"]));return
+        if mode in ("source","verify"):
+            renewal=N.source_reader(a,plan["renewal"]["anchor"],initial=plan["renewal"]["initial"])
+        elif "renewal_packet" in request:
+            N.peek(a,plan["renewal"]["anchor"],request["renewal_packet"],int(time.time()))
+            class Current:
+                anchor=plan["renewal"]["anchor"]
+                def check(self,now):return N.peek(a,self.anchor,request["renewal_packet"],now)
+            renewal=Current()
+    a=admit(plan,int(time.time()),renewal)
     sys.path.insert(0,str(H.ROOT/"src"))
     H.need(request["enrollment"]==plan["enrollment"] and request["enrollment_sha"]==a.pin,"TRANSFER_ENROLLMENT_STOP")
-    mode=request["operation"]
     if mode in ("source","verify"):
         ctl=H.Controller(a);held=ctl.verify()
         H.need(held["scope_sha"]==C.G.sha(plan["scope"]),"TRANSFER_HOLD_STOP")
@@ -127,7 +150,7 @@ def peer(request,incoming,outgoing):
         try:
             H.need(32<=len(material)<=1024 and incoming.read(1)==b"","TRANSFER_RECOVERY_STOP")
             H.capture_checkpointed(ctl,plan["preserve_owner"],plan["preserve_witness"],plan["destination_policy"],
-                bytes(material),outgoing,sqlite_validator=WAL.validate,metadata=lambda x:R.frame_write(outgoing,R.META,x))
+                bytes(material),outgoing,sqlite_validator=WAL.validate,metadata=lambda x:R.frame_write(outgoing,R.META,x),renewal=renewal)
         finally:material[:]=b"\0"*len(material)
         return
     H.need(mode in ("capacity","restore"),"TRANSFER_OPERATION_STOP")
@@ -198,8 +221,8 @@ def bases(control,a):
     return result
 
 
-def owner(control,recovery):
-    plan=control["plan"];a=admit(plan,int(time.time()))
+def owner(control,recovery,*,session=None):
+    plan=control["plan"];a=admit(plan,int(time.time()),session)
     H.need(os.name=="nt","TRANSFER_WINDOWS_CUSTODY_REQUIRED")
     src,dst=bases(control,a);public=bundle();parent=Path(plan["offhost_parent"])
     archive=parent/plan["run_id"];record=parent/("r1155-"+plan["run_id"]+".json")
@@ -211,6 +234,7 @@ def owner(control,recovery):
         meta_check(saved["meta"],plan);request["meta"]=saved["meta"]
     def rpc(mode,base,req):
         return command(base,mode,public,a.trust.context["host"] if mode in ("source","verify") else H.B.K137,a.pin)
+    if session is not None:session.start(src,public)
     # Offline destination prepared FIRST. No source HOLD is manufactured here.
     with R.child(rpc("capacity",dst,request),timeout=90) as p:
         R.send_request(p,public,request);cap=R.frame_read(p.stdout,R.META)
@@ -229,6 +253,7 @@ def owner(control,recovery):
         # Durable marker BEFORE remote invocation: absent result is UNKNOWN.
         R.checkpoint(parent,record.name,dict(context=a.trust.context,meta=None,phase="SOURCE_ATTEMPTING"))
         with R.child(rpc("source",src,request)) as p:
+            if session is not None:session.attach(p)
             R.send_request(p,public,request,recovery);meta=R.frame_read(p.stdout,R.META);meta_check(meta,plan)
             R.checkpoint(parent,record.name,dict(context=a.trust.context,meta=meta,phase="RECEIVING"))
             args=[ps,"-NoProfile","-NonInteractive","-File",str(Path(__file__).with_name("r1085_windows_offhost_sink.ps1")),
@@ -241,9 +266,11 @@ def owner(control,recovery):
         H.need(all(meta[k]==v for k,v in proof.items()),"TRANSFER_AEAD_STOP")
         R.checkpoint(parent,record.name,dict(context=a.trust.context,meta=meta,phase="AEAD_VERIFIED"))
         # Fresh owner leases are checked again; no forged R1089 G4/G5 PASS.
-        admit(plan,int(time.time()))
+        admit(plan,int(time.time()),session)
         request.update(operation="restore",meta=meta)
+        if session is not None:request["renewal_packet"]=session.packet()
         with R.child(rpc("restore",dst,request)) as p:
+            if session is not None:session.attach(p)
             R.send_request(p,public,request);held.stream(recovery,p.stdin);p.stdin.close();p.stdin=None
             restored=R.frame_read(p.stdout,R.META)
             H.need(p.wait(timeout=30)==0 and p.stdout.read(1)==b"","TRANSFER_RESTORE_UNKNOWN")
@@ -258,10 +285,26 @@ def main():
         H.need(sys.argv[1:] in (["--owner"],["--check-plan"]),"TRANSFER_ARGUMENT_STOP")
         control=R.frame_read(sys.stdin.buffer,R.MAGIC)
         if sys.argv[1:]==["--check-plan"]:
-            admit(control["plan"],int(time.time()));print('{"operation":"OWNER_SESSION_VERIFIED","cutover":"NO_GO"}');return 0
+            plan=control["plan"];current=None
+            if "renewal" in plan:
+                N=load("r1156_check_renewal","r1156_renewal.py");a=H.Authority(plan["enrollment"],plan["enrollment_sha"])
+                class Current:
+                    anchor=plan["renewal"]["anchor"]
+                    def check(self,now):
+                        path=Path(plan["offhost_parent"])/("r1156-renewal-"+plan["run_id"]+".json")
+                        packet=plan["renewal"]["initial"]
+                        if path.exists():
+                            H.need(not path.is_symlink() and path.stat().st_size<=65536,"RENEWAL_OWNER_FILE_STOP");packet=C.decode(path.read_bytes())
+                        return N.peek(a,self.anchor,packet,now)
+                current=Current()
+            admit(plan,int(time.time()),current);print('{"operation":"OWNER_SESSION_VERIFIED","cutover":"NO_GO"}');return 0
         n=struct.unpack(">I",R.exact(sys.stdin.buffer,4))[0];H.need(32<=n<=1024,"TRANSFER_RECOVERY_STOP")
         recovery_bytes.extend(R.exact(sys.stdin.buffer,n));H.need(sys.stdin.buffer.read(1)==b"","TRANSFER_INPUT_STOP")
-        print(C.G.canonical(owner(control,bytes(recovery_bytes))).decode());return 0
+        if "renewal" in control["plan"]:
+            bridge=load("r1156_owner_renewal","r1156_relay.py")
+            with bridge.Session(control) as session:report=owner(control,bytes(recovery_bytes),session=session)
+        else:report=owner(control,bytes(recovery_bytes))
+        print(C.G.canonical(report).decode());return 0
     except Exception:
         print('{"task":"R1155","operation":"BLOCKED","code":"TRANSFER_STOP_UNKNOWN_NO_AUTO_RETRY","cutover":"NO_GO","oci_retirement":"STRICT_NO_GO"}');return 42
     finally:recovery_bytes[:]=b"\0"*len(recovery_bytes)

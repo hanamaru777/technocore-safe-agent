@@ -1,0 +1,29 @@
+[Unit]
+Description=R1156 capture READ ONLY original-code lane
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=flop-r1156-resident
+Group=flop-r1155-publisher
+ExecStart=/opt/flop-r1155-runtime/.venv/bin/python -I -B /usr/local/libexec/flop-r1155/packaging/migration/r1156_runtime.py capture
+Environment=FLOP_STATE_DIR=/var/lib/flop-r1156-resident/state
+Environment=FLOP_R1156_READ_ONLY_BRIDGE=1
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=169.254.169.254
+InaccessiblePaths=-/etc/technocore-safe-agent -/var/lib/flop-r1155-signer -/run/flop-r1155-signer -/opt/tradebot -/var/lib/tradebot
+ReadWritePaths=/var/lib/flop-r1156-resident/state
+MemoryMax=128M
+CPUQuota=25%
+TasksMax=64
+UMask=0027

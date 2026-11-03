@@ -25,18 +25,20 @@ def signer_request(request):
     H.shape(reply,"did nonce text sig");return reply
 
 
-def publish(config,request,journal,*,sign=signer_request,post=None,clock=time.time,gate=S.local_gate):
+def publish(config,request,journal,*,sign=signer_request,post=None,clock=time.time,gate=S.local_gate,
+            admission=S.approved,renderer=S.render,auto_nonce=False):
     from flop_agent import core,public_record
-    now=int(clock());a=gate(config,publisher=True,now=now);S.approved(config,request,now)
+    now=int(clock());a=gate(config,publisher=True,now=now);admission(config,request,now)
     H.need(request["route"]==S.ROUTES[0],"PUBLISHER_NEW_ROUTE_NOT_ADMITTED")
     H.need(journal.latest is None,"PUBLISHER_PERMANENT_NO_RETRY")
-    expected=S.render(request,a.profile["source_did"])
+    expected=renderer(request,a.profile["source_did"])
     journal.save(dict(phase="SIGN_REQUESTED_NO_RETRY",request_sha=C.G.sha(request)))
     try:
         body=sign(request)
-        H.need(body["did"]==a.profile["source_did"] and body["nonce"]==request["nonce"] and body["text"]==expected,"PUBLISHER_SIGNATURE_STOP")
+        H.need(body["did"]==a.profile["source_did"] and
+            ((auto_nonce and C.V.NONCE_RE.fullmatch(body["nonce"])) or body["nonce"]==request["nonce"]) and body["text"]==expected,"PUBLISHER_SIGNATURE_STOP")
         public_record.verify_signed_record(request["room"],dict(body,**{"from":body["did"]}))
-        gate(config,publisher=True,now=int(clock()));S.approved(config,request,int(clock()))
+        gate(config,publisher=True,now=int(clock()));admission(config,request,int(clock()))
         journal.save(dict(phase="POST_ATTEMPTING_NO_RETRY",request_sha=C.G.sha(request),body_sha=C.G.sha(body)))
         # No signed URL. No environment token, seed, redirects or automatic
         # HTTP retry. All exceptions after here conservatively become UNKNOWN.
