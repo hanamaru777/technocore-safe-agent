@@ -93,6 +93,11 @@ def test_renewal_restart_retains_monotonic_progress(case):
 @pytest.fixture
 def queue(case,monkeypatch,tmp_path):
     rs=policy_test.setup(monkeypatch,tmp_path,activation=True)
+    if os.name=="nt" and not hasattr(os,"fchmod"):
+        # Python 3.12 Windows lacks POSIX descriptor mode changes. This fixture
+        # exercises policy/queue/signature contracts, not audit permissions;
+        # Linux still executes the real audit writer and permission checks.
+        monkeypatch.setattr(autopilot,"audit",lambda record,**kwargs:None)
     candidate=policy_test.cand("b"*16,text="Can you explain nonce reuse safety?")
     candidate["seq"]=101
     policy_test.write(rs,candidate);autopilot.build_outbox()
