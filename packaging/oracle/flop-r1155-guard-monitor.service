@@ -1,0 +1,26 @@
+[Unit]
+Description=Read-only fixed FLOP migration deny monitor
+Requires=flop-r1155-old-post-deny.service
+After=flop-r1155-old-post-deny.service
+[Service]
+Type=notify
+NotifyAccess=main
+User=root
+Group=root
+ExecStart=/opt/flop-r1155-runtime/.venv/bin/python -I -B /usr/local/libexec/flop-r1155/packaging/migration/r1155_guard_monitor.py
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressDeny=any
+ReadWritePaths=/etc/flop-r1155
+MemoryMax=96M
+CPUQuota=5%
+TasksMax=16
+UMask=0077
