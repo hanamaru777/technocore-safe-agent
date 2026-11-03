@@ -34,7 +34,7 @@
   "packaging/migration/r1129_k137_ciphertext_receive.py": "622e0debff1f4f59be935c17fd5709aa43c0c3da",
   "packaging/migration/r1130_ephemeral_binary_relay.py": "9dd7b20956f65f45ccccb357c7adcc662d740087",
   "packaging/migration/r1151_preseed_owner_bridge.py": "919eb42fbffd351c9eb4597691e769e5de5166e4",
-  "packaging/migration/r1154_app_hold.py": "8a5a7025b875fff0ae881e4254b3751651c867ca",
+  "packaging/migration/r1154_app_hold.py": "ad8a882942d8eac8a4eaf2a4d573223931ad4c00",
   "packaging/migration/r1154_custody.py": "06e4029a3f727b9e0c84d3336fc7a1dfbce61fd4",
   "packaging/migration/r1154_owner.py": "6953098b96266a8acc5f24b7b839448fbcddf9f6",
   "packaging/oracle/r1126_original_root_mount_readonly.py": "efcd3fc6d58211167be76d91875296b24fb6b451",

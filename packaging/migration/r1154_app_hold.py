@@ -451,7 +451,8 @@ def result(code):
                 aws_publisher="DISARMED",cutover="NO_GO",oci_retirement="STRICT_NO_GO")
 
 
-def capture_checkpointed(controller, owner, witness, destination_policy, recovery, output, *, clock=time.time):
+def capture_checkpointed(controller, owner, witness, destination_policy, recovery, output, *, clock=time.time,
+                         sqlite_validator=None, metadata=None):
     """Full R1089 encryption library adapter; never an old-gate GO forgery.
 
     Only after real APP HOLD. Non-empty WAL requires a separately reviewed
@@ -495,7 +496,8 @@ def capture_checkpointed(controller, owner, witness, destination_policy, recover
     need(P.ledger_digest(files,state_hashes)==binding["ledger_sha"] and
          C.G.sha(P.original_attempts(files,authority.profile["source_did"]))==binding["inventory_sha"],"WARM_EXACT_ATTEMPTS_STOP")
     need(C.decode(files["verified-did.json"])["did"]==authority.profile["source_did"],"WARM_CAPTURE_DID_STOP")
-    for name in C.G.DATABASES:
+    cursors=sqlite_validator(roots,manifest,ids,guard) if sqlite_validator is not None else []
+    for name in (() if sqlite_validator is not None else sorted(C.G.DATABASES)):
         candidates=[row for row in manifest["entries"] if row["path"].rsplit("/",1)[-1]==name and row["kind"]=="file"]
         need(len(candidates)==1,"WARM_TWO_SQLITE_STOP")
         db=C.R.T.resolve_source(roots,candidates[0]["path"])
@@ -507,7 +509,7 @@ def capture_checkpointed(controller, owner, witness, destination_policy, recover
             try:
                 con.execute("PRAGMA trusted_schema=OFF");con.execute("PRAGMA query_only=ON")
                 need(con.execute("PRAGMA integrity_check").fetchall()==[("ok",)],"WARM_SQLITE_INTEGRITY_STOP")
-                con.execute("SELECT count(*),coalesce(max(seq),0) FROM messages").fetchone()
+                cursors.append(con.execute("SELECT count(*),coalesce(max(seq),0) FROM messages").fetchone())
             finally:con.close()
         except sqlite3.Error:raise Stop("WARM_SQLITE_INTEGRITY_STOP") from None
     need(sum(row["size"] for row in manifest["entries"])<=binding["source_cap_bytes"],"WARM_CAPTURE_QUOTA_STOP")
@@ -517,6 +519,11 @@ def capture_checkpointed(controller, owner, witness, destination_policy, recover
         def isatty(self):return False
         def write(self,block):guard();return output.write(block)
     try:
+        if metadata is not None:
+            metadata(dict(schema_version=1,epoch=manifest["epoch"],manifest_sha256=C.G.sha(manifest),
+                files=len(manifest["entries"]),bytes=sum(r["size"] for r in manifest["entries"]),
+                symlinks=sum(r["kind"]=="symlink" for r in manifest["entries"]),
+                sqlite_cursors=[list(x) for x in cursors],ledger_sha256=C.R.state_ledger_digest(manifest)))
         C.R.W.seal_manifest_to_stream(roots,manifest,ids,recovery,CheckedOutput(),recensus=census)
         guard(True);output.flush()
     except Exception:

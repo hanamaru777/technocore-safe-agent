@@ -1,0 +1,31 @@
+[Unit]
+Description=Manually unsealed original DID AF_UNIX signer
+Requires=flop-r1155-old-post-deny.service
+After=flop-r1155-old-post-deny.service
+[Service]
+Type=exec
+User=technocore-signer
+Group=flop-r1155-publisher
+ExecStart=/opt/flop-r1155-runtime/.venv/bin/python -I -B /usr/local/libexec/flop-r1155/packaging/migration/r1155_signer.py
+StateDirectory=flop-r1155-signer
+StateDirectoryMode=0700
+RuntimeDirectory=flop-r1155-signer
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+InaccessiblePaths=-/etc/technocore-safe-agent -/var/lib/technocore-safe-agent -/opt/tradebot -/var/lib/tradebot
+ReadWritePaths=/var/lib/flop-r1155-signer /run/flop-r1155-signer
+MemoryMax=128M
+CPUQuota=25%
+TasksMax=16
