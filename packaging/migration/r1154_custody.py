@@ -31,13 +31,14 @@ DOMAIN=b"FLOP-R1154-ORIGINAL-DID-CUSTODY-v1\0"
 
 
 def approved(authority,binding,owner,witness,*,now):
-    H.shape(binding,"continuity recipient_public source_head purpose")
+    H.shape(binding,"continuity recipient_public source_head purpose"+(" recipient_evidence" if H.solo(authority) else ""))
+    if H.solo(authority):
+        H.need(H.solo_module().recipient_verify(authority,binding["recipient_evidence"],now)==binding["recipient_public"],"SOLO_RECIPIENT_NOT_PROVEN")
     C.digest(binding["recipient_public"])
     expected=S.request(authority.trust,binding["continuity"]["challenge"],binding["recipient_public"])
     H.need(binding["continuity"]==expected and binding["source_head"]==C.G.SOURCE_HEAD and
            binding["purpose"]=="R1154_ONE_ORIGINAL_DID_ENCRYPTED_CUSTODY","CUSTODY_BINDING_STOP")
-    for packet,role in ((owner,"owner"),(witness,"independent")):
-        H.need(authority.verify(packet,"custody",role,now)==binding,"CUSTODY_APPROVAL_STOP")
+    H.need(H.approval_pair(authority,owner,witness,"r1154-custody",now)==binding,"CUSTODY_APPROVAL_STOP")
 
 
 def key_for(shared,ephemeral,binding):

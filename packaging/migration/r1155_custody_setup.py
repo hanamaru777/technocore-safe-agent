@@ -29,7 +29,9 @@ def recipient_init(authority,password,store=S.STORE):
         H.need(not path.exists() and not path.is_symlink(),"RECIPIENT_ALREADY_EXISTS")
         key=X25519PrivateKey.generate()
         H.exclusive(path,key.private_bytes(Encoding.PEM,PrivateFormat.PKCS8,BestAvailableEncryption(bytes(password))))
-        return dict(recipient_public=key.public_key().public_bytes_raw().hex(),plaintext_persisted=False)
+        public=dict(recipient_public=key.public_key().public_bytes_raw().hex(),plaintext_persisted=False)
+        H.exclusive(store/"recipient-public.json",C.G.canonical(public))
+        return public
     finally:password[:]=b"\0"*len(password)
 
 
@@ -90,8 +92,7 @@ def main():
             H.shape(request,"enrollment enrollment_sha run_id owner witness")
             a=H.Authority(request["enrollment"],request["enrollment_sha"])
             binding=dict(destination=a.trust.context["destination"],run_id=request["run_id"],purpose="ENCRYPTED_RECIPIENT_ONLY_NOT_NEW_DID")
-            for field,role in (("owner","owner"),("witness","independent")):
-                H.need(a.trust.verify(request[field],"r1155-recipient-init",role,int(time.time()),age=900)==binding,"RECIPIENT_APPROVAL_STOP")
+            H.need(H.approval_pair(a,request["owner"],request["witness"],"r1155-recipient-init",int(time.time()))==binding,"RECIPIENT_APPROVAL_STOP")
             with warnings.catch_warnings():
                 warnings.simplefilter("error",getpass.GetPassWarning)
                 password=bytearray(getpass.getpass("LOCAL recipient encryption password (32+ bytes; NOT DID seed): ").encode())

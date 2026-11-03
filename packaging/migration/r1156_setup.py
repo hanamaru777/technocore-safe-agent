@@ -21,8 +21,15 @@ FILES={"verified-did.json","observer/observer-state.json","observer/observer-con
 
 def dual(authority,document,kind,now):
     data={k:v for k,v in document.items() if k not in ("owner","witness")}
-    for key,role in (("owner","owner"),("witness","independent")):
-        H.need(authority.trust.verify(document[key],"r1156-"+kind,role,now,age=900)==dict(document_sha=C.G.sha(data),no_start=True,zero_cost=True),"SETUP_APPROVAL_STOP")
+    H.need(H.approval_pair(authority,document["owner"],document["witness"],"r1156-"+kind,now)==dict(document_sha=C.G.sha(data),no_start=True,zero_cost=True),"SETUP_APPROVAL_STOP")
+
+
+def initial_runtime(authority,config,packet):
+    if H.solo(authority):
+        # Install disabled artifacts first, then obtain actual cgroup/restore
+        # evidence. This marker is never an admitted runtime packet or GO.
+        H.need(packet==dict(mode="SOLO_OWNER_AWAIT_FRESH_MACHINE_CHECK"),"SOLO_INITIAL_MUST_REMAIN_DISARMED")
+    else:N.install_runtime(config,packet)
 
 
 def promote_databases(hashes,restored,target,uid,gid,*,journal):
@@ -111,8 +118,7 @@ def stage(request):
     N.anchor_ok(a,anchor)
     H.need(anchor["runtime_sha"]==C.G.sha(config) and anchor["generation_sha"]==C.G.sha(g) and
         anchor["epoch"]==config["baseline"]["epoch"],"SETUP_CAPABILITY_STOP")
-    for key,role in (("owner","owner"),("witness","independent")):
-        H.need(a.trust.verify(cap[key],"r1156-autonomy",role,int(time.time()),age=900)==dict(anchor_sha=C.G.sha(anchor),generation_sha=C.G.sha(g)),"SETUP_CAPABILITY_STOP")
+    H.need(H.approval_pair(a,cap["owner"],cap["witness"],"r1156-autonomy",int(time.time()))==dict(anchor_sha=C.G.sha(anchor),generation_sha=C.G.sha(g)),"SETUP_CAPABILITY_STOP")
     H.need(type(g["source_hashes"]) is dict and set(g["source_hashes"])<=FILES and
         FILES-{"observer/resident-control.json"}<=set(g["source_hashes"]),"SETUP_SOURCE_FILES_STOP")
     restored=C.R.D.ROOT/request["run_id"]
@@ -138,7 +144,7 @@ def stage(request):
     A.prepare(config,request["scope"],restored,request["source_packet"])
     owned_directory(N.ROOT,0,pub.pw_gid,0o750)
     H.exclusive(N.ROOT/"capability.json",C.G.canonical(cap));os.chown(N.ROOT/"capability.json",0,pub.pw_gid);os.chmod(N.ROOT/"capability.json",0o640)
-    N.install_runtime(config,request["initial"])
+    initial_runtime(a,config,request["initial"])
     owned_directory(M.STATE.parent,resident.pw_uid,pub.pw_gid,0o2750)
     owned_directory(M.STATE,resident.pw_uid,pub.pw_gid,0o2750)
     for folder in ("observer","autopilot","signer","capture"):

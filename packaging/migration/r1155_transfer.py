@@ -24,7 +24,8 @@ O=load("r1155_old_owner","r1154_owner.py")
 
 def admit(plan,now,renewal=None):
     fields="enrollment enrollment_sha run_id scope preserve_owner preserve_witness destination_policy offhost_parent quota_bytes custody owner witness"
-    H.shape(plan,fields+(" renewal" if "renewal" in plan else ""))
+    is_solo=plan.get("enrollment",{}).get("schema_version")==2
+    H.shape(plan,fields+(" renewal" if "renewal" in plan else "")+(" inventory_evidence" if is_solo else ""))
     a=H.Authority(plan["enrollment"],plan["enrollment_sha"])
     if "renewal" in plan:
         N=load("r1156_transfer_renewal","r1156_renewal.py")
@@ -47,10 +48,16 @@ def admit(plan,now,renewal=None):
     C.integer(preserved["source_cap_bytes"],1,plan["quota_bytes"])
     H.need(preserved["scope_sha"]==C.G.sha(plan["scope"]) and preserved["roots_sha"]==C.G.sha(C.ROOTS) and
         preserved["recovery_confirmed"] is True and preserved["cost_cap"]=="ZERO_NEW_BILLING","TRANSFER_PRESERVE_BINDING_STOP")
-    H.need(a.verify(plan["preserve_owner"],"preserve","owner",now)==preserved and
-        a.verify(plan["preserve_witness"],"preserve","independent",now)==preserved,"TRANSFER_PRESERVE_APPROVAL_STOP")
-    H.need(preserved["inventory_sha"]==plan["scope"]["quarantine"]["inventory_sha"] and
-        preserved["ledger_sha"]==plan["scope"]["quarantine"]["ledger_sha"],"TRANSFER_QUARANTINE_CONSENT_STOP")
+    H.need(H.approval_pair(a,plan["preserve_owner"],plan["preserve_witness"],"r1154-preserve",now)==preserved,"TRANSFER_PRESERVE_APPROVAL_STOP")
+    if H.solo(a):
+        H.need("renewal" not in plan and plan["quota_bytes"]==plan["scope"]["destination"]["data"]["source_upper_bound_bytes"],"SOLO_SIZE_OR_VERSION_BINDING_STOP")
+        H.need(preserved["destination_policy_sha"]==hashlib.sha256(H.boot_unit(plan["scope"]["users"].values(),plan["scope"]["units"])).hexdigest(),"SOLO_QUARANTINE_POLICY_BINDING_STOP")
+        value=H.solo_module().inventory_verify(a,plan["inventory_evidence"],plan["scope"],now)
+        H.need(value["inventory_sha"]==preserved["inventory_sha"] and value["ledger_sha"]==preserved["ledger_sha"] and
+            value["epoch"]==preserved["epoch"] and value["hold_journal_sha"]==preserved["hold_journal_sha"],"SOLO_INVENTORY_BINDING_STOP")
+    else:
+        H.need(preserved["inventory_sha"]==plan["scope"]["quarantine"]["inventory_sha"] and
+            preserved["ledger_sha"]==plan["scope"]["quarantine"]["ledger_sha"],"TRANSFER_QUARANTINE_CONSENT_STOP")
     from importlib.util import spec_from_file_location,module_from_spec
     spec=spec_from_file_location("r1155_transfer_custody",Path(__file__).with_name("r1154_custody.py"))
     custody=module_from_spec(spec);spec.loader.exec_module(custody)
@@ -58,13 +65,12 @@ def admit(plan,now,renewal=None):
     custody.approved(a,doc["binding"],doc["owner"],doc["witness"],now=doc["owner"]["body"]["observed_at"])
     H.need(doc["envelope"].get("binding")==doc["binding"] and len(C.G.canonical(doc))<=16384,"TRANSFER_CUSTODY_STOP")
     H.shape(doc["envelope"],"version binding ephemeral nonce ciphertext")
-    policy=a.verify(plan["destination_policy"],"permanent-no-replay","destination",now)
+    policy=H.destination_approval(a,plan["destination_policy"],"r1154-permanent-no-replay",now)
     H.need(policy==dict(policy_sha=preserved["destination_policy_sha"],inventory_sha=preserved["inventory_sha"],
         ledger_sha=preserved["ledger_sha"],all_five_routes=True,survives_reboot=True,unknown_remains_unknown=True),"TRANSFER_NO_REPLAY_STOP")
     binding={k:v for k,v in plan.items() if k not in ("owner","witness")}
-    for key,role in (("owner","owner"),("witness","independent")):
-        H.need(a.trust.verify(plan[key],"r1155-transfer",role,now,age=900)==dict(plan_sha=C.G.sha(binding),
-            keep_source_vm_and_ssh=True,disarmed_restore_only=True,zero_new_billing=True),"TRANSFER_APPROVAL_STOP")
+    H.need(H.approval_pair(a,plan["owner"],plan["witness"],"r1155-transfer",now)==dict(plan_sha=C.G.sha(binding),
+        keep_source_vm_and_ssh=True,disarmed_restore_only=True,zero_new_billing=True),"TRANSFER_APPROVAL_STOP")
     return a
 
 
@@ -83,7 +89,8 @@ def bundle():
     return result
 
 
-def command(base,operation,sources,machine,enrollment):
+def command(base,operation,sources,machine,enrollment,*,peer_leaf="r1155_transfer.py"):
+    H.need(peer_leaf in ("r1155_transfer.py","r1158_machine.py"),"TRANSFER_OPERATION_STOP")
     H.need(operation in ("source","capacity","restore","verify","renew-source"),"TRANSFER_OPERATION_STOP")
     for value in (machine,enrollment):C.digest(value)
     # R1154's pinned, bounded staging/authentication, with a fixed streaming
@@ -91,7 +98,7 @@ def command(base,operation,sources,machine,enrollment):
     code=O.bootstrap(C.G.sha(sources),enrollment,machine)
     code=code.replace(" if sys.stdin.buffer.read(1)!=b'':raise ValueError()\n","")
     code=code.replace(" if os.geteuid()!=0 or", " if os.geteuid()!="+("0" if operation in ("source","verify","renew-source") else "1000")+" or")
-    code=code.replace("root/'packaging/migration/r1154_app_hold.py'","root/'packaging/migration/r1155_transfer.py'")
+    code=code.replace("root/'packaging/migration/r1154_app_hold.py'","root/'packaging/migration/"+peer_leaf+"'")
     code=code.replace("not name.startswith(('packaging/migration/','packaging/archive/','src/flop_agent/','scripts/'))",
         "not (name.startswith(('packaging/migration/','packaging/archive/','src/flop_agent/','scripts/','packaging/oracle/')) or name=='public-profile.json')")
     code=code.replace("  response=m.peer(request)\n  sys.stdout.buffer.write(canonical(response)+b'\\n');sys.stdout.buffer.flush()",
@@ -122,7 +129,7 @@ def meta_check(meta,plan):
         for n in row:C.integer(n)
 
 
-def peer(request,incoming,outgoing):
+def peer(request,incoming,outgoing,*,controller_factory=None):
     H.shape(request,"enrollment enrollment_sha operation plan meta"+(" renewal_packet" if "renewal_packet" in request else ""))
     plan=request["plan"];renewal=None;mode=request["operation"]
     if "renewal" in plan:
@@ -142,7 +149,7 @@ def peer(request,incoming,outgoing):
     sys.path.insert(0,str(H.ROOT/"src"))
     H.need(request["enrollment"]==plan["enrollment"] and request["enrollment_sha"]==a.pin,"TRANSFER_ENROLLMENT_STOP")
     if mode in ("source","verify"):
-        ctl=H.Controller(a);held=ctl.verify()
+        ctl=(controller_factory or H.Controller)(a);held=ctl.verify()
         H.need(held["scope_sha"]==C.G.sha(plan["scope"]),"TRANSFER_HOLD_STOP")
         if mode=="verify":R.frame_write(outgoing,R.META,held);return
         size=struct.unpack(">I",R.exact(incoming,4))[0];H.need(32<=size<=1024,"TRANSFER_RECOVERY_STOP")
@@ -221,8 +228,11 @@ def bases(control,a):
     return result
 
 
-def owner(control,recovery,*,session=None):
+def owner(control,recovery,*,session=None,commands=command):
     plan=control["plan"];a=admit(plan,int(time.time()),session)
+    if H.solo(a):
+        H.need(session is not None and callable(getattr(session,"decorate",None)) and
+            callable(getattr(session,"check",None)),"SOLO_VERSIONED_ENTRYPOINT_REQUIRED")
     H.need(os.name=="nt","TRANSFER_WINDOWS_CUSTODY_REQUIRED")
     src,dst=bases(control,a);public=bundle();parent=Path(plan["offhost_parent"])
     archive=parent/plan["run_id"];record=parent/("r1155-"+plan["run_id"]+".json")
@@ -233,14 +243,17 @@ def owner(control,recovery,*,session=None):
         saved=C.decode(record.read_bytes());H.need(saved["context"]==a.trust.context,"TRANSFER_CUSTODY_STOP")
         meta_check(saved["meta"],plan);request["meta"]=saved["meta"]
     def rpc(mode,base,req):
-        return command(base,mode,public,a.trust.context["host"] if mode in ("source","verify") else H.B.K137,a.pin)
+        return commands(base,mode,public,a.trust.context["host"] if mode in ("source","verify") else H.B.K137,a.pin)
+    def send(process,req,material=None):
+        value=session.decorate(req) if session is not None and hasattr(session,"decorate") else req
+        return R.send_request(process,public,value,material)
     if session is not None:session.start(src,public)
     # Offline destination prepared FIRST. No source HOLD is manufactured here.
     with R.child(rpc("capacity",dst,request),timeout=90) as p:
-        R.send_request(p,public,request);cap=R.frame_read(p.stdout,R.META)
+        send(p,request);cap=R.frame_read(p.stdout,R.META)
         H.need(p.wait(timeout=15)==0 and cap==dict(status="CAPACITY_VERIFIED_NOW",runtime_started=False),"TRANSFER_CAPACITY_STOP")
     with R.child(rpc("verify",src,{**request,"operation":"verify"}),timeout=90) as p:
-        R.send_request(p,public,{**request,"operation":"verify"});hold=R.frame_read(p.stdout,R.META)
+        send(p,{**request,"operation":"verify"});hold=R.frame_read(p.stdout,R.META)
         H.need(p.wait(timeout=15)==0 and hold["scope_sha"]==C.G.sha(plan["scope"]),"TRANSFER_HOLD_STOP")
     if record.exists():
         H.need(record.stat().st_size<=16384 and not record.is_symlink(),"TRANSFER_CUSTODY_STOP")
@@ -254,7 +267,7 @@ def owner(control,recovery,*,session=None):
         R.checkpoint(parent,record.name,dict(context=a.trust.context,meta=None,phase="SOURCE_ATTEMPTING"))
         with R.child(rpc("source",src,request)) as p:
             if session is not None:session.attach(p)
-            R.send_request(p,public,request,recovery);meta=R.frame_read(p.stdout,R.META);meta_check(meta,plan)
+            send(p,request,recovery);meta=R.frame_read(p.stdout,R.META);meta_check(meta,plan)
             R.checkpoint(parent,record.name,dict(context=a.trust.context,meta=meta,phase="RECEIVING"))
             args=[ps,"-NoProfile","-NonInteractive","-File",str(Path(__file__).with_name("r1085_windows_offhost_sink.ps1")),
                 "-ExistingPrivateNtfsParent",str(parent),"-NewArchiveFolder",plan["run_id"],"-QuotaBytes",str(plan["quota_bytes"]),"-AllowCiphertextOnly"]
@@ -268,14 +281,15 @@ def owner(control,recovery,*,session=None):
         # Fresh owner leases are checked again; no forged R1089 G4/G5 PASS.
         admit(plan,int(time.time()),session)
         request.update(operation="restore",meta=meta)
-        if session is not None:request["renewal_packet"]=session.packet()
+        if session is not None and "renewal" in plan:request["renewal_packet"]=session.packet()
         with R.child(rpc("restore",dst,request)) as p:
             if session is not None:session.attach(p)
-            R.send_request(p,public,request);held.stream(recovery,p.stdin);p.stdin.close();p.stdin=None
+            send(p,request);held.stream(recovery,p.stdin);p.stdin.close();p.stdin=None
             restored=R.frame_read(p.stdout,R.META)
             H.need(p.wait(timeout=30)==0 and p.stdout.read(1)==b"","TRANSFER_RESTORE_UNKNOWN")
         H.need(all(restored[k]==meta[k] for k in ("manifest_sha256","files","bytes","symlinks","sqlite_cursors")),"TRANSFER_RESTORE_STOP")
         R.checkpoint(parent,record.name,dict(context=a.trust.context,meta=meta,phase="DISARMED_RESTORED"))
+    if session is not None:session.check(int(time.time()))
     return dict(task="R1155",operation="PRESERVED_AND_DISARMED_RESTORED",cutover="NO_GO",oci_retirement="STRICT_NO_GO")
 
 
@@ -284,6 +298,7 @@ def main():
     try:
         H.need(sys.argv[1:] in (["--owner"],["--check-plan"]),"TRANSFER_ARGUMENT_STOP")
         control=R.frame_read(sys.stdin.buffer,R.MAGIC)
+        H.need(control["plan"]["enrollment"]["schema_version"]==1,"SOLO_VERSIONED_ENTRYPOINT_REQUIRED")
         if sys.argv[1:]==["--check-plan"]:
             plan=control["plan"];current=None
             if "renewal" in plan:

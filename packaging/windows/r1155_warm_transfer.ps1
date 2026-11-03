@@ -20,7 +20,7 @@ try {
     $hash=[Security.Cryptography.SHA1]::Create()
     try {
         $b=[Text.Encoding]::UTF8.GetBytes($mapText);$p=[Text.Encoding]::ASCII.GetBytes(('blob '+$b.Length+[char]0))
-        if([BitConverter]::ToString($hash.ComputeHash([byte[]]($p+$b))).Replace('-','').ToLowerInvariant() -cne '823405eb38c6754aedfb9357ed018d6299bb1089'){throw 'SOURCE_PIN_STOP'}
+        if([BitConverter]::ToString($hash.ComputeHash([byte[]]($p+$b))).Replace('-','').ToLowerInvariant() -cne '845e571b11603d029ade6b27d53e3dd03ecb038b'){throw 'SOURCE_PIN_STOP'}
     } finally {$hash.Dispose()}
     $map=$mapText|ConvertFrom-Json
     foreach($entry in $map.PSObject.Properties) {

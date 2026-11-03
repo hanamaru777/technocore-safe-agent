@@ -32,7 +32,7 @@ if($args.Count -ne 0 -or -not $RequestFile){Stop-R1154 'WARM_SIGNED_OWNER_REQUIR
 $private=$null;$plain=$null;$password=$null;$reply=$null;$control=$null;$stage='WARM_OWNER_STOP_UNKNOWN_NO_AUTO_RETRY';$clean=$true
 try {
     if($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -lt 1){throw 'PS51_REQUIRED'}
-    $map=Read-R1154Code '..\migration\r1154_source_pins.json' '035ea7139fdabbf598ff532dacc840820f883e01'
+    $map=Read-R1154Code '..\migration\r1154_source_pins.json' '4bd00e1084d42d5274c34b08a724e347847c8fe2'
     foreach($entry in ($map|ConvertFrom-Json).PSObject.Properties) {
         $null=Read-R1154Code ('..\..\'+$entry.Name.Replace('/','\')) $entry.Value
     }

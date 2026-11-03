@@ -65,7 +65,7 @@ class Authority:
     def __init__(self, profile, digest):
         need(C.G.sha(profile) == C.digest(digest), "WARM_ENROLLMENT_STOP")
         self.profile = C.decode(C.G.canonical(profile)); self.pin = digest
-        self.trust = C.Enrollment(self.profile)
+        self.trust = solo_module().Enrollment(self.profile) if self.profile.get("schema_version")==2 else C.Enrollment(self.profile)
         need(self.trust.context["destination"]==B.K137,"WARM_DESTINATION_STOP")
 
     def verify(self, packet, kind, role, now):
@@ -73,12 +73,33 @@ class Authority:
         return self.trust.verify(packet, "r1154-"+kind, role, now, age=900)
 
 
+def solo_module():
+    name="flop_r1158_solo"
+    if name not in sys.modules:load(name,"packaging/migration/r1158_solo.py")
+    return sys.modules[name]
+
+
+def solo(authority):return authority.profile.get("schema_version")==2
+
+
+def approval_pair(authority,owner,witness,kind,now,*,age=900):
+    if solo(authority):return solo_module().pair(authority,owner,witness,kind,now,age=age)
+    left=authority.trust.verify(owner,kind,"owner",now,age=age)
+    need(authority.trust.verify(witness,kind,"independent",now,age=age)==left,"WARM_APPROVAL_STOP")
+    return left
+
+
+def destination_approval(authority,packet,kind,now,*,age=900):
+    if solo(authority):return solo_module().destination(authority,packet,kind,now,age=age)
+    return authority.trust.verify(packet,kind,"destination",now,age=age)
+
+
 def validate_scope(authority, scope, *, now):
     shape(scope, "version run_id source units users surfaces quarantine templates known_hosts_sha launcher_sha destination tool_blob owner witness")
     need(scope["tool_blob"]==tool_blob(),"WARM_TOOL_PIN_STOP")
     C.digest(scope["known_hosts_sha"])
     C.digest(scope["launcher_sha"])
-    need(type(scope["version"]) is int and scope["version"] == 1 and type(scope["run_id"]) is str and
+    need(type(scope["version"]) is int and scope["version"] == (2 if solo(authority) else 1) and type(scope["run_id"]) is str and
          re.fullmatch(r"[0-9a-f]{32}", scope["run_id"]), "WARM_SCOPE_STOP")
     need(scope["source"] == authority.trust.context, "WARM_SOURCE_STOP")
     shape(scope["users"], "technocore technocore-signer") if "technocore-rpc" not in scope["users"] else shape(scope["users"], "technocore technocore-signer technocore-rpc")
@@ -87,7 +108,7 @@ def validate_scope(authority, scope, *, now):
     need(type(scope["units"]) is dict and 1 <= len(scope["units"]) <= 128, "WARM_UNIT_BOUND_STOP")
     for name, row in scope["units"].items():
         need(J.NAME.fullmatch(name) and "\\" not in name and name not in PROTECTED and
-             (name.startswith("technocore-safe-agent-") or name in ("resident.service", "discord.service", "lobby-capture.service", "airdrop-monitor.service", "airdrop-monitor.timer", "airdrop-notifier.service", "airdrop-notifier.timer")), "WARM_PROTECTED_UNIT_STOP")
+             (name.startswith("technocore-safe-agent-") or name in ("r1154-custody.service", "resident.service", "discord.service", "lobby-capture.service", "airdrop-monitor.service", "airdrop-monitor.timer", "airdrop-notifier.service", "airdrop-notifier.timer")), "WARM_PROTECTED_UNIT_STOP")
         shape(row, "properties_sha file_sha user targets stop_edges")
         C.digest(row["properties_sha"]); C.digest(row["file_sha"])
         need(row["user"] in scope["users"] or name.endswith((".timer", ".socket", ".path")), "WARM_SHARED_UID_STOP")
@@ -100,12 +121,15 @@ def validate_scope(authority, scope, *, now):
     for name, aliases in scope["templates"].items():
         need(type(aliases) is list and len(aliases) <= 16 and len(aliases) == len(set(aliases)) and
              all(alias in scope["units"] or alias in PROTECTED for alias in aliases), "WARM_TEMPLATE_COVERAGE_STOP")
-    need(scope["surfaces"] == {key: "INDEPENDENTLY_REVIEWED_NO_OUTSIDE_LAUNCHER" for key in SURFACES}, "WARM_LAUNCHER_UNKNOWN_STOP")
+    expected="MACHINE_RECHECK_REQUIRED_NO_HUMAN_INDEPENDENCE" if solo(authority) else "INDEPENDENTLY_REVIEWED_NO_OUTSIDE_LAUNCHER"
+    need(scope["surfaces"] == {key: expected for key in SURFACES}, "WARM_LAUNCHER_UNKNOWN_STOP")
     shape(scope["quarantine"], "routes inventory_sha ledger_sha permanent loss_accepted")
     q = scope["quarantine"]
     need(q["routes"] == list(P.ROUTES) and q["permanent"] is True and q["loss_accepted"] is True, "WARM_QUARANTINE_STOP")
-    C.digest(q["inventory_sha"]); C.digest(q["ledger_sha"])
-    destination=authority.trust.verify(scope["destination"],"r1154-destination","destination",now,age=30)
+    if solo(authority) and q["inventory_sha"] is None and q["ledger_sha"] is None:
+        pass # intent to freeze; NOT factual inventory/settlement evidence
+    else:C.digest(q["inventory_sha"]);C.digest(q["ledger_sha"])
+    destination=solo_module().capacity(scope["destination"],now) if solo(authority) else authority.trust.verify(scope["destination"],"r1154-destination","destination",now,age=30)
     shape(destination,"machine free_bytes source_upper_bound_bytes memory_headroom_bytes cpu_psi_milli io_psi_milli disarmed_ready publisher_disarmed zero_cost_verified")
     for key in ("free_bytes","source_upper_bound_bytes","memory_headroom_bytes","cpu_psi_milli","io_psi_milli"):C.integer(destination[key])
     need(destination["machine"]==B.K137 and destination["disarmed_ready"] is True and destination["publisher_disarmed"] is True and
@@ -114,10 +138,8 @@ def validate_scope(authority, scope, *, now):
          destination["memory_headroom_bytes"]>=512*1024**2 and destination["cpu_psi_milli"]<=5000 and
          destination["io_psi_milli"]<=10000,"WARM_K137_CAPACITY_STOP")
     binding = C.G.sha({k: v for k, v in scope.items() if k not in ("owner", "witness")})
-    for key, role in (("owner", "owner"), ("witness", "independent")):
-        need(authority.verify(scope[key], "hold", role, now) == dict(scope_sha=binding,
-            downtime=True, keep_vm_running=True, keep_ssh=True, cost_cap="ZERO_NEW_BILLING",
-            permanent_post_deny=True), "WARM_APPROVAL_STOP")
+    need(approval_pair(authority,scope["owner"],scope["witness"],"r1154-hold",now)==dict(scope_sha=binding,
+        downtime=True,keep_vm_running=True,keep_ssh=True,cost_cap="ZERO_NEW_BILLING",permanent_post_deny=True),"WARM_APPROVAL_STOP")
     return binding
 
 
@@ -340,10 +362,11 @@ def sync(path):
 
 
 class Controller:
-    def __init__(self, authority, driver=None): self.authority=authority; self.driver=driver or Linux()
+    def __init__(self, authority, driver=None, *, live=None): self.authority=authority; self.driver=driver or Linux(); self.live=live
 
     def hold(self, scope, *, now):
         binding=validate_scope(self.authority,scope,now=now)
+        if solo(self.authority):solo_module().require_live_checks(self.live,"hold",scope)
         self.driver.identity(scope)
         need(self.driver.launchers()==scope["launcher_sha"],"WARM_LAUNCHER_DRIFT_STOP")
         need(self.driver.discovered() == set(scope["units"]), "WARM_SCOPE_DRIFT_STOP")
@@ -415,8 +438,8 @@ class Controller:
         self.driver.identity(scope)
         binding=dict(journal_sha=journal.previous,scope_sha=C.G.sha(scope),aws_publishers_disabled=True,
                      permanent_old_post_deny_retained=True,auto_restart=False)
-        for packet,role in ((owner,"owner"),(witness,"independent")):
-            need(self.authority.verify(packet,"rollback",role,now)==binding,"WARM_ROLLBACK_APPROVAL_STOP")
+        need(approval_pair(self.authority,owner,witness,"r1154-rollback",now)==binding,"WARM_ROLLBACK_APPROVAL_STOP")
+        if solo(self.authority):solo_module().require_live_checks(self.live,"rollback",scope)
         rows=journal.latest["units"]
         protected=journal.latest["protected"]
         journal.save(dict(phase="ROLLBACK_ATTEMPTING",binding=journal.latest["binding"],units=rows,protected=protected))
@@ -462,11 +485,11 @@ def capture_checkpointed(controller, owner, witness, destination_policy, recover
     held=controller.verify();authority=controller.authority
     binding=authority.verify(owner,"preserve","owner",int(clock()))
     shape(binding,"scope_sha hold_journal_sha roots_sha inventory_sha ledger_sha epoch source_cap_bytes destination_policy_sha recovery_confirmed cost_cap")
-    need(authority.verify(witness,"preserve","independent",int(clock()))==binding and
+    need(approval_pair(authority,owner,witness,"r1154-preserve",int(clock()))==binding and
          binding["scope_sha"]==held["scope_sha"] and binding["hold_journal_sha"]==held["journal_sha"] and
          binding["roots_sha"]==C.G.sha(C.ROOTS) and binding["recovery_confirmed"] is True and binding["cost_cap"]=="ZERO_NEW_BILLING","WARM_CAPTURE_APPROVAL_STOP")
     C.digest(binding["epoch"]);C.integer(binding["source_cap_bytes"],1,C.R.T.C.MAX_SOURCE_BYTES)
-    installed=authority.verify(destination_policy,"permanent-no-replay","destination",int(clock()))
+    installed=destination_approval(authority,destination_policy,"r1154-permanent-no-replay",int(clock()))
     need(installed==dict(policy_sha=binding["destination_policy_sha"],inventory_sha=binding["inventory_sha"],
         ledger_sha=binding["ledger_sha"],all_five_routes=True,survives_reboot=True,unknown_remains_unknown=True),"WARM_AWS_NO_REPLAY_NOT_INSTALLED")
     need(type(recovery) is bytes and 32<=len(recovery)<=1024,"WARM_ARCHIVE_RECOVERY_STOP")
@@ -478,11 +501,11 @@ def capture_checkpointed(controller, owner, witness, destination_policy, recover
         now=int(clock())
         # Scope grant is NOT silently renewed by a local bool.
         if renewal is None:
-            need(authority.verify(owner,"preserve","owner",now)==binding and
-                 authority.verify(witness,"preserve","independent",now)==binding,"WARM_CAPTURE_LEASE_STOP")
+            need(approval_pair(authority,owner,witness,"r1154-preserve",now)==binding,"WARM_CAPTURE_LEASE_STOP")
         else:renewal.check_capture(binding,now)
         if force or last[0] is None or now-last[0]>=5:
             checked=controller.verify();need(checked["journal_sha"]==binding["hold_journal_sha"],"WARM_HOLD_CHANGED")
+            if solo(authority):solo_module().require_live_checks(controller.live,"export",C.decode((WORK/"scope.json").read_bytes()))
             last[0]=now
     def census():
         guard(True)
