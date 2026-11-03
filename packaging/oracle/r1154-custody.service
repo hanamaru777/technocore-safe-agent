@@ -1,0 +1,27 @@
+# Explicit one-shot template ONLY. No install/enable/start by this package.
+[Unit]
+Description=Approved one-time encrypted original DID custody
+
+[Service]
+Type=oneshot
+User=technocore-signer
+Group=technocore-signer
+SupplementaryGroups=technocore-autopilot
+EnvironmentFile=/etc/technocore-safe-agent/signer.env
+ExecStart=/opt/technocore-safe-agent/.venv/bin/python -I -B /usr/local/libexec/flop-r1154/packaging/migration/r1154_custody.py
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/flop-r1154-custody
+StateDirectory=flop-r1154-custody
+StateDirectoryMode=0700
+InaccessiblePaths=/etc/technocore-safe-agent/env
+UMask=0077
