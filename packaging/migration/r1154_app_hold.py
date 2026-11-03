@@ -452,7 +452,7 @@ def result(code):
 
 
 def capture_checkpointed(controller, owner, witness, destination_policy, recovery, output, *, clock=time.time,
-                         sqlite_validator=None, metadata=None):
+                         sqlite_validator=None, metadata=None, renewal=None):
     """Full R1089 encryption library adapter; never an old-gate GO forgery.
 
     Only after real APP HOLD. Non-empty WAL requires a separately reviewed
@@ -477,8 +477,10 @@ def capture_checkpointed(controller, owner, witness, destination_policy, recover
     def guard(force=False):
         now=int(clock())
         # Scope grant is NOT silently renewed by a local bool.
-        need(authority.verify(owner,"preserve","owner",now)==binding and
-             authority.verify(witness,"preserve","independent",now)==binding,"WARM_CAPTURE_LEASE_STOP")
+        if renewal is None:
+            need(authority.verify(owner,"preserve","owner",now)==binding and
+                 authority.verify(witness,"preserve","independent",now)==binding,"WARM_CAPTURE_LEASE_STOP")
+        else:renewal.check_capture(binding,now)
         if force or last[0] is None or now-last[0]>=5:
             checked=controller.verify();need(checked["journal_sha"]==binding["hold_journal_sha"],"WARM_HOLD_CHANGED")
             last[0]=now
@@ -514,6 +516,7 @@ def capture_checkpointed(controller, owner, witness, destination_policy, recover
         except sqlite3.Error:raise Stop("WARM_SQLITE_INTEGRITY_STOP") from None
     need(sum(row["size"] for row in manifest["entries"])<=binding["source_cap_bytes"],"WARM_CAPTURE_QUOTA_STOP")
     need(census()[1]==manifest,"WARM_CAPTURE_CHANGED")
+    if renewal is not None:renewal.bind_capture(binding,C.G.sha(manifest),state_hashes["nonces.json"],int(clock()))
     journal.save(dict(phase="ARCHIVE_ATTEMPTING",binding_sha=C.G.sha(binding)))
     class CheckedOutput:
         def isatty(self):return False

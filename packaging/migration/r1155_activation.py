@@ -72,7 +72,9 @@ def prepare(config,scope,restored,source_packet,*,runner=None):
             total+=path.stat().st_size;H.need(path.stat().st_size<=16*1024**2 and total<=64*1024**2,"ACTIVATION_LEDGER_BOUND_STOP")
             files[name]=path.read_bytes()
     H.need(S.baseline(files,hashes,a.profile["source_did"],config["baseline"]["epoch"])==config["baseline"],"ACTIVATION_ACTUAL_LEDGER_STOP")
-    fresh_resources(receipt["bytes"])
+    # The complete inert archive is ALREADY restored; do not reserve a second
+    # full copy. New bounded projection space is measured by the R1156 caller.
+    fresh_resources(0)
     driver=H.Linux() if runner is None else H.Linux(runner)
     import pwd
     # Never reuse an admin/shared/TradeBot UID or alter existing supplementary

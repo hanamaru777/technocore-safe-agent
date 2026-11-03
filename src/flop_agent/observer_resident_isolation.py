@@ -82,6 +82,11 @@ def maintenance_cycle() -> None:
     """Run one existing local-only Resident/Autopilot maintenance cycle."""
     from . import autopilot, resident_candidate_supersession
 
+    if os.environ.get("FLOP_R1156_READ_ONLY_BRIDGE") == "1":
+        from . import r1156_bridge
+        if not r1156_bridge.before_maintenance():
+            return
+
     observed = observer.load_state()
     resident_candidate_supersession.refresh(observed)
     autopilot.build_outbox()

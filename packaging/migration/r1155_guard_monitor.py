@@ -14,8 +14,8 @@ UNITS=Path("/etc/systemd/system")
 BOOT=Path("/proc/sys/kernel/random/boot_id")
 
 
-def observe(config,scope,driver,*,now):
-    S.activation(config,now)
+def observe(config,scope,driver,*,now,admit=S.activation):
+    admit(config,now)
     H.need(C.G.sha(scope)==config["lease"]["scope_sha"],"GUARD_SCOPE_STOP")
     H.validate_scope(H.Authority(config["enrollment"],config["enrollment_sha"]),scope,
         now=scope["owner"]["body"]["observed_at"])
@@ -30,7 +30,7 @@ def observe(config,scope,driver,*,now):
     return dict(config_sha=C.G.sha(config),scope_sha=C.G.sha(scope),boot_sha=boot,observed_at=now,status="READY")
 
 
-def main():
+def main(*,admit=S.activation):
     try:
         H.need(sys.platform=="linux" and os.geteuid()==0 and not sys.argv[1:] and
             C.R.D.machine_digest()==H.B.K137,"GUARD_HOST_STOP")
@@ -39,7 +39,7 @@ def main():
         ready=False
         while True:
             config=S.secured(S.CONFIG);scope=S.secured(S.CONFIG.with_name("scope.json"))
-            value=observe(config,scope,H.Linux(),now=int(time.time()))
+            value=observe(config,scope,H.Linux(),now=int(time.time()),admit=admit)
             C.R.checkpoint(S.CONFIG.parent,"guard-health.json",value)
             p=S.CONFIG.with_name("guard-health.json");os.chown(p,0,gid);os.chmod(p,0o640)
             if not ready and os.environ.get("NOTIFY_SOCKET"):
