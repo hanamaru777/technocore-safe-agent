@@ -53,8 +53,7 @@ def activation(config,now):
         lease["new_only"] is True and lease["original_post_deny"] is True and lease["zero_cost"] is True,"RUNTIME_LEASE_STOP")
     for field in ("boot_sha","source_hold_sha","restored_manifest_sha","custody_sha"):C.digest(lease[field])
     C.integer(lease["activated_at"],1,now)
-    for key,role in (("owner","owner"),("witness","independent")):
-        H.need(a.trust.verify(config[key],"r1155-activate",role,now,age=900)==lease,"RUNTIME_APPROVAL_STOP")
+    H.need(H.approval_pair(a,config["owner"],config["witness"],"r1155-activate",now)==lease,"RUNTIME_APPROVAL_STOP")
     return a
 
 
@@ -103,10 +102,9 @@ def approved(config,request,now):
     H.need(int(request["nonce"])>int(config["baseline"]["nonces"].get(key,0)),"RUNTIME_OLD_NONCE_STOP")
     binding=dict(epoch=config["baseline"]["epoch"],activation_sha=C.G.sha(config["lease"]),
         request_sha=C.G.sha({k:v for k,v in request.items() if k not in ("owner","witness")}))
-    for field,role in (("owner","owner"),("witness","independent")):
-        packet=request[field]
-        H.need(packet["body"]["observed_at"]>=config["lease"]["activated_at"] and
-            a.trust.verify(packet,"r1155-new-request",role,now,age=900)==binding,"RUNTIME_NEW_APPROVAL_STOP")
+    packets=[request["owner"]] if H.solo(a) else [request["owner"],request["witness"]]
+    H.need(all(packet["body"]["observed_at"]>=config["lease"]["activated_at"] for packet in packets) and
+        H.approval_pair(a,request["owner"],request["witness"],"r1155-new-request",now)==binding,"RUNTIME_NEW_APPROVAL_STOP")
     return a
 
 

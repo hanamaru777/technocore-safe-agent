@@ -33,7 +33,13 @@ class Reader:
         self.authority=authority;self.anchor=C.decode(C.G.canonical(anchor));self.read=read;self.journal=journal;self.boot=boot
 
     def check(self,now):
-        packet=self.read();H.shape(packet,"owner witness")
+        packet=self.read()
+        if H.solo(self.authority):
+            path=H.WORK/"scope.json" if self.anchor["purpose"]=="archive" else S.CONFIG.with_name("scope.json")
+            scope=S.secured(path,mode=0o600 if self.anchor["purpose"]=="archive" else 0o640)
+            H.need(C.G.sha(scope)==self.anchor["scope_sha"],"SOLO_MACHINE_BINDING_STOP")
+            return H.solo_module().check_reader(self,packet,now,scope)
+        H.shape(packet,"owner witness")
         data=self.authority.trust.verify(packet["owner"],"r1156-renewal","owner",now,age=900)
         H.need(self.authority.trust.verify(packet["witness"],"r1156-renewal","independent",now,age=900)==data,"RENEWAL_WITNESS_STOP")
         H.shape(data,"anchor_sha seq previous metrics")
@@ -125,9 +131,9 @@ def runtime_admit(config,now):
         anchor["generation_sha"]==C.G.sha(cap["generation"]) and anchor["manifest_sha"]==config["lease"]["restored_manifest_sha"] and
         anchor["epoch"]==config["baseline"]["epoch"] and anchor["ledger_sha"]==config["baseline"]["ledger_sha"] and
         anchor["nonce_state_sha"]==C.G.sha(config["baseline"]["nonces"]) and anchor["target_boot"]==config["lease"]["boot_sha"],"RENEWAL_RUNTIME_STOP")
-    for key,role in (("owner","owner"),("witness","independent")):
-        H.need(authority.trust.verify(cap[key],"r1156-autonomy",role,cap[key]["body"]["observed_at"],age=900)==
-            dict(anchor_sha=C.G.sha(anchor),generation_sha=C.G.sha(cap["generation"])),"RENEWAL_CAPABILITY_STOP")
+    at=max(cap[k]["body"]["observed_at"] for k in (("owner",) if H.solo(authority) else ("owner","witness")))
+    H.need(H.approval_pair(authority,cap["owner"],cap["witness"],"r1156-autonomy",at)==
+        dict(anchor_sha=C.G.sha(anchor),generation_sha=C.G.sha(cap["generation"])),"RENEWAL_CAPABILITY_STOP")
     packet=S.secured(ROOT/"current.json")
     # Root owns persistent CAS state; unprivileged consumers must see exactly
     # that admitted version, not silently accept an older signed response.

@@ -26,6 +26,17 @@ def current_host():
 
 def source_hold(config,packet,now):
     a=S.activation(config,now)
+    if H.solo(a):
+        H.shape(packet,"scope observation inventory_evidence")
+        H.need(C.G.sha(packet["scope"])==config["lease"]["scope_sha"],"SOLO_SOURCE_BINDING_STOP")
+        data=H.solo_module().machine_verify(a,packet["observation"],"oci",packet["scope"],now)
+        H.need(data["g4_complete"] is True and data["g5_quarantine_complete"] is True and data["source_vm_running"] is True and
+            data["ssh_retained"] is True,"SOLO_SOURCE_HOLD_NOT_PROVEN")
+        frozen=H.solo_module().inventory_verify(a,packet["inventory_evidence"],packet["scope"],now)
+        H.need(frozen["hold_journal_sha"]==config["lease"]["source_hold_sha"] and frozen["manifest_sha"]==config["lease"]["restored_manifest_sha"] and
+            frozen["ledger_sha"]==config["baseline"]["ledger_sha"] and frozen["inventory_sha"]==C.G.sha(config["baseline"]["inventory"]) and
+            frozen["epoch"]==config["baseline"]["epoch"],"SOLO_INVENTORY_BINDING_STOP")
+        return
     value=a.trust.verify(packet,"r1155-source-held","independent",now,age=30)
     H.need(value==dict(hold_sha=config["lease"]["source_hold_sha"],all_scoped_units_masked=True,
         dual_stack_uid_deny=True,source_vm_running=True,ssh_retained=True,old_attempts_permanently_denied=True),"ACTIVATION_SOURCE_HOLD_STOP")
@@ -55,9 +66,9 @@ def prepare(config,scope,restored,source_packet,*,runner=None):
     receipt=C.decode((restored/"DISARMED-STREAM-RECEIPT.json").read_bytes())
     H.need(receipt["manifest_sha256"]==config["lease"]["restored_manifest_sha"] and
         receipt["source_epoch"]=="FROZEN:"+config["baseline"]["epoch"] and receipt["runtime_started"] is False,"ACTIVATION_RESTORE_STOP")
-    H.need(scope["source"]==a.trust.context and config["baseline"]["ledger_sha"]==scope["quarantine"]["ledger_sha"] and
+    H.need(scope["source"]==a.trust.context and (H.solo(a) or config["baseline"]["ledger_sha"]==scope["quarantine"]["ledger_sha"]) and
         config["lease"]["scope_sha"]==C.G.sha(scope) and
-        C.G.sha(config["baseline"]["inventory"])==scope["quarantine"]["inventory_sha"],"ACTIVATION_LEDGER_STOP")
+        (H.solo(a) or C.G.sha(config["baseline"]["inventory"])==scope["quarantine"]["inventory_sha"]),"ACTIVATION_LEDGER_STOP")
     # Re-hash the actual restored state, not a caller's self-attested baseline.
     hashes={};files={};total=0
     root=restored/"state"
