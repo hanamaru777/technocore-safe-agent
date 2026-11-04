@@ -365,3 +365,33 @@ def test_pipe_failure_wipes_synthetic_password_without_printing_exception(case,m
     out=capsys.readouterr()
     assert json.loads(out.out)['code']=='R1160_STOP_NO_RETRY' and not out.err
     assert 'CANARY' not in out.out and len(frames)==2 and all(not any(b) for b in frames)
+
+
+@WINDOWS
+def test_native_old_approval_store_does_not_inherit_management_acl_allowance(case):
+    root=str(case['root']).replace("'","''")
+    code=definitions()+r'''
+$lib=[IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\migration\r1066_owner_workflow.ps1'))
+foreach($name in @('Read-R1066PinnedSource','Initialize-R1066')){Import-R1160Function $lib $name}
+$script:R1066Root=Join-Path $PSScriptRoot '..\migration';Initialize-R1066
+$old=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'r1159_authenticated_m2_bootstrap.ps1'))
+Import-R1160Function $old 'Assert-R1159ExistingFile'
+$folder=Join-Path 'PRIVATE_ROOT' 'dummy-original-store';New-R1027Custody $folder
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+foreach($name in @('public.json','approval.pem.enc')) {
+ $p=Join-Path $folder $name;[IO.File]::WriteAllBytes($p,([byte[]]@(1,2,3)))
+ $a=New-Object Security.AccessControl.FileSecurity;$a.SetOwner($sid);$a.SetAccessRuleProtection($true,$false)
+ $a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
+ [IO.File]::SetAccessControl($p,$a)
+}
+Assert-R1160OwnerCustody $folder
+$p=Join-Path $folder 'approval.pem.enc';$a=[IO.File]::GetAccessControl($p)
+$admin=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+$a.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($admin,'Read','Allow')))
+[IO.File]::SetAccessControl($p,$a)
+$stopped=$false;try{Assert-R1160OwnerCustody $folder}catch{$stopped=$true}
+if(-not $stopped){throw 'APPROVAL_ACL_WEAKENED'}
+[Console]::Write('SYNTHETIC_ORIGINAL_ACL_PASS')
+'''.replace('PRIVATE_ROOT',root)
+    r=native(code);assert r.returncode==0,r.stderr.decode(errors='replace')
+    assert r.stdout==b'SYNTHETIC_ORIGINAL_ACL_PASS' and not r.stderr

@@ -46,6 +46,16 @@ function Read-R1160Bytes($Stream,[int]$Maximum) {
         return ,$raw
     } catch {[Array]::Clear($raw,0,$raw.Length);throw 'BINARY_READ_STOP'}
 }
+function Assert-R1160OwnerCustody([string]$Folder) {
+    Assert-R1027LocalPath $Folder;Assert-R1027Acl $Folder
+    # The approval store keeps R1157's current-user-only boundary. The
+    # R1138/R1159 OS-management ACL allowance is only for the other inputs.
+    foreach($name in @('public.json','approval.pem.enc')) {
+        $p=Join-Path $Folder $name
+        Assert-R1159ExistingFile $p 1 1024
+        Assert-R1027Acl $p
+    }
+}
 function Invoke-R1160Local($Meta,[byte[]]$Binary,[Security.SecureString]$Password=$null) {
     $json=[Text.Encoding]::UTF8.GetBytes(($Meta|ConvertTo-Json -Compress -Depth 16))
     $control=New-Object byte[] (4+$json.Length+$Binary.Length)
@@ -112,6 +122,7 @@ function Invoke-R1160 {
             if($Operation -ceq 'Seal') {
                 # No owner passphrase/decryption on OLD. Frozen public root is
                 # checked first. Source execution clearance is a separate review.
+                Assert-R1160OwnerCustody $old
                 $sourcePublic=Read-R1160File (Join-Path $old 'public.json') 377
                 $meta.source_public_b64=[Convert]::ToBase64String($sourcePublic)
                 $null=Invoke-R1160Local $meta ([byte[]]@());$meta.Remove('source_public_b64')
