@@ -62,7 +62,7 @@ class Enrollment:
         self.profile=C.decode(C.G.canonical(profile))
         if "protected_tradebot" in profile:
             C.shape(profile["protected_tradebot"],"unit")
-            C.need(type(profile["protected_tradebot"]["unit"]) is str and re.fullmatch(r"(?i)tradebot[a-z0-9_-]*\.service",profile["protected_tradebot"]["unit"]),"SOLO_PROTECTED_UNIT_STOP")
+            C.need(type(profile["protected_tradebot"]["unit"]) is str and re.fullmatch(r"(?i)(?:tradebot[a-z0-9_-]*|k137q-public-k58)\.service",profile["protected_tradebot"]["unit"]),"SOLO_PROTECTED_UNIT_STOP")
         C.shape(profile["machine_keys"],"oci k137");C.shape(profile["boots"],"oci k137")
         for role in ("oci","k137"):
             C.digest(profile["boots"][role])

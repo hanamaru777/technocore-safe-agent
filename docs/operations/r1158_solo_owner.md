@@ -53,3 +53,9 @@ $digest = (Get-FileHash -LiteralPath $request -Algorithm SHA256).Hash.ToLowerInv
 新機械鍵はrootが偽造できない第三者証拠ではない。root/adminとWindows所有者はtrusted operator境界。全root/外部未知writerの不存在まで主張しない。長い走査やネットワーク遅延で30秒が切れた場合も、安全側に停止する。クラウドSKU・IAM・billing・元backup・TradeBot・消費済みR1095/R1097/R1102には触れない。
 
 履歴スキャンで既知の公開digestヒットが残る場合はファイル/commitとともに報告し、除外追加や履歴改変で隠さない。
+
+## K137実サービス名と物理メモリによる起動制約（2026-11-04）
+
+実機で確認されたTradeBotの保護サービスは `k137q-public-k58.service`（毎時自然実行、MemoryHigh=1,000MiB、MemoryMax=1,200MiB）。旧 `tradebot*.service` 形式だけを許可していたR1158は実機名と不一致だったため、この実機名だけを追加し、`ssh.service` など無関係なサービス名は拒否する。TradeBotを停止・改名・再設定しない。
+
+R1158同時起動判定は、TradeBot上限1,200MiB、FLOP 5ユニット上限128+128+96+384+128=864MiB、安全余裕256MiB、合計2,320MiBを求める。K137物理メモリ約1,906MiBでは現行の保守的な最大上限予約を満たせない。実際のRSSと制限上限を混同しない。停止状態でのDISARMED復元と同時稼働判定を別フェーズに分け、資源予算/配置の独立検証ができるまではTradeBot上限を下げずAWS増額もしない。

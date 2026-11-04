@@ -106,7 +106,7 @@ def target_activation(a,scope,r):
     protected=a.profile.get("protected_tradebot")
     if not protected:return False,False
     H.shape(protected,"unit")
-    H.need(type(protected["unit"]) is str and C.G.re.fullmatch(r"(?i)tradebot[a-z0-9_-]*\.service",protected["unit"]),"SOLO_PROTECTED_UNIT_STOP")
+    H.need(type(protected["unit"]) is str and C.G.re.fullmatch(r"(?i)(?:tradebot[a-z0-9_-]*|k137q-public-k58)\.service",protected["unit"]),"SOLO_PROTECTED_UNIT_STOP")
     roles=["flop-r1155-signer.service","flop-r1155-publisher.service","flop-r1155-guard-monitor.service","flop-r1156-resident.service","flop-r1156-capture.service"]
     caps=[];pub_pid=0
     for unit in [protected["unit"],*roles]:

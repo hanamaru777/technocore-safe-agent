@@ -378,3 +378,12 @@ def test_ps51_solo_audit_never_prompts_for_credentials(case,solo,tmp_path):
     assert r.returncode==0,r.stdout.decode(errors="replace")+r.stderr.decode(errors="replace")
     output=json.loads(r.stdout);assert output["code"]=="SOLO_CONSENT_DRAFT_ONLY" and output["cutover"]=="NO_GO" and not r.stderr
     assert b"recovery code" not in r.stdout and not (tmp_path/"public/approval.pem.enc").exists()
+
+def test_real_k137q_tradebot_service_exact_pin_not_arbitrary_unit(solo):
+    profile=copy.deepcopy(solo.profile)
+    profile["protected_tradebot"]={"unit":"k137q-public-k58.service"}
+    verified=H.Authority(profile,C.G.sha(profile))
+    assert verified.profile["protected_tradebot"]["unit"]=="k137q-public-k58.service"
+    profile["protected_tradebot"]["unit"]="ssh.service"
+    with pytest.raises(ValueError,match="SOLO_PROTECTED_UNIT_STOP"):
+        H.Authority(profile,C.G.sha(profile))

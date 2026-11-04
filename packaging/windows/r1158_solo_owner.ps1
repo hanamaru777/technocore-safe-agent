@@ -20,7 +20,7 @@ function Read-R1158Code([string]$Name,[string]$Pin) {
 }
 try {
     if($args.Count -ne 0 -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -lt 1){throw 'PS51_STOP'}
-    $pins=Read-R1158Code 'packaging/migration/r1155_source_pins.json' '845e571b11603d029ade6b27d53e3dd03ecb038b'
+    $pins=Read-R1158Code 'packaging/migration/r1155_source_pins.json' 'f629cc8f463c6f8cf5179429c9cf31694964fca4'
     foreach($p in ($pins|ConvertFrom-Json).PSObject.Properties){$null=Read-R1158Code $p.Name $p.Value}
     # Import definitions only. Never invoke a consumed R987/R1089 bootstrap.
     $helper=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'r1154_warm_owner.ps1'))
