@@ -25,9 +25,9 @@ function Read-R1157Code([string]$Name,[string]$Pin) {
 }
 try {
     if($args.Count -ne 0 -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -lt 1){throw 'PS51_STOP'}
-    $pins=Read-R1157Code 'packaging/migration/r1155_source_pins.json' 'f629cc8f463c6f8cf5179429c9cf31694964fca4'
+    $pins=Read-R1157Code 'packaging/migration/r1155_source_pins.json' 'e1ac08ced545205772808e403dbae1fba6dd8331'
     foreach($p in ($pins|ConvertFrom-Json).PSObject.Properties){$null=Read-R1157Code $p.Name $p.Value}
-    $null=Read-R1157Code 'packaging/migration/r1157_operator.py' '9f4703da3057c4517635dc7a91e2f75ddec4fb59'
+    $null=Read-R1157Code 'packaging/migration/r1157_operator.py' 'ec5f147d2832f5a33e730f3c2c6527925a50a1f3'
     $null=Read-R1157Code 'packaging/migration/r1157_metadata.py' '98f8684efd70c9f48668f6ce08353e9de10dfc22'
     # Only import audited definitions, never run a consumed bootstrap.
     $helper=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'r1154_warm_owner.ps1'))

@@ -51,7 +51,7 @@ function Read-R1159Bytes($Stream,[int]$Maximum) {
     return ,$b
 }
 function Invoke-R1159Local([string]$Operation,[byte[]]$InputBytes,[string]$Role='',[string]$Challenge='') {
-    $null=Read-R1159Code 'packaging/migration/r1159_m2_bootstrap.py' 'fce38c9de60a6f1194cdedbf2ea121ffa0a5b2f2'
+    $null=Read-R1159Code 'packaging/migration/r1159_m2_bootstrap.py' '8c9f38b7ff6000900fa5f6fb8710132b41794f3e'
     if(@('--prepare','--guest','--finish') -cnotcontains $Operation){throw 'LOCAL_OPERATION_STOP'}
     $arguments='-I -B '+[FlopR1062.Guards]::Quote($script:R1159Program)+' '+$Operation
     if($Operation -ceq '--guest') {
@@ -85,8 +85,8 @@ function Invoke-R1159 {
             $OracleTrustReference -cnotmatch '\Ahttps://github\.com/hanamaru777/technocore-safe-agent/issues/[0-9]+#issuecomment-[0-9]+\z'){throw 'STOP'}
         $stage='SOURCE_PIN_STOP'
         $null=Read-R1159Code 'packaging/migration/r1066_preflight_readonly.py' '9f5f90ed6ad22a253b18c1510ec2651a117a01bc'
-        $null=Read-R1159Code 'packaging/migration/r1159_m2_bootstrap.py' 'fce38c9de60a6f1194cdedbf2ea121ffa0a5b2f2'
-        $pins=Read-R1159Code 'packaging/migration/r1155_source_pins.json' 'f629cc8f463c6f8cf5179429c9cf31694964fca4'
+        $null=Read-R1159Code 'packaging/migration/r1159_m2_bootstrap.py' '8c9f38b7ff6000900fa5f6fb8710132b41794f3e'
+        $pins=Read-R1159Code 'packaging/migration/r1155_source_pins.json' 'e1ac08ced545205772808e403dbae1fba6dd8331'
         foreach($p in ($pins|ConvertFrom-Json).PSObject.Properties){$null=Read-R1159Code $p.Name $p.Value}
         $lib=Read-R1159Code 'packaging/migration/r1066_owner_workflow.ps1' '13978d6afb01fc3898018e045aded87d673ef683'
         foreach($name in @('Read-R1066PinnedSource','Initialize-R1066','Get-R1066Arguments')){Import-R1159Function $lib $name}

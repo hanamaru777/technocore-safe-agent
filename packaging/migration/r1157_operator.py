@@ -134,16 +134,28 @@ def local_key(folder,password,*,identity=control_identity):
     try:
         secure_path(folder,directory=True);secure_path(folder/"approval.pem.enc");secure_path(folder/"public.json")
         public=read_public(folder/"public.json");validate_descriptor(public)
-        H.need(public["body"]["control"]==identity(),"OPERATOR_CUSTODY_HOST_STOP")
+        expected_cipher=require_control(folder,public,identity=identity)
         H.need(type(password) is bytearray and 32<=len(password)<=1024,"OPERATOR_PASSWORD_STOP")
         H.need((folder/"approval.pem.enc").stat().st_size<=16384,"OPERATOR_KEY_BOUND_STOP")
         encrypted=bytearray((folder/"approval.pem.enc").read_bytes())
+        if expected_cipher is not None:H.need(hashlib.sha256(encrypted).hexdigest()==expected_cipher,"OPERATOR_KEY_MISMATCH")
         key=load_pem_private_key(bytes(encrypted),bytes(password))
         H.need(isinstance(key,Ed25519PrivateKey) and key.public_key().public_bytes_raw().hex()==public["body"]["public_hex"],"OPERATOR_KEY_MISMATCH")
         yield key,public
     finally:
         password[:]=b"\0"*len(password);key=None
         if encrypted is not None:encrypted[:]=b"\0"*len(encrypted)
+
+
+def require_control(folder,public,*,identity=control_identity):
+    """Original SID or same-key signed continuity; never rewrite descriptor."""
+    if public["body"]["control"]==identity() and not (folder/"host-binding.json").exists():return None
+    name="flop_r1160_owner_continuity"
+    if name not in sys.modules:
+        sp=importlib.util.spec_from_file_location(name,Path(__file__).with_name("r1160_owner_continuity.py"))
+        module=importlib.util.module_from_spec(sp);sys.modules[name]=module;sp.loader.exec_module(module)
+    try:return sys.modules[name].verify_local(folder,public,sys.modules[__name__],control=identity())
+    except Exception:raise H.Stop("OPERATOR_CUSTODY_HOST_STOP") from None
 
 
 def enroll(value):

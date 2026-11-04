@@ -48,6 +48,7 @@ def fixture(tmp_path,monkeypatch):
         k137_identity_file=str(tmp_path/"synthetic.pem"),output=str(output))
     owner=ed25519.Ed25519PrivateKey.generate();identity=m.sha(b"dummy local owner")
     descriptor=prior.M.descriptor(owner,"owner",identity);monkeypatch.setattr(prior.M,"control_identity",lambda:identity)
+    monkeypatch.setattr(prior.M,"store_path",lambda:tmp_path/"synthetic-approval-only")
     _,raw,_=m.sources();decoder={};exec(m.decoder_source(raw["public_record"]),decoder)
     R=SimpleNamespace(HEAD=reports["oci"]["head"],K137_STAGE_SHA=reports["k137"]["head"])
     return SimpleNamespace(control=control,public=descriptor,now=now,decode=decoder["_b58decode"],R=R,host=host,output=output)

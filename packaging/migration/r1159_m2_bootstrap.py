@@ -272,7 +272,9 @@ def finish(control,M,*,now=None,owner_public=None):
     # Existing Init is CONSUMED. Only its public descriptor is read, never the
     # approval PEM or passphrase, and no signatures/keys are created here.
     public=owner_public if owner_public is not None else M.read_public(M.store_path()/"public.json")
-    M.validate_descriptor(public);need(public["body"]["role"]=="owner" and public["body"]["control"]==M.control_identity(),"M2_OWNER_PUBLIC_UNVERIFIED")
+    M.validate_descriptor(public);need(public["body"]["role"]=="owner","M2_OWNER_PUBLIC_UNVERIFIED")
+    try:M.require_control(M.store_path(),public,identity=M.control_identity)
+    except Exception:raise ValueError("M2_OWNER_PUBLIC_UNVERIFIED") from None
     source=control["reports"]["oci"]
     enroll=dict(endpoints=endpoints,source_did=source["source_did"],source_key_ids=source["source_key_ids"],owner_public=public,
         boots={r:control["reports"][r]["boot_runtime_sha256"] for r in HOSTS},machine_keys={r:None for r in HOSTS},protected_tradebot=dict(unit=TRADEBOT))
