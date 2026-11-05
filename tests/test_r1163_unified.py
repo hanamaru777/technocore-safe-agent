@@ -105,7 +105,7 @@ def receipt():
     b = dict(task="R1162", verdict="K137_PAYLOAD_BOUNDED", ssh_login_prebounded=False,
              challenge=h("k137-challenge"), observed_at=NOW, expires_at=NOW+120, source_base=m.BASE,
              reference_commit=m.REFERENCE, source_blobs=pins, provider_operation="Lightsail.GetInstanceAccessDetails",
-             provider_sha256=h("provider"), provider_witnessed_at=NOW-10, credential_expires_at=NOW+600,
+             provider_sha256=h("provider"), provider_witnessed_at=NOW-1000, credential_expires_at=NOW+600,
              host_key_sha256=old.host_key(old.K137_KEY, "ssh-ed25519"), head="3fb667837a8f01d17e97dabfd1a1bfe5ddc09e1e",
              guest_sha256=h("guest"), report_sha256=h("report"), boot_sha256=h("boot"), scope_sha256=h("scope"),
              tradebot_sha256=h("protected-tradebot"), caps=dict(scope_sha256=h("scope"), memory_max=256*K.MIB,
@@ -113,7 +113,7 @@ def receipt():
     return dict(body=b, sha256=K.sha(K.canonical(b)))
 
 
-@pytest.mark.parametrize("fault", [None, "hash", "host", "boot", "scope", "challenge", "source", "memory", "cpu", "swap", "login", "provider", "expiry", "extra"])
+@pytest.mark.parametrize("fault", [None, "hash", "host", "boot", "scope", "challenge", "source", "memory", "cpu", "swap", "login", "provider", "future_witness", "expiry", "extra"])
 def test_receipt_never_self_authenticates_even_with_recomputed_hash(fault):
     packet = receipt(); b = packet["body"]
     if fault == "host": b["host_key_sha256"] = h("Oracle-key-misused")
@@ -126,6 +126,7 @@ def test_receipt_never_self_authenticates_even_with_recomputed_hash(fault):
     if fault == "swap": b["caps"]["swap_max"] = 1
     if fault == "login": b["ssh_login_prebounded"] = True
     if fault == "provider": b["provider_operation"] = "OCI.GetInstance"
+    if fault == "future_witness": b["provider_witnessed_at"] = NOW+6
     if fault == "expiry": b["expires_at"] = NOW-1
     if fault == "extra": b["production_pass"] = True
     packet["sha256"] = K.sha(K.canonical(b)) if fault != "hash" else "0"*64

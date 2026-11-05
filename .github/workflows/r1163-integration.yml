@@ -22,7 +22,7 @@ jobs:
           RESTORE_ONLY: ${{ contains(github.event.head_commit.message, '[r1163-restore-targeted]') }}
         run: |
           if [ "$RESTORE_ONLY" = true ]; then
-            python -B -m pytest -q tests/test_r1163_pipeline.py::test_connected_capture_full_readback_restart_restore_and_new_only_baseline
+            python -B -m pytest -q tests/test_r1163_pipeline.py::test_connected_capture_full_readback_restart_restore_and_new_only_baseline tests/test_r1163_unified.py::test_receipt_never_self_authenticates_even_with_recomputed_hash tests/test_r1163_unified.py::test_future_one_operation_delegates_exact_runner_once_without_releasing_migration
           else
             python -B -m pytest -q tests/test_r1163_unified.py tests/test_r1163_pipeline.py
           fi

@@ -166,7 +166,10 @@ def k137_receipt(packet, challenge, *, now, expected_boot=None, expected_scope=N
         digest(b[k])
     need(expected_boot is None or b["boot_sha256"] == digest(expected_boot), "K137_BOOT_STOP")
     need(expected_scope is None or b["scope_sha256"] == digest(expected_scope), "K137_CGROUP_STOP")
-    need(type(b["provider_witnessed_at"]) is int and b["observed_at"]-180 <= b["provider_witnessed_at"] <= b["observed_at"] and
+    # AWS witnessedAt is the host-key observation time, not this request's
+    # authentication time. The fixed R1162 runner permits a historical witness;
+    # freshness comes from this challenge-bound report and temporary credential.
+    need(type(b["provider_witnessed_at"]) is int and 0 < b["provider_witnessed_at"] <= b["observed_at"]+5 and
          type(b["credential_expires_at"]) is int and b["expires_at"] < b["credential_expires_at"], "K137_PROVIDER_TIME_STOP")
     cg = b["caps"]
     p.shape(cg, "scope_sha256 memory_max pids_max cpu_quota cpu_period swap_max")

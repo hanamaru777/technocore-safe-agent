@@ -100,6 +100,7 @@ Lightsail GetInstanceAccessDetails の固定 instance / region / host / user、A
 get-instance-access-details は既存 instance の一時 SSH credential 取得であり、instance / storage / paid SKU を新設しない。実際の account eligibility / permission は未実証のまま。
 2026-11-06 に [GetInstanceAccessDetails schema](https://docs.aws.amazon.com/lightsail/2016-11-28/api-reference/API_GetInstanceAccessDetails.html) と
 [InstanceAccessDetails](https://docs.aws.amazon.com/lightsail/2016-11-28/api-reference/API_InstanceAccessDetails.html) の temporary certKey / privateKey / expiresAt / hostKeys を照合した。
+hostKeys.witnessedAt は host key の観測時刻であり現在の API 呼出時刻ではない。R1162 と同じ過去 witness を許し、未来 witness は拒否。今回 challenge / report / credential の freshness は別に検証する。
 [CloudShell pricing](https://aws.amazon.com/cloudshell/pricing/) は shell 自体の追加料金無しだが、他 resource と data transfer の標準課金は別と明記している。
 account の現行 free transfer / entitlement まで確認したという意味ではない。
 現在の fee 影響を owner が ZERO_COST=PASS と確認できなければ実行しない。事前一般承認や過去の $0 を根拠にしない。
