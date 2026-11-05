@@ -169,8 +169,9 @@ class Trial:
                 return dict(state="UNKNOWN", mode="OFFLINE_TRIAL", restore="DISARMED_LOCAL_READBACK",
                             independent_receipt="REQUIRED", cutover="NO_GO")
             checked = self.pipe.verify_restore(epoch, receipt, rollback, now=int(self.clock()))
+            result = {**checked, "state": "PASS", "mode": "OFFLINE_TRIAL"}
             self.journal.save(dict(phase="OFFLINE_TRIAL_VERIFIED", **bind))
-            return dict(state="PASS", mode="OFFLINE_TRIAL", **checked)
+            return result
         except BaseException:
             # This phase deliberately allows only same-archive restore review,
             # not new export or automatic replay of any POST/owner operation.

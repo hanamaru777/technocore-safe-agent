@@ -98,7 +98,11 @@ packet は元 Oracle host / instance / Ed25519 wire key、独立証拠 digest、
 Lightsail GetInstanceAccessDetails の固定 instance / region / host / user、AWS TLS tool path、証明書 principal / expiry / private-public 整合、provider-witnessed host key、payload / report / boot / scope を既存コードで検証する。
 資格情報は /tmp の private directory、3 つの列挙済み temporary file のみ。R1160 capsule / 旧 Downloads PEM は不要。
 get-instance-access-details は既存 instance の一時 SSH credential 取得であり、instance / storage / paid SKU を新設しない。実際の account eligibility / permission は未実証のまま。
-現在の fee 影響を owner が $0 と確認できなければ実行しない。事前一般承認や過去の $0 を根拠にしない。
+2026-11-06 に [GetInstanceAccessDetails schema](https://docs.aws.amazon.com/lightsail/2016-11-28/api-reference/API_GetInstanceAccessDetails.html) と
+[InstanceAccessDetails](https://docs.aws.amazon.com/lightsail/2016-11-28/api-reference/API_InstanceAccessDetails.html) の temporary certKey / privateKey / expiresAt / hostKeys を照合した。
+[CloudShell pricing](https://aws.amazon.com/cloudshell/pricing/) は shell 自体の追加料金無しだが、他 resource と data transfer の標準課金は別と明記している。
+account の現行 free transfer / entitlement まで確認したという意味ではない。
+現在の fee 影響を owner が ZERO_COST=PASS と確認できなければ実行しない。事前一般承認や過去の $0 を根拠にしない。
 
 systemd-run --system --pipe --wait --collect --service-type=exec が guest Python より前に 256M / swap0 / Tasks64 / CPU50% を適用。
 RuntimeMax45s / TimeoutStart15s / TimeoutStop5s / KillMode=control-group / Restart=no / collect を維持。
@@ -149,3 +153,17 @@ Linux CI は新規 full path と WAL / APP rollback / durable undo / NEW-ONLY / 
 （6c6e4755e813:docs/tasks/R1151_oci_k137_provisional_preseed_v1.md:6）。
 sign.py の Git LF blob と Windows CRLF byte hash の既存差異も維持する。
 スキャナ例外追加、履歴改変、signer pin / 改行修正による隠蔽は行わない。
+
+正確な変更 path（すべて追加、8 個は上記 T1150 commit と同一）:
+
+|新規統合 / 証拠|変更 path|
+|---|---|
+|固定 contract|packaging/migration/r1163_contract.py|
+|実 crypto / SQLite 統合|packaging/migration/r1163_pipeline.py|
+|immutable reuse / interfaces|packaging/migration/r1163_source_pins.json|
+|単一 operator 入口|packaging/migration/r1163_unified.py|
+|新規試験|tests/test_r1163_pipeline.py、tests/test_r1163_unified.py|
+|focused CI|.github/workflows/r1163-integration.yml|
+|日本語 matrix / runbook|docs/tasks/R1163_unified_local_integration_v1.md|
+|T1150 既存 source|src/flop_agent/testnet_budget.py、src/flop_agent/testnet_day1.py、src/flop_agent/testnet_day1_actions.py、src/flop_agent/testnet_day1_release.py、src/flop_agent/testnet_journal.py|
+|T1150 既存 gate / test|packaging/testnet/r1057_offline_agent_launch_gate.py、packaging/testnet/r1105_agent_public_readiness.py、tests/test_testnet_day1.py|
