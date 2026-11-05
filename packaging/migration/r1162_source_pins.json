@@ -1,0 +1,12 @@
+{
+  "base": "a2883f6b5ae61ec49ba9805f2eb1b9a8802226a3",
+  "frozen": {
+    "packaging/migration/r1066_preflight_readonly.py": "9f5f90ed6ad22a253b18c1510ec2651a117a01bc",
+    "packaging/migration/r1071_aws_cloudshell_bounded_scope_readonly.sh": "9d8dcaef816c2d5662d0a2d4038e0f65643b57d9",
+    "packaging/migration/r1159_m2_bootstrap.py": "8c9f38b7ff6000900fa5f6fb8710132b41794f3e"
+  },
+  "guest": {
+    "packaging/migration/r1162_k137_bounded_guest.py": "e7a9dc0d43af72d23e37842f048270d482ab93a8"
+  },
+  "reference": "2ff11656123c99117e59958f4d0b46a024159c5e"
+}
