@@ -1,0 +1,40 @@
+name: r1162-bounded
+on:
+  push:
+    branches: [codex/r1162-k137-provider-bounded-admission-20261105]
+permissions:
+  contents: read
+jobs:
+  offline-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prepare offline synthetic test runtime
+        run: python -m pip install --disable-pip-version-check pytest==9.1.1 cryptography==50.0.1 httpx==0.28.1
+      - name: R1162 focused tests and directly relevant R1071 R1161 regressions
+        env:
+          TARGETED_ONLY: ${{ contains(github.event.head_commit.message, '[r1162-targeted]') }}
+        run: |
+          if [ "$TARGETED_ONLY" = true ]; then
+            python -B -m pytest -q tests/test_r1162_k137_provider_admission.py
+          else
+            python -B -m pytest -q tests/test_r1162_k137_provider_admission.py tests/test_r1071_aws_cloudshell_bounded_scope.py tests/test_r1161_readonly_admission.py
+          fi
+      - name: Unchanged tracked scanner including signer provenance
+        if: always()
+        env:
+          PYTHONPATH: src
+        run: |
+          python -B -m flop_agent.cli secret-scan | python -c 'import json,sys; v=json.load(sys.stdin); print(json.dumps(v)); sys.exit(0 if v.get("ok") is True else 1)'
+      - name: Unchanged history scanner (inherited failure stays separate)
+        if: always()
+        env:
+          PYTHONPATH: src
+        run: |
+          python -B -m flop_agent.cli history-secret-scan | python -c 'import json,sys; v=json.load(sys.stdin); print(json.dumps(v)); sys.exit(0 if v.get("ok") is True else 1)'
