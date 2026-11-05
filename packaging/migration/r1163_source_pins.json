@@ -1,0 +1,530 @@
+{
+  "base": "2033ec2159717d473fed2f0031d441ec105b504a",
+  "files": {
+    "packaging/archive/r1050_offhost_sixfile_audit.py": {
+      "blob": "8a50b42dc28493f521f269911032ef35e4824b59",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/archive/r1052_offline_writer_route_contract.py": {
+      "blob": "8b8a6f1995749acf91812166211d7962f6d8f962",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/archive/verify-capture-backup-images.py": {
+      "blob": "8e4391d49cd2808a4b37cb12d791b0745a8f5aed",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1063_release_gates.py": {
+      "blob": "8d63be178323c668265808f95978c105ea013ebf",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1066_ciphertext_pipe.py": {
+      "blob": "f87ae504c092ca941345bc0052b27e72c932a00c",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1066_ciphertext_ssh_relay.py": {
+      "blob": "0514e5d65c4236dfda83dfc2997e1bba14c6f8bd",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1066_owner_workflow.ps1": {
+      "blob": "13978d6afb01fc3898018e045aded87d673ef683",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1066_preflight_readonly.py": {
+      "blob": "9f5f90ed6ad22a253b18c1510ec2651a117a01bc",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1066_preflight_transport.cs": {
+      "blob": "305530a86db7e5cc8812fbac57c3e2c7c089a7be",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1066_sealed_dependency.py": {
+      "blob": "f52bcea342cd5a08e7a0e9383d587404416d4785",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1066_transfer.py": {
+      "blob": "edcc15602a039e8637718f6c757811f902b5974d",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1067_aws_cloudshell_k137_readonly.sh": {
+      "blob": "d840c850f7bef00a88931f61590716e02ea39851",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1068_oci_vault_portability.py": {
+      "blob": "a97ffde8098fe52220ad9b1a666be8e642865bb6",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1069_aws_cloudshell_k137_private_landing.sh": {
+      "blob": "0027983097a7e096eecd8aabc9600c2293e4ef91",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1071_aws_cloudshell_bounded_scope_readonly.sh": {
+      "blob": "9d8dcaef816c2d5662d0a2d4038e0f65643b57d9",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1072_oci_owner_capacity_readonly.ps1": {
+      "blob": "4be5810340eb8ac62289e4724e36a5ae842aff5d",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1073_exit_preserving_transport.cs": {
+      "blob": "9f4629a9f4e5fffbe9b30cf8536fcfb7902482bb",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1075_stderr_classifying_transport.cs": {
+      "blob": "66b790f976a70711c68dea947f23698d77ba1406",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1079_profile_ssh_transport.cs": {
+      "blob": "b150af9fe7a335bc6c02e8fc1e5451599d124a97",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1084_offhost_ciphertext_stream.py": {
+      "blob": "a777eea58fbdc8758d116e5f78ad6a1cbeed597f",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1085_windows_offhost_sink.cs": {
+      "blob": "51140cf947b0b27d9e05d8b461229076151d9fe9",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1085_windows_offhost_sink.ps1": {
+      "blob": "fba0720ad5a72b70514dc56ed43ec2b58297736e",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1086_k137_disarmed_stream_restore.py": {
+      "blob": "fdfc97a473c565be72b5698b48f0c30dcbc322bb",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1087_verified_plaintext_source.py": {
+      "blob": "1ccd8cb2cfd0cbe6f2553f506ed04811cc22b71c",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1088_windows_ciphertext_custody.cs": {
+      "blob": "16b9feffddb2339570593b588956bfaea3d496ba",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1088_windows_ciphertext_custody.ps1": {
+      "blob": "e3e83add415344b8c79c58709aa990728c4e6b05",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1089_migration.py": {
+      "blob": "154e740c94144c942206d3be85310f31471c2d41",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1089_owner_control_pipe.cs": {
+      "blob": "f8d4d7f586a0cde53d1ffec06816869f47df0b11",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1089_source_pins.json": {
+      "blob": "a460177f3014a9cc0403e6d2ab18d4d54ff75992",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1096_k137_flop_storage_readonly.py": {
+      "blob": "d799e594ec48ac5e313f389ac895823df7342067",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1097_aws_cloudshell_k137_flop_readonly.sh": {
+      "blob": "81b5f9054cdde8553a236478142bfa749934d563",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1098_ed25519_kms_portability.py": {
+      "blob": "063cd1349a72b6aaa2e753947e650cffca614bab",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1099_k137_synthetic_signer_envelope.py": {
+      "blob": "4d9bc0c6df221f1d87fb56a1782068157a6be253",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1100_synthetic_recipient_rewrap.py": {
+      "blob": "5d7fa0e26381cea7b091201c3a7b1ffba5f34b45",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1101_original_mount_boundary_readonly.py": {
+      "blob": "77df75b1c3a42a456883683cd5ac2dfc91ecb4ee",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1103_g5_receipt_consistency.py": {
+      "blob": "e4e78a8b58f5c220c9ea0152c3dc53b5d2b0c336",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1104_g1g4_coverage_consistency.py": {
+      "blob": "6145823d4091bcd1155609cb6be637f887f174ce",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1106_technocore_export_readonly.py": {
+      "blob": "eb3cbbc5dd29a6a57d7840775dfed7779e615bbc",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1107_contract.py": {
+      "blob": "e8a7e38ee80eeca2ca2118baf02f3771bf1a7b3a",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1107_g1g4_boundary.py": {
+      "blob": "fbab8277419c9fa11458189a46c4eaad003df269",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1107_g5_reconciliation.py": {
+      "blob": "0c30dad6f7089cbfb8b89139ca689f63e82f2c5c",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1107_owner_dryrun.ps1": {
+      "blob": "ec7aa52aeae5e56d564b428197ab91ee8f33e2ab",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1107_readiness.py": {
+      "blob": "d63ca0a56a21e282019be23d457297aa1c751f8f",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1107_source_pins.json": {
+      "blob": "90e1eb9ef54f4499e7b17c6aa6a5e7cd8ed5bdcb",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1117-k137-signer-disarmed.service": {
+      "blob": "4e182f94b095d2e09674e2920f85e0b9568d9926",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1117_boundary.py": {
+      "blob": "1f52b96db6c770962a82b3eb8f0848aea8434153",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1117_migration.py": {
+      "blob": "1a08751288d4c84ec985964933a058be63069261",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1117_owner_onepass.ps1": {
+      "blob": "a499038464e8bf10adb72e9ba827febf0392f770",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1117_signer.py": {
+      "blob": "162f1aa4ec997a23a37c1f9abbdeb5cfc3537929",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1117_source_pins.json": {
+      "blob": "a8df2c5c5f77f588ceda4acfae7a71e6cfe7bb4a",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1128_provisional_preseed.py": {
+      "blob": "2b774c4e83f827f93de94d91258413182080fab0",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1129_k137_ciphertext_receive.py": {
+      "blob": "622e0debff1f4f59be935c17fd5709aa43c0c3da",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1130_ephemeral_binary_relay.py": {
+      "blob": "9dd7b20956f65f45ccccb357c7adcc662d740087",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1132_k137_private_landing_prepare.py": {
+      "blob": "9e675cccd0580827e0643598abfce6c3a06c50c3",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1151_preseed_owner_bridge.py": {
+      "blob": "919eb42fbffd351c9eb4597691e769e5de5166e4",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1151_source_pins.json": {
+      "blob": "6f2314eb53c1367f32e106f8f0988c949b96c90d",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1154_app_hold.py": {
+      "blob": "9499f2cacc3f995c2fef2a9b627032d068dd5e85",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1154_custody.py": {
+      "blob": "59095c78d5a2b784578343d1d464fe6a1b6a4ceb",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1154_owner.py": {
+      "blob": "6953098b96266a8acc5f24b7b839448fbcddf9f6",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1154_source_pins.json": {
+      "blob": "c029e15f3fdac53a7464d33e3e69b0df88d74613",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_activation.py": {
+      "blob": "498c1a895c7b9888e5709cec5c3e5d428e64b705",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_custody_setup.py": {
+      "blob": "d19fa5d611c20e766a16c062dad5e9017c48bf80",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_guard_monitor.py": {
+      "blob": "a8b90d10199c3c072e208cfd718c75e966e99c21",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_publisher.py": {
+      "blob": "c82fb025cf34636aee95b487ef38f359d1bb5da1",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_signer.py": {
+      "blob": "6421ba1be68193bd8070e9c84742c49833c0c64c",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_source_pins.json": {
+      "blob": "e1ac08ced545205772808e403dbae1fba6dd8331",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_transfer.py": {
+      "blob": "e2d71a84404dc663947c47a61eccfac4e27ebc46",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1155_wal.py": {
+      "blob": "47697f8aa12752fd27584e43d83823d9ca3b6cb9",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1156_relay.py": {
+      "blob": "271420c625838af473f71be31cce5d7547a3e025",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1156_renewal.py": {
+      "blob": "df5f7e98609434fa43b6ce5d5ffc6c2a16b1a206",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1156_runtime.py": {
+      "blob": "646a8190655457bcdd36829186d41fadcb9fe0c3",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1156_setup.py": {
+      "blob": "8af07d1f9adcd0068e7153d1c8352a55dac827ea",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1157_metadata.py": {
+      "blob": "98f8684efd70c9f48668f6ce08353e9de10dfc22",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1157_operator.py": {
+      "blob": "ec5f147d2832f5a33e730f3c2c6527925a50a1f3",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1158_machine.py": {
+      "blob": "645890cf79e48ea1cd5a81aecebf4857f7323f3f",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1158_owner.py": {
+      "blob": "804de66fcf2f77fef889f0b47f949afc7e521b4b",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1158_solo.py": {
+      "blob": "3c3be0dd777e07e34f890d9184db13ebbcdd05f8",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1159_m2_bootstrap.py": {
+      "blob": "8c9f38b7ff6000900fa5f6fb8710132b41794f3e",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1160_owner_continuity.py": {
+      "blob": "a6200727a99b96dee5720715fa350f224d9f7d60",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1160_recipient_cng.cs": {
+      "blob": "d4aee94a10cf165b92ce35166e8daaa8ab583e2b",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1161_readonly_admission.py": {
+      "blob": "da22367446c9d740a9e116e5989638257f9717e8",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1162_k137_bounded_guest.py": {
+      "blob": "e7a9dc0d43af72d23e37842f048270d482ab93a8",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1162_k137_provider_admission.py": {
+      "blob": "1de52e3ecabd61c7fadabd3afa96d84c21ca41b7",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/migration/r1162_source_pins.json": {
+      "blob": "06b177340cd24eca1015dbd8b0e25fe5e2a90735",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1155-guard-monitor.service": {
+      "blob": "837465647219025837ff77daef69412d374742f4",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1155-publisher.service": {
+      "blob": "e75357c3075a3c6be8ecf95477a01b4737725f28",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1155-signer.service": {
+      "blob": "923b4a9ee59eb8d838e7054e0dd6131c8a0b5abb",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1156-capture.service": {
+      "blob": "d3d028a59c4f162cad61f8c0485cd9d881f2dfb3",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1156-guard-monitor.service": {
+      "blob": "ff9852bad40fa55c4adf39520834ce1e845ca573",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1156-publisher.service": {
+      "blob": "a94ee798eca96778c2c1b64f651f38e8874cf5ae",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1156-resident.service": {
+      "blob": "e74cee8d3ff1812d089eeeac1f54d32fea42a81d",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/flop-r1156-signer.service": {
+      "blob": "c3bde215a4c660659577896489a1ef8bfd431c5d",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/r1126_original_root_mount_readonly.py": {
+      "blob": "efcd3fc6d58211167be76d91875296b24fb6b451",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/r1139_source_preseed_metadata_readonly.py": {
+      "blob": "ec8317b58777c4060c1aad3215ebc50b29a02f54",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/oracle/r1154-custody.service": {
+      "blob": "6696b5346c612684875535ced7a32acb8f859b95",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/testnet/r1057_offline_agent_launch_gate.py": {
+      "blob": "3f31d51d3b137f8f6343fd2abcbf2615241f42db",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    },
+    "packaging/testnet/r1105_agent_public_readiness.py": {
+      "blob": "038215819b72f80eae9b2c0ce100d766b8186341",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    },
+    "packaging/windows/r1062_writer_attribution_one_shot_readonly.ps1": {
+      "blob": "7ad3432b89b2aa2fe4a5e6b0142ec7578554baaa",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1072_owner_public_bootstrap.ps1": {
+      "blob": "51fb882b83f12ef8608542e2126d15d9744ce862",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1126_original_root_mount_readonly.ps1": {
+      "blob": "efd00c9fc20c0bb01b4ad0dad57ba5f77191e27a",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1136_k137_readonly_ssh_diagnostic.ps1": {
+      "blob": "8826137ea0fd1bf67ca4d95a5f4b747a69da9ad0",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1138_lightsail_pem_single_acl_and_readonly_ssh.ps1": {
+      "blob": "317b245bca0161ad3827318892b12cbb24fc4cab",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1140_binary_ciphertext_bridge.cs": {
+      "blob": "646ecc4aa4af5fdab812348e80847a8b94f325d4",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1141_k137_recipient_receipt_gate.ps1": {
+      "blob": "05daa5d8820d5e7d7f7275ab1e427b7dbd688a24",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1151_preseed_control.cs": {
+      "blob": "b4307d827fd5fd57e9e1ee4203d75dc21f392fd5",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "packaging/windows/r1154_warm_owner.ps1": {
+      "blob": "3d9c80b7d7541faeec2d72a237d8aa6baf8cb027",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "scripts/sign.py": {
+      "blob": "81202baa03bff62204fa9ac34ce1f9fd969ddf67",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/airdrop_action_stager.py": {
+      "blob": "f2793e7dbb82dd902254af7a36b02313de182188",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/airdrop_approval.py": {
+      "blob": "0922b585587f0320c28d7cf8f6a5cff8050a0c17",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/airdrop_executor.py": {
+      "blob": "86087c5216bbfd83fcaac3f3eeea58b32bd6bea4",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/airdrop_ledger.py": {
+      "blob": "ebe6882eb0bd67bfa57510123844ac22582132db",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/close_call.py": {
+      "blob": "30ebf4474d5b04935470f480022a27691427e53e",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/core.py": {
+      "blob": "96b62d63d273d09fc4028ec0312c08268a882600",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/observer_resident_isolation.py": {
+      "blob": "8b6770232edf1f574340c1df4400d162b78b55e7",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/public_record.py": {
+      "blob": "0fe041f16f3d156cea3240b6b0410b3d7084ef36",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/r1156_bridge.py": {
+      "blob": "9380565c71e4889458a7d654e9c20c28e1d77403",
+      "origin": "2033ec2159717d473fed2f0031d441ec105b504a"
+    },
+    "src/flop_agent/testnet_budget.py": {
+      "blob": "1a3387dd39b9365f4343bc48062e1e4e06989271",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    },
+    "src/flop_agent/testnet_day1.py": {
+      "blob": "39943d19c0783e9ea55c04b1817172acbbe9b64e",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    },
+    "src/flop_agent/testnet_day1_actions.py": {
+      "blob": "a86d0d406069fcd24f388e0be4d497385e10bebd",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    },
+    "src/flop_agent/testnet_day1_release.py": {
+      "blob": "ae83ce577605a096a136d1380c6151ad07b7ec85",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    },
+    "src/flop_agent/testnet_journal.py": {
+      "blob": "4ba890495409c8fc2389790db74b9969965a2dc9",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    },
+    "tests/test_testnet_day1.py": {
+      "blob": "3c4b50dc69f2641def97c9257ec92e420ad055b7",
+      "origin": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+    }
+  },
+  "interfaces": {
+    "packaging/migration/r1084_offhost_ciphertext_stream.py": {
+      "receive_offhost_ciphertext": "arguments(args=[arg(arg='stream'), arg(arg='target')], kwonlyargs=[arg(arg='quota_bytes')], kw_defaults=[None])",
+      "seal_manifest_to_stream": "arguments(args=[arg(arg='roots'), arg(arg='manifest'), arg(arg='identities'), arg(arg='recovery'), arg(arg='output')], kwonlyargs=[arg(arg='recensus')], kw_defaults=[Constant(value=None)])"
+    },
+    "packaging/migration/r1086_k137_disarmed_stream_restore.py": {
+      "restore_stream": "arguments(args=[arg(arg='source'), arg(arg='target_name'), arg(arg='expected_machine_sha256'), arg(arg='expected_uid')], kwonlyargs=[arg(arg='quota_bytes'), arg(arg='reserve_bytes'), arg(arg='expected_epoch'), arg(arg='expected_manifest_sha256'), arg(arg='preserve_inert_links'), arg(arg='resume'), arg(arg='expected_cursors')], kw_defaults=[None, Name(id='RESERVE', ctx=Load()), Constant(value=None), Constant(value=None), Constant(value=False), Constant(value=False), Constant(value=None)])"
+    },
+    "packaging/migration/r1117_migration.py": {
+      "verify_complete_authority": "arguments(args=[arg(arg='authority'), arg(arg='files'), arg(arg='did'), arg(arg='controller'), arg(arg='exports'), arg(arg='witnesses')], kwonlyargs=[arg(arg='now'), arg(arg='trial'), arg(arg='inventory')], kw_defaults=[None, Constant(value=False), Constant(value=None)])"
+    },
+    "packaging/migration/r1155_signer.py": {
+      "approved": "arguments(args=[arg(arg='config'), arg(arg='request'), arg(arg='now')])",
+      "baseline": "arguments(args=[arg(arg='files'), arg(arg='hashes'), arg(arg='did'), arg(arg='epoch')])"
+    },
+    "packaging/migration/r1155_wal.py": {
+      "validate": "arguments(args=[arg(arg='roots'), arg(arg='manifest'), arg(arg='identities'), arg(arg='guard')], kwonlyargs=[arg(arg='parent')], kw_defaults=[Constant(value=None)])"
+    },
+    "packaging/migration/r1156_runtime.py": {
+      "origin": "arguments(args=[arg(arg='config'), arg(arg='wire')], kwonlyargs=[arg(arg='now'), arg(arg='snapshots'), arg(arg='cap')], kw_defaults=[None, Constant(value=None), Constant(value=None)])",
+      "publish_cycle": "arguments(args=[arg(arg='config')], kwonlyargs=[arg(arg='sign'), arg(arg='post'), arg(arg='clock'), arg(arg='root')], kw_defaults=[Attribute(value=Name(id='P', ctx=Load()), attr='signer_request', ctx=Load()), Constant(value=None), Attribute(value=Name(id='time', ctx=Load()), attr='time', ctx=Load()), Constant(value=None)])"
+    },
+    "packaging/migration/r1160_owner_continuity.py": {
+      "verify_local": "arguments(args=[arg(arg='folder'), arg(arg='public'), arg(arg='M')], kwonlyargs=[arg(arg='control')], kw_defaults=[None])"
+    },
+    "packaging/migration/r1162_k137_provider_admission.py": {
+      "main": "arguments()",
+      "owner_run": "arguments(args=[arg(arg='manifest'), arg(arg='aws'), arg(arg='ssh'), arg(arg='keygen'), arg(arg='state')])",
+      "sources": "arguments()",
+      "validate_report": "arguments(args=[arg(arg='raw'), arg(arg='request'), arg(arg='now'), arg(arg='machine'), arg(arg='head')])"
+    },
+    "src/flop_agent/testnet_day1.py": {
+      "plan": "arguments(args=[arg(arg='bundle'), arg(arg='trust')], kwonlyargs=[arg(arg='max_test_units'), arg(arg='now')], kw_defaults=[Constant(value=None), Constant(value=None)], defaults=[Constant(value=None), Constant(value=None)])",
+      "status": "arguments(args=[arg(arg='bundle'), arg(arg='trust')], kwonlyargs=[arg(arg='now')], kw_defaults=[Constant(value=None)], defaults=[Constant(value=None), Constant(value=None)])"
+    }
+  },
+  "t1150": "8a46d43de6e7474941cd241278c00d3352c8a2b6"
+}
