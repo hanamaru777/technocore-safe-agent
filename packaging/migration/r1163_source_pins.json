@@ -492,38 +492,518 @@
   },
   "interfaces": {
     "packaging/migration/r1084_offhost_ciphertext_stream.py": {
-      "receive_offhost_ciphertext": "arguments(args=[arg(arg='stream'), arg(arg='target')], kwonlyargs=[arg(arg='quota_bytes')], kw_defaults=[None])",
-      "seal_manifest_to_stream": "arguments(args=[arg(arg='roots'), arg(arg='manifest'), arg(arg='identities'), arg(arg='recovery'), arg(arg='output')], kwonlyargs=[arg(arg='recensus')], kw_defaults=[Constant(value=None)])"
+      "receive_offhost_ciphertext": {
+        "defaults": [],
+        "keyword_defaults": [
+          null
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "quota_bytes"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "stream"
+          },
+          {
+            "annotation": null,
+            "name": "target"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      },
+      "seal_manifest_to_stream": {
+        "defaults": [],
+        "keyword_defaults": [
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "recensus"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "roots"
+          },
+          {
+            "annotation": null,
+            "name": "manifest"
+          },
+          {
+            "annotation": null,
+            "name": "identities"
+          },
+          {
+            "annotation": null,
+            "name": "recovery"
+          },
+          {
+            "annotation": null,
+            "name": "output"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "packaging/migration/r1086_k137_disarmed_stream_restore.py": {
-      "restore_stream": "arguments(args=[arg(arg='source'), arg(arg='target_name'), arg(arg='expected_machine_sha256'), arg(arg='expected_uid')], kwonlyargs=[arg(arg='quota_bytes'), arg(arg='reserve_bytes'), arg(arg='expected_epoch'), arg(arg='expected_manifest_sha256'), arg(arg='preserve_inert_links'), arg(arg='resume'), arg(arg='expected_cursors')], kw_defaults=[None, Name(id='RESERVE', ctx=Load()), Constant(value=None), Constant(value=None), Constant(value=False), Constant(value=False), Constant(value=None)])"
+      "restore_stream": {
+        "defaults": [],
+        "keyword_defaults": [
+          null,
+          "RESERVE",
+          "None",
+          "None",
+          "False",
+          "False",
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "quota_bytes"
+          },
+          {
+            "annotation": null,
+            "name": "reserve_bytes"
+          },
+          {
+            "annotation": null,
+            "name": "expected_epoch"
+          },
+          {
+            "annotation": null,
+            "name": "expected_manifest_sha256"
+          },
+          {
+            "annotation": null,
+            "name": "preserve_inert_links"
+          },
+          {
+            "annotation": null,
+            "name": "resume"
+          },
+          {
+            "annotation": null,
+            "name": "expected_cursors"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "source"
+          },
+          {
+            "annotation": null,
+            "name": "target_name"
+          },
+          {
+            "annotation": null,
+            "name": "expected_machine_sha256"
+          },
+          {
+            "annotation": null,
+            "name": "expected_uid"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "packaging/migration/r1117_migration.py": {
-      "verify_complete_authority": "arguments(args=[arg(arg='authority'), arg(arg='files'), arg(arg='did'), arg(arg='controller'), arg(arg='exports'), arg(arg='witnesses')], kwonlyargs=[arg(arg='now'), arg(arg='trial'), arg(arg='inventory')], kw_defaults=[None, Constant(value=False), Constant(value=None)])"
+      "verify_complete_authority": {
+        "defaults": [],
+        "keyword_defaults": [
+          null,
+          "False",
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "now"
+          },
+          {
+            "annotation": null,
+            "name": "trial"
+          },
+          {
+            "annotation": null,
+            "name": "inventory"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "authority"
+          },
+          {
+            "annotation": null,
+            "name": "files"
+          },
+          {
+            "annotation": null,
+            "name": "did"
+          },
+          {
+            "annotation": null,
+            "name": "controller"
+          },
+          {
+            "annotation": null,
+            "name": "exports"
+          },
+          {
+            "annotation": null,
+            "name": "witnesses"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "packaging/migration/r1155_signer.py": {
-      "approved": "arguments(args=[arg(arg='config'), arg(arg='request'), arg(arg='now')])",
-      "baseline": "arguments(args=[arg(arg='files'), arg(arg='hashes'), arg(arg='did'), arg(arg='epoch')])"
+      "approved": {
+        "defaults": [],
+        "keyword_defaults": [],
+        "keyword_only": [],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "config"
+          },
+          {
+            "annotation": null,
+            "name": "request"
+          },
+          {
+            "annotation": null,
+            "name": "now"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      },
+      "baseline": {
+        "defaults": [],
+        "keyword_defaults": [],
+        "keyword_only": [],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "files"
+          },
+          {
+            "annotation": null,
+            "name": "hashes"
+          },
+          {
+            "annotation": null,
+            "name": "did"
+          },
+          {
+            "annotation": null,
+            "name": "epoch"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "packaging/migration/r1155_wal.py": {
-      "validate": "arguments(args=[arg(arg='roots'), arg(arg='manifest'), arg(arg='identities'), arg(arg='guard')], kwonlyargs=[arg(arg='parent')], kw_defaults=[Constant(value=None)])"
+      "validate": {
+        "defaults": [],
+        "keyword_defaults": [
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "parent"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "roots"
+          },
+          {
+            "annotation": null,
+            "name": "manifest"
+          },
+          {
+            "annotation": null,
+            "name": "identities"
+          },
+          {
+            "annotation": null,
+            "name": "guard"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "packaging/migration/r1156_runtime.py": {
-      "origin": "arguments(args=[arg(arg='config'), arg(arg='wire')], kwonlyargs=[arg(arg='now'), arg(arg='snapshots'), arg(arg='cap')], kw_defaults=[None, Constant(value=None), Constant(value=None)])",
-      "publish_cycle": "arguments(args=[arg(arg='config')], kwonlyargs=[arg(arg='sign'), arg(arg='post'), arg(arg='clock'), arg(arg='root')], kw_defaults=[Attribute(value=Name(id='P', ctx=Load()), attr='signer_request', ctx=Load()), Constant(value=None), Attribute(value=Name(id='time', ctx=Load()), attr='time', ctx=Load()), Constant(value=None)])"
+      "origin": {
+        "defaults": [],
+        "keyword_defaults": [
+          null,
+          "None",
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "now"
+          },
+          {
+            "annotation": null,
+            "name": "snapshots"
+          },
+          {
+            "annotation": null,
+            "name": "cap"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "config"
+          },
+          {
+            "annotation": null,
+            "name": "wire"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      },
+      "publish_cycle": {
+        "defaults": [],
+        "keyword_defaults": [
+          "P.signer_request",
+          "None",
+          "time.time",
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "sign"
+          },
+          {
+            "annotation": null,
+            "name": "post"
+          },
+          {
+            "annotation": null,
+            "name": "clock"
+          },
+          {
+            "annotation": null,
+            "name": "root"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "config"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "packaging/migration/r1160_owner_continuity.py": {
-      "verify_local": "arguments(args=[arg(arg='folder'), arg(arg='public'), arg(arg='M')], kwonlyargs=[arg(arg='control')], kw_defaults=[None])"
+      "verify_local": {
+        "defaults": [],
+        "keyword_defaults": [
+          null
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "control"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "folder"
+          },
+          {
+            "annotation": null,
+            "name": "public"
+          },
+          {
+            "annotation": null,
+            "name": "M"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "packaging/migration/r1162_k137_provider_admission.py": {
-      "main": "arguments()",
-      "owner_run": "arguments(args=[arg(arg='manifest'), arg(arg='aws'), arg(arg='ssh'), arg(arg='keygen'), arg(arg='state')])",
-      "sources": "arguments()",
-      "validate_report": "arguments(args=[arg(arg='raw'), arg(arg='request'), arg(arg='now'), arg(arg='machine'), arg(arg='head')])"
+      "main": {
+        "defaults": [],
+        "keyword_defaults": [],
+        "keyword_only": [],
+        "kwarg": null,
+        "positional": [],
+        "positional_only": [],
+        "vararg": null
+      },
+      "owner_run": {
+        "defaults": [],
+        "keyword_defaults": [],
+        "keyword_only": [],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "manifest"
+          },
+          {
+            "annotation": null,
+            "name": "aws"
+          },
+          {
+            "annotation": null,
+            "name": "ssh"
+          },
+          {
+            "annotation": null,
+            "name": "keygen"
+          },
+          {
+            "annotation": null,
+            "name": "state"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      },
+      "sources": {
+        "defaults": [],
+        "keyword_defaults": [],
+        "keyword_only": [],
+        "kwarg": null,
+        "positional": [],
+        "positional_only": [],
+        "vararg": null
+      },
+      "validate_report": {
+        "defaults": [],
+        "keyword_defaults": [],
+        "keyword_only": [],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "raw"
+          },
+          {
+            "annotation": null,
+            "name": "request"
+          },
+          {
+            "annotation": null,
+            "name": "now"
+          },
+          {
+            "annotation": null,
+            "name": "machine"
+          },
+          {
+            "annotation": null,
+            "name": "head"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     },
     "src/flop_agent/testnet_day1.py": {
-      "plan": "arguments(args=[arg(arg='bundle'), arg(arg='trust')], kwonlyargs=[arg(arg='max_test_units'), arg(arg='now')], kw_defaults=[Constant(value=None), Constant(value=None)], defaults=[Constant(value=None), Constant(value=None)])",
-      "status": "arguments(args=[arg(arg='bundle'), arg(arg='trust')], kwonlyargs=[arg(arg='now')], kw_defaults=[Constant(value=None)], defaults=[Constant(value=None), Constant(value=None)])"
+      "plan": {
+        "defaults": [
+          "None",
+          "None"
+        ],
+        "keyword_defaults": [
+          "None",
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "max_test_units"
+          },
+          {
+            "annotation": null,
+            "name": "now"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "bundle"
+          },
+          {
+            "annotation": null,
+            "name": "trust"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      },
+      "status": {
+        "defaults": [
+          "None",
+          "None"
+        ],
+        "keyword_defaults": [
+          "None"
+        ],
+        "keyword_only": [
+          {
+            "annotation": null,
+            "name": "now"
+          }
+        ],
+        "kwarg": null,
+        "positional": [
+          {
+            "annotation": null,
+            "name": "bundle"
+          },
+          {
+            "annotation": null,
+            "name": "trust"
+          }
+        ],
+        "positional_only": [],
+        "vararg": null
+      }
     }
   },
   "t1150": "8a46d43de6e7474941cd241278c00d3352c8a2b6"

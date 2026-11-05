@@ -52,6 +52,18 @@ def fresh(at, expiry, now, age=180):
          "PUBLIC_EXPIRED_STOP")
 
 
+def interface(args):
+    """Version-independent argument contract, not ast.dump's display format."""
+    def argument(value):
+        return None if value is None else dict(name=value.arg,
+            annotation=None if value.annotation is None else ast.unparse(value.annotation))
+    return dict(positional_only=[argument(a) for a in args.posonlyargs],
+                positional=[argument(a) for a in args.args], vararg=argument(args.vararg),
+                keyword_only=[argument(a) for a in args.kwonlyargs], kwarg=argument(args.kwarg),
+                defaults=[ast.unparse(a) for a in args.defaults],
+                keyword_defaults=[None if a is None else ast.unparse(a) for a in args.kw_defaults])
+
+
 def source_map():
     manifest = Path(__file__).with_name("r1163_source_pins.json")
     need(not manifest.is_symlink() and not getattr(manifest, "is_junction", lambda: False)() and
@@ -69,7 +81,7 @@ def source_map():
         blob = hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
         need(blob == item["blob"], "SOURCE_PIN_STOP")
         if name in value["interfaces"]:
-            functions = {n.name: ast.dump(n.args, include_attributes=False)
+            functions = {n.name: interface(n.args)
                          for n in ast.parse(data).body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
             for key, signature in value["interfaces"][name].items():
                 need(functions.get(key) == signature, "SOURCE_INTERFACE_STOP")
@@ -190,4 +202,4 @@ def production_migration(*args, **kwargs):
 
 
 # Public integrity hash of the additive source map, not credential material.
-EXPECTED_SHA256 = "2b10e2dc916f385fbda2e41e5f0de0aebe18b49ca01a521b3be933f86d60d461"
+EXPECTED_SHA256 = "2f40ed47e9c04812332ea613cb441bf30b93b58e0f53e4ab000c02b981be7108"
