@@ -114,8 +114,15 @@ def report():
                 next_action="INDEPENDENT_CHATGPT_SOURCE_AUDIT_THEN_EXPLICIT_OWNER_K137_ONLY_APPROVAL")
 
 
+class PublicParser(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse's default diagnostics reflect unknown values to stderr.
+        # This public-only entrypoint never echoes even an accidental secret.
+        raise K.Stop("PUBLIC_CLI_SCHEMA_STOP")
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="R1163 public offline readiness / separately approved K137-only admission")
+    parser = PublicParser(description="R1163 public offline readiness / separately approved K137-only admission")
     parser.add_argument("operation", nargs="?", default="status", choices=("status", "custody-check", "oracle-import", "k137-review", "admit-k137"))
     parser.add_argument("--public-file")
     parser.add_argument("--challenge")

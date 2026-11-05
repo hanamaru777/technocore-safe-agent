@@ -20,14 +20,17 @@ jobs:
       - name: New connected integration and public boundaries
         env:
           RESTORE_ONLY: ${{ contains(github.event.head_commit.message, '[r1163-restore-targeted]') }}
+          PUBLIC_ONLY: ${{ contains(github.event.head_commit.message, '[r1163-public-targeted]') }}
         run: |
-          if [ "$RESTORE_ONLY" = true ]; then
+          if [ "$PUBLIC_ONLY" = true ]; then
+            python -B -m pytest -q tests/test_r1163_unified.py::test_invalid_cli_does_not_reflect_input tests/test_r1163_unified.py::test_offline_entrypoint_never_calls_provider_and_returns_one_redacted_bundle
+          elif [ "$RESTORE_ONLY" = true ]; then
             python -B -m pytest -q tests/test_r1163_pipeline.py::test_connected_capture_full_readback_restart_restore_and_new_only_baseline
           else
             python -B -m pytest -q tests/test_r1163_unified.py tests/test_r1163_pipeline.py
           fi
       - name: Direct WAL, APP rollback, NEW-ONLY and Testnet regressions
-        if: ${{ always() && !contains(github.event.head_commit.message, '[r1163-restore-targeted]') }}
+        if: ${{ always() && !contains(github.event.head_commit.message, '-targeted]') }}
         env:
           PYTHONPATH: src
         run: >-
@@ -45,7 +48,7 @@ jobs:
           tests/test_testnet_day1.py::test_missing_fake_stale_devnet_release_and_original_binding_fail_closed
           tests/test_testnet_day1.py::test_real_journal_crash_restart_unknown_no_refund_no_second_attempt
       - name: Durable undo regression in its original loader process
-        if: ${{ always() && !contains(github.event.head_commit.message, '[r1163-restore-targeted]') }}
+        if: ${{ always() && !contains(github.event.head_commit.message, '-targeted]') }}
         run: python -B -m pytest -q tests/test_r1117_integrated.py::test_durable_undo_precedes_side_effects_crash_reboot_and_explicit_recovery
       - name: Unchanged tracked secret scanner
         if: always()

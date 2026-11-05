@@ -169,11 +169,12 @@ def test_offline_entrypoint_never_calls_provider_and_returns_one_redacted_bundle
     assert "UNVERIFIED_STOP" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("args", [["status","--execute"], ["status","--capsule-path","SYNTHETIC_PRIVATE"], ["oracle-import"]])
+@pytest.mark.parametrize("args", [["status","--execute"], ["status","--capsule-path","SYNTHETIC_PRIVATE"], ["oracle-import"],
+                                 ["status","--unknown","SYNTHETIC_PRIVATE"], ["SYNTHETIC_PRIVATE"]])
 def test_invalid_cli_does_not_reflect_input(args,capsys):
     assert U.main(args) == 42
-    value = capsys.readouterr().out
-    assert "SYNTHETIC_PRIVATE" not in value and "NO_GO" in value
+    output = capsys.readouterr(); value = output.out
+    assert "SYNTHETIC_PRIVATE" not in value+output.err and "NO_GO" in value and output.err == ""
 
 
 def test_public_packet_duplicate_json_and_sensitive_path_refused(tmp_path):
