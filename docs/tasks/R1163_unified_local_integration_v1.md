@@ -121,6 +121,7 @@ r1163_pipeline.Trial は Linux の private な非本番 root に限定された 
 元の full census → strict WAL copy 検査 → 既存 AEAD stream → ciphertext-only offhost receiver → 全 archive readback → 既存 DISARMED restore を接続する。
 全 plaintext を一時ファイルやメモリ一括に置かず bounded stream で渡す。復元先は隔離した module instance の quarantine のみ。
 元 metadata / symlink は manifest に保持し activation 前には inert。DISARMED 完了 receipt は両 DB / 全ファイル検証後にのみ確定する。
+symlink / hardlink は private quarantine 内で実際の link として保存される。リンクを実行・運用経路として追跡せず、links_require_activation_review を維持する。元の ownership / mode は manifest に保存し運用権限として自動適用しない。
 独立 restorer / rollback receipt の署名が別に無い場合はローカル復元が成功しても UNKNOWN。
 暗号化 archive の完全再認証を毎回先行させ、同じ archive の明示 restore resume だけを許す。再 capture は不可。
 capture 中断は INTERRUPTED_NO_BLIND_RETRY。session / capture の hash-chain journal を消さない。

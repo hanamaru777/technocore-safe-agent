@@ -82,7 +82,13 @@ def test_connected_capture_full_readback_restart_restore_and_new_only_baseline(f
     assert all(p.read_bytes() == data for p,data in before.items())
     assert restarted.journal.latest["phase"] == "OFFLINE_TRIAL_VERIFIED"
     assert (trial.work/"quarantine"/("c"*32)/"state/verified-did.json").read_bytes() == args["files"]["verified-did.json"]
-    assert not (trial.work/"quarantine"/("c"*32)/"app/inert-link").is_symlink()
+    target = trial.work/"quarantine"/("c"*32)
+    link = target/"app/inert-link"
+    assert link.is_symlink() and os.readlink(link) == "binary"
+    assert link.resolve() == target/"app/binary"
+    assert os.stat(target/"app/binary").st_ino == os.stat(target/"app/hardlink").st_ino
+    local_receipt = json.loads((target/"DISARMED-STREAM-RECEIPT.json").read_bytes())
+    assert local_receipt["links_require_activation_review"] is True and local_receipt["runtime_started"] is False
 
 
 @prior.POSIX

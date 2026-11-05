@@ -22,7 +22,7 @@ jobs:
           RESTORE_ONLY: ${{ contains(github.event.head_commit.message, '[r1163-restore-targeted]') }}
         run: |
           if [ "$RESTORE_ONLY" = true ]; then
-            python -B -m pytest -q tests/test_r1163_pipeline.py::test_connected_capture_full_readback_restart_restore_and_new_only_baseline tests/test_r1163_unified.py::test_receipt_never_self_authenticates_even_with_recomputed_hash tests/test_r1163_unified.py::test_future_one_operation_delegates_exact_runner_once_without_releasing_migration
+            python -B -m pytest -q tests/test_r1163_pipeline.py::test_connected_capture_full_readback_restart_restore_and_new_only_baseline
           else
             python -B -m pytest -q tests/test_r1163_unified.py tests/test_r1163_pipeline.py
           fi
@@ -45,7 +45,7 @@ jobs:
           tests/test_testnet_day1.py::test_missing_fake_stale_devnet_release_and_original_binding_fail_closed
           tests/test_testnet_day1.py::test_real_journal_crash_restart_unknown_no_refund_no_second_attempt
       - name: Durable undo regression in its original loader process
-        if: always()
+        if: ${{ always() && !contains(github.event.head_commit.message, '[r1163-restore-targeted]') }}
         run: python -B -m pytest -q tests/test_r1117_integrated.py::test_durable_undo_precedes_side_effects_crash_reboot_and_explicit_recovery
       - name: Unchanged tracked secret scanner
         if: always()
