@@ -1,0 +1,62 @@
+name: r1163-integration
+on:
+  push:
+    branches: [codex/r1163-unified-safe-migration-and-testnet-readiness-20261106]
+permissions:
+  contents: read
+jobs:
+  offline-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install only the synthetic test dependencies
+        run: python -m pip install --disable-pip-version-check pytest==9.1.1 cryptography==50.0.1 httpx==0.28.1
+      - name: New connected integration and public boundaries
+        env:
+          RESTORE_ONLY: ${{ contains(github.event.head_commit.message, '[r1163-restore-targeted]') }}
+          PUBLIC_ONLY: ${{ contains(github.event.head_commit.message, '[r1163-public-targeted]') }}
+        run: |
+          if [ "$PUBLIC_ONLY" = true ]; then
+            python -B -m pytest -q tests/test_r1163_unified.py::test_invalid_cli_does_not_reflect_input tests/test_r1163_unified.py::test_offline_entrypoint_never_calls_provider_and_returns_one_redacted_bundle
+          elif [ "$RESTORE_ONLY" = true ]; then
+            python -B -m pytest -q tests/test_r1163_pipeline.py::test_connected_capture_full_readback_restart_restore_and_new_only_baseline
+          else
+            python -B -m pytest -q tests/test_r1163_unified.py tests/test_r1163_pipeline.py
+          fi
+      - name: Direct WAL, APP rollback, NEW-ONLY and Testnet regressions
+        if: ${{ always() && !contains(github.event.head_commit.message, '-targeted]') }}
+        env:
+          PYTHONPATH: src
+        run: >-
+          python -B -m pytest -q
+          tests/test_r1155_warm.py::test_nonempty_two_wals_real_cursor_raw_evidence_unchanged
+          tests/test_r1155_warm.py::test_wal_fail_closed_not_ignored
+          tests/test_r1155_warm.py::test_strict_wal_checksums_reject_rehashed_corrupt_copy
+          tests/test_r1154_warm.py::test_rollback_never_grants_old_post_or_restarts_on_failed_approval
+          tests/test_r1154_warm.py::test_missing_undo_evidence_never_claims_rollback_success
+          tests/test_r1156_parity.py::test_imported_or_changed_proposal_never_gets_auto_authority
+          tests/test_r1156_parity.py::test_all_five_historical_routes_remain_blocked
+          tests/test_r1156_parity.py::test_four_new_financial_routes_intentionally_disarmed_even_after_dual_grant
+          tests/test_r1156_parity.py::test_new_queue_post_ack_restart_and_unknown_no_repost
+          tests/test_testnet_day1.py::test_reviewed_future_manifest_is_only_offline_admission_not_live_or_signer
+          tests/test_testnet_day1.py::test_missing_fake_stale_devnet_release_and_original_binding_fail_closed
+          tests/test_testnet_day1.py::test_real_journal_crash_restart_unknown_no_refund_no_second_attempt
+      - name: Durable undo regression in its original loader process
+        if: ${{ always() && !contains(github.event.head_commit.message, '-targeted]') }}
+        run: python -B -m pytest -q tests/test_r1117_integrated.py::test_durable_undo_precedes_side_effects_crash_reboot_and_explicit_recovery
+      - name: Unchanged tracked secret scanner
+        if: always()
+        env:
+          PYTHONPATH: src
+        run: python -B -m flop_agent.cli secret-scan | python -c 'import json,sys; v=json.load(sys.stdin); print(json.dumps(v)); sys.exit(0 if v.get("ok") is True else 1)'
+      - name: Unchanged history scanner (inherited failure reported separately)
+        if: always()
+        env:
+          PYTHONPATH: src
+        run: python -B -m flop_agent.cli history-secret-scan | python -c 'import json,sys; v=json.load(sys.stdin); print(json.dumps(v)); sys.exit(0 if v.get("ok") is True else 1)'
