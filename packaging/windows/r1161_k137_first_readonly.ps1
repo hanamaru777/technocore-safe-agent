@@ -74,16 +74,37 @@ function Assert-R1161Private([string]$Path,[bool]$Directory=$false) {
     Assert-R1027Acl $Path
 }
 
+function Write-R1161NewPublicFile([string]$Path,[byte[]]$Bytes) {
+    # Only newly created public files. Never repair an existing key/input ACL.
+    if($Bytes.Length -lt 1 -or $Bytes.Length -gt 8192){throw 'PUBLIC_RECEIPT_STOP'}
+    Assert-R1027LocalPath $Path
+    $f=[IO.File]::Open($Path,'CreateNew','Write','None')
+    try{$f.Write($Bytes,0,$Bytes.Length);$f.Flush($true)}finally{$f.Dispose()}
+    # Elevated Windows can default the owner to Administrators despite a
+    # current-user-only parent. Match the reviewed R1027 new-file boundary.
+    $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl=New-Object Security.AccessControl.FileSecurity
+    $acl.SetOwner($sid);$acl.SetAccessRuleProtection($true,$false)
+    $rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')
+    $acl.AddAccessRule($rule);[IO.File]::SetAccessControl($Path,$acl)
+    Assert-R1161Private $Path
+}
+
+function Write-R1161Known([string]$Folder,[string]$Role,[string]$Key) {
+    if(@('k137','original') -cnotcontains $Role -or $Key.Length -gt 1024 -or
+        $Key -cnotmatch '\Assh-ed25519 [A-Za-z0-9+/]+={0,2}\z'){throw 'SSH_HOST_KEY_STOP'}
+    $ip=if($Role -ceq 'k137'){'52.198.96.243'}else{'140.238.55.171'}
+    $path=Join-Path $Folder ($Role+'-known-hosts')
+    Write-R1161NewPublicFile $path ([Text.Encoding]::ASCII.GetBytes($ip+' '+$Key+[char]10))
+    return $path
+}
+
 function New-R1161Attempt([string]$Output) {
     # Caller holds a current-user mutex. CreateNew marker survives every failure.
     if([IO.Directory]::Exists($Output) -or [IO.File]::Exists($Output)){throw 'R1161_ATTEMPT_ALREADY_EXISTS'}
     New-R1027Custody $Output
     $marker=Join-Path $Output 'ATTEMPTED.json'
-    $f=[IO.File]::Open($marker,'CreateNew','Write','None')
-    try {
-        $b=[Text.Encoding]::ASCII.GetBytes('{"task":"R1161","no_automatic_retry":true,"cutover":"NO_GO"}')
-        $f.Write($b,0,$b.Length);$f.Flush($true)
-    }finally{$f.Dispose()}
+    Write-R1161NewPublicFile $marker ([Text.Encoding]::ASCII.GetBytes('{"task":"R1161","no_automatic_retry":true,"cutover":"NO_GO"}'))
 }
 
 function New-R1161Mutex([string]$Name) {
@@ -122,11 +143,9 @@ function Write-R1161Public([string]$Folder,[string]$Name,[byte[]]$Bytes,[bool]$C
     if(@('k137-admission.json','original-crosscert.json') -cnotcontains $Name -or $Bytes.Length -gt 8192){throw 'PUBLIC_RECEIPT_STOP'}
     Assert-R1161Private $Folder $true
     $p=Join-Path $Folder $Name
-    $f=[IO.File]::Open($p,'CreateNew','Write','None')
-    try{$f.Write($Bytes,0,$Bytes.Length);$f.Flush($true)}finally{$f.Dispose()}
+    Write-R1161NewPublicFile $p $Bytes
     $h=[FlopR1062.Guards]::Sha256($Bytes)
-    $f=[IO.File]::Open(($p+'.sha256'),'CreateNew','Write','None')
-    try{$b=[Text.Encoding]::ASCII.GetBytes($h+"`n");$f.Write($b,0,$b.Length);$f.Flush($true)}finally{$f.Dispose()}
+    Write-R1161NewPublicFile ($p+'.sha256') ([Text.Encoding]::ASCII.GetBytes($h+[char]10))
     return $h
 }
 
@@ -182,9 +201,7 @@ function Invoke-R1161 {
         $awsHandle=[IO.File]::Open($aws.FullName,'Open','Read','Read')
         $temporary=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('Temp\flop-r1161-'+[Guid]::NewGuid().ToString('N'))
         New-R1027Custody $temporary
-        $known=Join-Path $temporary 'k137-known-hosts'
-        [IO.File]::WriteAllText($known,('52.198.96.243 '+$checked.k137_key+"`n"),[Text.Encoding]::ASCII)
-        Assert-R1027Acl $known
+        $known=Write-R1161Known $temporary 'k137' $checked.k137_key
         $guest=Invoke-R1161Local '--guest-k137' $planBytes
         $kraw=Invoke-R1161Ssh 'k137' $aws.FullName $known $guest
         $control=@{plan=$plan;k137=$kraw}
@@ -213,9 +230,7 @@ function Invoke-R1161 {
             New-R1027Custody $temporary
             $key=Write-R1027Key $temporary $plain
             [FlopR1062.Guards]::Clear($plain);$plain=$null
-            $known=Join-Path $temporary 'original-known-hosts'
-            [IO.File]::WriteAllText($known,('140.238.55.171 '+$authorized.key+"`n"),[Text.Encoding]::ASCII)
-            Assert-R1027Acl $known
+            $known=Write-R1161Known $temporary 'original' $authorized.key
             $guest=Invoke-R1161Local '--guest-original' $planBytes
             # Recovery input may take time: do not connect on stale K137 proof.
             $null=Invoke-R1161Local '--receipt-k137' (Convert-R1161Bytes $control)

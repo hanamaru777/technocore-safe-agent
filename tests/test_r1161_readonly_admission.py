@@ -277,6 +277,11 @@ def test_native_arguments_acl_duplicate_attempt_and_cleanup(tmp_path):
     code = native("Initialize-R1066\n$folder='" + folder + "'\n$pem='" + str(pem).replace("'", "''") + "'\n" + r'''
 Assert-R1161Private $pem
 New-R1161Attempt $folder
+Assert-R1161Private (Join-Path $folder 'ATTEMPTED.json')
+$known=Write-R1161Known $folder 'k137' 'ssh-ed25519 synthetic'
+Assert-R1161Private $known
+$blocked=$false;try{Write-R1161NewPublicFile $known ([byte[]]@(1))}catch{$blocked=$true}
+if(-not $blocked){throw 'EXISTING_FILE_REPLACED'}
 $blocked=$false;try{New-R1161Attempt $folder}catch{$blocked=$true}
 if(-not $blocked){throw 'DUPLICATE_ACCEPTED'}
 $a=Get-R1161Arguments 'original' $pem (Join-Path $folder 'known')

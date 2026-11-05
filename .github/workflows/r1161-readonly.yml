@@ -23,21 +23,29 @@ jobs:
           .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check pytest==9.1.1 cryptography==50.0.1 httpx==0.28.1
           if ($LASTEXITCODE -ne 0) { throw 'DEPENDENCY_STOP' }
       - name: R1161 targeted and frozen R1159 R1160 regressions only
+        env:
+          R1161_TARGETED_ONLY: ${{ contains(github.event.head_commit.message, '[r1161-targeted]') }}
         shell: powershell
         run: |
-          .\.venv\Scripts\python.exe -B -X utf8 -m pytest -q tests/test_r1161_readonly_admission.py tests/test_r1159_m2_bootstrap.py tests/test_r1160_owner_continuity.py
+          if ($env:R1161_TARGETED_ONLY -eq 'true') {
+            .\.venv\Scripts\python.exe -B -X utf8 -m pytest -q tests/test_r1161_readonly_admission.py
+          } else {
+            .\.venv\Scripts\python.exe -B -X utf8 -m pytest -q tests/test_r1161_readonly_admission.py tests/test_r1159_m2_bootstrap.py tests/test_r1160_owner_continuity.py
+          }
           if ($LASTEXITCODE -ne 0) { throw 'FOCUSED_TEST_STOP' }
       - name: Unchanged tracked-file scanner
         if: always()
         shell: powershell
         run: |
           $env:PYTHONPATH='src'
-          .\.venv\Scripts\python.exe -B -m flop_agent.cli secret-scan
-          if ($LASTEXITCODE -ne 0) { throw 'TRACKED_SCAN_STOP' }
+          $result=.\.venv\Scripts\python.exe -B -m flop_agent.cli secret-scan
+          $result | Write-Output
+          if ($LASTEXITCODE -ne 0 -or (($result -join [char]10) | ConvertFrom-Json).ok -ne $true) { throw 'TRACKED_SCAN_STOP' }
       - name: Unchanged history scanner (inherited public digest failure remains visible)
         if: always()
         shell: powershell
         run: |
           $env:PYTHONPATH='src'
-          .\.venv\Scripts\python.exe -B -m flop_agent.cli history-secret-scan
-          if ($LASTEXITCODE -ne 0) { throw 'HISTORY_SCAN_STOP' }
+          $result=.\.venv\Scripts\python.exe -B -m flop_agent.cli history-secret-scan
+          $result | Write-Output
+          if ($LASTEXITCODE -ne 0 -or (($result -join [char]10) | ConvertFrom-Json).ok -ne $true) { throw 'HISTORY_SCAN_STOP' }
