@@ -21,6 +21,7 @@ jobs:
           accounts = {
               "FAUCET": "5HmUuGrkNS5udY1751rahMfGSxspidNNX5ezaozQvu94XgFA",
               "DID": "5HdPNj5xLLRkWVdtWDhc8KHFqEwMFGepkCSffkq8oJABwPb3",
+              "MUMU": "5GiwCNqFcgoGfodksuhBHFTPrN6iszXGRD9Y5q3V6nSfF9Xs",
           }
           paths = []
           for name, account in accounts.items():
